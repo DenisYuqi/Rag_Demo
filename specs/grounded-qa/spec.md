@@ -1,4 +1,4 @@
-# ADDED Requirements
+## ADDED Requirements
 
 ### Requirement: Bilingual grounded question answering
 The system SHALL accept Chinese, English, and mixed-language questions and SHALL answer in the explicitly requested language or, when unspecified, the predominant language of the latest user turn. Every substantive factual claim MUST be supported by retrieved evidence from the active corpus.
@@ -56,7 +56,7 @@ The system SHALL distinguish insufficient evidence, conflicting evidence, unsafe
 - **THEN** the system SHALL describe the conflict with citations and MUST NOT choose an unsupported conclusion
 
 ### Requirement: Safe response contract
-Every QA request SHALL return a structured outcome of `answer`, `refusal`, or `error`, including request ID, session ID, response language, citations, and safe diagnostics. Dynamic answer content MUST pass grounding and privacy checks before transport.
+Every QA request SHALL return or stream a structured outcome of `answer`, `refusal`, or `error`, including request ID, session ID, response language, citations, and safe diagnostics. Dynamic answer content MUST pass grounding and privacy checks before transport.
 
 #### Scenario: QA succeeds
 - **WHEN** retrieval, generation, grounding, citation, and privacy validation succeed
