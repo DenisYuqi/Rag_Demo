@@ -1,4 +1,4 @@
-# ADDED Requirements
+## ADDED Requirements
 
 ### Requirement: Reproducible production container
 The project SHALL provide a multi-stage Dockerfile that builds an OCI-compatible image from pinned dependencies. The runtime image MUST run as a non-root user, contain only required runtime artifacts, handle termination signals, and expose only the configured application port.
@@ -27,7 +27,7 @@ Chroma, BM25, uploaded-source artifacts, metadata, and evaluation reports SHALL 
 
 #### Scenario: Restart the container
 - **WHEN** a container with indexed documents is replaced using the same mounted volume
-- **THEN** the new container SHALL load the same valid index and reports without re-ingestion
+- **THEN** the new container SHALL load the same valid active index and reports without re-ingestion
 
 #### Scenario: Data volume is not writable
 - **WHEN** the configured data root cannot be written
