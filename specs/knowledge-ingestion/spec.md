@@ -44,37 +44,37 @@ The system SHALL calculate a digest from canonical document content. Re-uploadin
 - **WHEN** a source key, content digest, and derivation configuration match the active version
 - **THEN** the system SHALL report a duplicate and MUST NOT call the embedding provider or modify an index
 
-#### Scenario: Upload changed content 
+#### Scenario: Upload changed content
 - **WHEN** canonical content changes for an existing source key
 - **THEN** the system SHALL create the next document version while retaining the previous active version until publication succeeds
 
 ### Requirement: Atomic dense and lexical index publication
-The system SHALL persist dense vectors in Chroma and lexical records in a BM25 index. It MUST publish an index revision only after both indexes contain the same active chunk set and compatible version metadata.
+The system SHALL persist dense vectors in Chroma and lexical records in a BM25 index. It MUST publish an index revision only after both indexes contain the same validated active chunk set and compatible version metadata.
 
 #### Scenario: Publish a successful ingestion
 - **WHEN** extraction, chunking, embedding, dense indexing, lexical indexing, and parity validation succeed
-- **THEN** the system SHALL automatically make the new index revision active
+- **THEN** the system SHALL atomically make the new index revision active
 
 #### Scenario: Indexing fails part way through
 - **WHEN** any embedding or index stage fails before publication
-- **THEN** the stage revision SHALL remain inactive and the previously committed revision SHALL remain queryable 
+- **THEN** the staged revision SHALL remain inactive and the previously committed revision SHALL remain queryable 
 
-### Requirement: Persistent ingestion state
-Each ingestion job SHALL expose `queued`, `processing`, `succeeded`, or `failed` plus safe stage diagnostics. Terminal job status, document metadata, dataset metadata, and the active index manifest MUST survive an application restart.
+### Requirement: Persistent ingestion status
+Each ingestion job SHALL expose `queued`, `processing`, `succeeded`, or `failed` status plus safe stage diagnostics. Terminal job status, document metadata, and the active index manifest MUST survive an application restart.
 
 #### Scenario: Inspect a completed job
 - **WHEN** a user requests a terminal ingestion job
-- **THEN** the system SHALL returns its outcome, source ID, document version, OCR page count, chunk count, active index revision, stage timins, and safe warnings
+- **THEN** the system SHALL return its outcome, source ID, document version, OCR page count, chunk count, active index revision, stage timings, and safe warnings
 
 #### Scenario: Restart with a valid index
 - **WHEN** the application restarts with a valid persistent manifest and indexes
-- **THEN** it SHALL expose the same active document versions without requiring re-ingestion
+- **THEN** it SHALL expose the same active documents without requiring re-ingestion
 
 ### Requirement: Reindex and delete documents
-The system SHALL support rebuilding a new index revision from retained active source artifacts and deleting a source from subsequent revisions. A change to embedding space, extraction rules, chunking rules, or BM25 tokenization MUST require reindexing rather than mixing incompatible data
+The system SHALL support rebuilding a new index revision from retained active source artifacts and deleting a source from subsequent revisions. A change to embedding space, extraction rules, chunking rules, or BM25 tokenization MUST require reindexing rather than mixing incompatible data.
 
 #### Scenario: Embedding model changes
-- **WHEN** the configured embedding-space identity differs from the active manfest
+- **WHEN** the configured embedding-space identity differs from the active manifest
 - **THEN** the system SHALL report reindexing as required and MUST NOT append incompatible vectors
 
 #### Scenario: Delete an indexed source
