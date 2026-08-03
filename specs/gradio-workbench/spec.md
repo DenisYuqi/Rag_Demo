@@ -1,6 +1,6 @@
 ## ADDED Requirements
 
-#### Requirement: FastAPI-mounted Gradio workbench
+### Requirement: FastAPI-mounted Gradio workbench
 The system SHALL mount one Gradio application on the FastAPI service at a configurable path and SHALL use the same application services as the HTTP APIs. Health, metrics, and API routes MUST remain independently reachable.
 
 #### Scenario: Start the application
@@ -11,18 +11,18 @@ The system SHALL mount one Gradio application on the FastAPI service at a config
 - **WHEN** the configured path conflicts or Gradio initialization fails
 - **THEN** readiness SHALL fail with a safe configuration error rather than silently selecting another path
 
-#### Requirement: Product-oriented primary views
+### Requirement: Product-oriented primary views
 The workbench SHALL provide `Chat`, `Documents`, `Evaluation`, and `Diagnostics` tabs. It MUST present clear loading, success, refusal, empty, and error states in both Chinese and English content flows.
 
 #### Scenario: Open the workbench
 - **WHEN** a user loads the workbench
-- **THEN** all four tabs SHALL be available and 'Chat' SHALL be the initial view
+- **THEN** all four tabs SHALL be available and `Chat` SHALL be the initial view
 
 #### Scenario: A backend capability is unavailable
 - **WHEN** a tab depends on an unavailable service
 - **THEN** that tab SHALL display a safe unavailable state and MUST NOT bypass the shared backend pipeline
 
-#### Requirement: Chat experience
+### Requirement: Chat experience
 The Chat tab SHALL support multi-turn questions, retrieval-mode selection, session reset, request cancellation, validated answer streaming, visible citations, source previews, and distinct refusal messages.
 
 #### Scenario: Ask a supported question
