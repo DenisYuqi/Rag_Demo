@@ -16,7 +16,7 @@ Runtime behavior SHALL be configured through documented environment variables an
 
 #### Scenario: Start without a required secret
 - **WHEN** required model-provider credentials are absent
-- **THEN** the container SHALL remain unhealthy and expose only a safe configuration reason
+- **THEN** the container SHALL remain unready and expose only a safe configuration reason
 
 #### Scenario: Supply runtime configuration
 - **WHEN** valid environment variables or secret-file references are supplied
@@ -27,7 +27,7 @@ Chroma, BM25, uploaded-source artifacts, metadata, and evaluation reports SHALL 
 
 #### Scenario: Restart the container
 - **WHEN** a container with indexed documents is replaced using the same mounted volume
-- **THEN** the new container SHALL load the same active index and reports without re-ingestion
+- **THEN** the new container SHALL load the same valid index and reports without re-ingestion
 
 #### Scenario: Data volume is not writable
 - **WHEN** the configured data root cannot be written
@@ -56,26 +56,26 @@ The application SHALL expose separate `/healthz` and `/readyz` endpoints. Livene
 - **THEN** the application SHALL become unready and close resources within the configured grace period
 
 ### Requirement: Local Compose deployment
-The project SHALL provide a Docker Compose configuration and `.env.example` that expose the workbench/API, mount persistent data, configure health checks, and accept external model credentials. The documentation SHALL provide build, smoke-test, monitor, log-inspection, backup, restore, and stop commands.
+The project SHALL provide a Docker Compose configuration and `.env.example` that expose the workbench/API, mount persistent data, configure health checks, and accept external model credentials. The documentation SHALL provide build, start, smoke-test, log-inspection, backup, restore, and stop commands.
 
 #### Scenario: Follow the local deployment guide
 - **WHEN** a user supplies valid credentials and executes the documented commands
-- **THEN** the service SHALL become ready, retain data across restarts, and answer a smoke-test question after ingestion
+- **THEN** the service SHALL become ready, retain data across restart, and answer a smoke-test question after sample ingestion
 
 ### Requirement: Container security and artifact checks
-66 The project SHALL scan the built image for known high or critical vulnerabilities and inspect it for embedded credentials before release. Unresolved critical vulnerabilities or detected secrets MUST fail the container release gate.
+The project SHALL scan the built image for known high or critical vulnerabilities and inspect it for embedded credentials before release. Unresolved critical vulnerabilities or detected secrets MUST fail the container release gate.
 
 #### Scenario: Release checks find a critical issue
 - **WHEN** image scanning reports an unresolved critical vulnerability or a secret is found in image layers
 - **THEN** the release verification SHALL fail
 
 ### Requirement: Cloud-portable boundaries
-The container SHALL avoid hard-coded local hostnames, storage paths, model vendors, and telemetry backends. Provider, storage-root, base-URL, and telemetry-export configuration MUST remain external so a future cloud deployment can reuse the image or application modules.
+The container SHALL avoid hard-coded local hostnames, storage paths, model vendors, and telemetry backends. Provider, storage-root, base URL, port, and telemetry-export configuration MUST remain external so a future cloud deployment can reuse the image or application modules.
 
 #### Scenario: Change a compatible model endpoint
 - **WHEN** an operator supplies a different OpenAI-compatible base URL and model configuration
 - **THEN** the container SHALL use it without source modification or image rebuild
 
 #### Scenario: Future managed deployment is designed
-- **WHEN** a large change adds cloud-managed storage, telemetry, or ingress
-- **THEN** the RAG domain service SHALL remain independent of those infrastructure implementations
+- **WHEN** a later change adds cloud-managed storage, telemetry, or ingress
+- **THEN** the RAG domain services SHALL remain independent of those infrastructure implementations
