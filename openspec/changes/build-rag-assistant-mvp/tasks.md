@@ -10,13 +10,13 @@
 
 ## 2. Domain Contracts and Persistence
 
-- [ ] 2.1 Define provider-neutral document, chunk, index-revision, and ingestion-job models; verify validation and serialization with `uv run pytest tests/unit/domain/test_ingestion_models.py -q`.
-- [ ] 2.2 Define provider-neutral retrieval candidate, ranking evidence, mode, and diagnostics models; verify with `uv run pytest tests/unit/domain/test_retrieval_models.py -q`.
-- [ ] 2.3 Define QA answer, refusal, error, citation, session, and validated-stream models; verify with `uv run pytest tests/unit/domain/test_qa_models.py -q`.
-- [ ] 2.4 Define model-attempt, token-usage, pricing, evaluation-run, and issue-evidence models; verify with `uv run pytest tests/unit/domain/test_evaluation_models.py -q`.
-- [ ] 2.5 Implement SQLite initialization and versioned schema migration for MVP metadata; verify create and upgrade paths with `uv run pytest tests/unit/storage/test_database.py -q`.
-- [ ] 2.6 Implement repositories for documents, versions, ingestion jobs, and active index manifests; verify CRUD and transaction rollback with `uv run pytest tests/unit/storage/test_knowledge_repositories.py -q`.
-- [ ] 2.7 Implement repositories for sessions, request diagnostics, provider usage, evaluation runs, and report manifests; verify with `uv run pytest tests/unit/storage/test_runtime_repositories.py -q`.
+- [x] 2.1 Define provider-neutral document, chunk, index-revision, and ingestion-job models; verify validation and serialization with `uv run pytest tests/unit/domain/test_ingestion_models.py -q`.
+- [x] 2.2 Define provider-neutral retrieval candidate, ranking evidence, mode, and diagnostics models; verify with `uv run pytest tests/unit/domain/test_retrieval_models.py -q`.
+- [x] 2.3 Define QA answer, refusal, error, citation, session, and validated-stream models; verify with `uv run pytest tests/unit/domain/test_qa_models.py -q`.
+- [x] 2.4 Define model-attempt, token-usage, pricing, evaluation-run, and issue-evidence models; verify with `uv run pytest tests/unit/domain/test_evaluation_models.py -q`.
+- [x] 2.5 Implement SQLite initialization and versioned schema migration for MVP metadata; verify create and upgrade paths with `uv run pytest tests/unit/storage/test_database.py -q`.
+- [x] 2.6 Implement repositories for documents, versions, ingestion jobs, and active index manifests; verify CRUD and transaction rollback with `uv run pytest tests/unit/storage/test_knowledge_repositories.py -q`.
+- [x] 2.7 Implement repositories for sessions, request diagnostics, provider usage, evaluation runs, and report manifests; verify with `uv run pytest tests/unit/storage/test_runtime_repositories.py -q`.
 
 ## 3. OpenAI-Compatible Model Providers
 

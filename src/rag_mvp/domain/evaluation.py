@@ -140,6 +140,7 @@ class IssueEvidence(DomainModel):
     symptom: NonEmptyText
     metric_references: tuple[Identifier, ...]
     log_references: tuple[Identifier, ...]
+    run_references: tuple[Identifier, ...]
     trace_references: tuple[Identifier, ...]
     root_cause: NonEmptyText
     exact_fix: NonEmptyText
@@ -153,8 +154,15 @@ class IssueEvidence(DomainModel):
     def require_evidence(self) -> IssueEvidence:
         if not self.affected_case_ids:
             raise ValueError("issue evidence requires affected cases")
-        if not self.metric_references or not self.trace_references:
-            raise ValueError("issue evidence requires metric and trace references")
+        if not all(
+            (
+                self.metric_references,
+                self.log_references,
+                self.run_references,
+                self.trace_references,
+            )
+        ):
+            raise ValueError("issue evidence requires metric, log, run, and trace references")
         return self
 
 

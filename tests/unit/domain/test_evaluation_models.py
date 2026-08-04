@@ -82,6 +82,7 @@ def test_evaluation_progress_and_issue_evidence_are_validated() -> None:
         symptom="A relevant chunk was ranked below the answer context.",
         metric_references=("metric-1",),
         log_references=("log-1",),
+        run_references=("baseline-run", "post-fix-run"),
         trace_references=("trace-1",),
         root_cause="The lexical weight was too low.",
         exact_fix="Increase the versioned lexical RRF weight.",
@@ -92,3 +93,24 @@ def test_evaluation_progress_and_issue_evidence_are_validated() -> None:
         relative_improvement_percent=20.0,
     )
     assert IssueEvidence.model_validate_json(issue.model_dump_json()) == issue
+
+
+def test_issue_evidence_rejects_missing_observability_references() -> None:
+    with pytest.raises(ValidationError):
+        IssueEvidence(
+            issue_id="issue-1",
+            classification=IssueClassification.CONTROLLED,
+            affected_case_ids=("case-1",),
+            symptom="Controlled failure",
+            metric_references=("metric-1",),
+            log_references=(),
+            run_references=("baseline-run", "post-fix-run"),
+            trace_references=("trace-1",),
+            root_cause="A test-only configuration defect.",
+            exact_fix="Restore the accepted configuration.",
+            fix_rationale="The paired run isolates one variable.",
+            primary_metric="faithfulness",
+            baseline_value=0.7,
+            post_fix_value=0.9,
+            relative_improvement_percent=28.57,
+        )
