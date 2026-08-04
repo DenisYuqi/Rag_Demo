@@ -1,12 +1,12 @@
 ## 1. Application Foundation
 
-- [ ] 1.1 Create `pyproject.toml` with Python 3.12 runtime and test dependency groups, generate `uv.lock`, and verify a clean environment with `uv sync --frozen`.
-- [ ] 1.2 Create the `src/rag_mvp` package and module directories from `design.md`; verify imports with `uv run python -c "import rag_mvp"`.
-- [ ] 1.3 Add code-quality configuration for Ruff, mypy, and pytest; verify the empty package with `uv run ruff check . && uv run mypy src`.
-- [ ] 1.4 Implement validated environment settings with safe defaults and secret-field masking; verify with `uv run pytest tests/unit/config/test_settings.py -q`.
-- [ ] 1.5 Implement the configurable data-root directory layout and safe path creation; verify with `uv run pytest tests/unit/storage/test_data_layout.py -q`.
-- [ ] 1.6 Implement the FastAPI application factory plus `/healthz`; verify with `uv run pytest tests/api/test_health.py -q -k healthz`.
-- [ ] 1.7 Implement component readiness aggregation and `/readyz`; verify ready and unready cases with `uv run pytest tests/api/test_health.py -q -k readyz`.
+- [x] 1.1 Create `pyproject.toml` with Python 3.12 runtime and test dependency groups, generate `uv.lock`, and verify a clean environment with `uv sync --frozen`.
+- [x] 1.2 Create the `src/rag_mvp` package and module directories from `design.md`; verify imports with `uv run python -c "import rag_mvp"`.
+- [x] 1.3 Add code-quality configuration for Ruff, mypy, and pytest; verify the empty package with `uv run ruff check . && uv run mypy src`.
+- [x] 1.4 Implement validated environment settings with safe defaults and secret-field masking; verify with `uv run pytest tests/unit/config/test_settings.py -q`.
+- [x] 1.5 Implement the configurable data-root directory layout and safe path creation; verify with `uv run pytest tests/unit/storage/test_data_layout.py -q`.
+- [x] 1.6 Implement the FastAPI application factory plus `/healthz`; verify with `uv run pytest tests/api/test_health.py -q -k healthz`.
+- [x] 1.7 Implement component readiness aggregation and `/readyz`; verify ready and unready cases with `uv run pytest tests/api/test_health.py -q -k readyz`.
 
 ## 2. Domain Contracts and Persistence
 

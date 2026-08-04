@@ -1,0 +1,93 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "rag-mvp"
+version = "0.1.0"
+description = "Bilingual, evidence-grounded RAG assistant MVP"
+readme = { text = "Bilingual, evidence-grounded RAG assistant MVP.", content-type = "text/markdown" }
+requires-python = ">=3.12,<3.13"
+license = { text = "Proprietary" }
+authors = [{ name = "RAG MVP Team" }]
+dependencies = [
+  "chromadb>=1.0,<2",
+  "fastapi>=0.115,<1",
+  "filelock>=3.16,<4",
+  "gradio>=5.0,<7",
+  "httpx>=0.28,<1",
+  "jieba>=0.42,<1",
+  "jinja2>=3.1,<4",
+  "jsonschema>=4.23,<5",
+  "numpy>=2.0,<3",
+  "onnxruntime>=1.19,<1.22; sys_platform == 'darwin' and platform_machine == 'x86_64'",
+  "openai>=1.60,<3",
+  "opentelemetry-api>=1.29,<2",
+  "opentelemetry-exporter-otlp>=1.29,<2",
+  "opentelemetry-instrumentation-fastapi>=0.50b0,<1",
+  "opentelemetry-sdk>=1.29,<2",
+  "pillow>=11,<13",
+  "prometheus-client>=0.21,<1",
+  "pydantic>=2.10,<3",
+  "pydantic-settings>=2.7,<3",
+  "pymupdf>=1.25,<2",
+  "pytesseract>=0.3.13,<1",
+  "python-multipart>=0.0.20,<1",
+  "rank-bm25>=0.2.2,<1",
+  "structlog>=24.4,<27",
+  "uvicorn[standard]>=0.34,<1",
+]
+
+[dependency-groups]
+dev = [
+  "mypy>=1.14,<2",
+  "pytest>=8.3,<10",
+  "pytest-asyncio>=0.25,<2",
+  "pytest-cov>=6,<8",
+  "respx>=0.22,<1",
+  "ruff>=0.9,<1",
+]
+
+[project.scripts]
+rag-mvp = "rag_mvp.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rag_mvp"]
+
+[tool.uv]
+default-groups = ["dev"]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-config --strict-markers"
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+  "integration: integration tests that use persistent services",
+  "api: HTTP API contract tests",
+  "ui: Gradio workbench tests",
+  "privacy: privacy regression tests",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "ASYNC", "S", "SIM", "RUF"]
+ignore = ["S101"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S105", "S106", "S108"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["rag_mvp"]
+mypy_path = "src"
+plugins = ["pydantic.mypy"]
+warn_unreachable = true
+
+[[tool.mypy.overrides]]
+module = ["chromadb.*", "fitz.*", "gradio.*", "jieba.*", "pytesseract.*", "rank_bm25.*"]
+ignore_missing_imports = true
