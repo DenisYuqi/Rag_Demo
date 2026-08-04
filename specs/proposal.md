@@ -1,8 +1,6 @@
 ## Why
 
-Employees need a usable way to query bilingual internal knowledge, including scanned PDFs, without accepting unsupported answers as
-trustworthy. This change creates an MVP that can be demonstrated, measured against explicit quality and latency targets, diagnosed from
-privacy-safe evidence, and run consistently as a local Docker container.
+Employees need a usable way to query bilingual internal knowledge, including scanned PDFs, without accepting unsupported answers as trustworthy. This change creates an MVP that can be demonstrated, measured against explicit quality and latency targets, diagnosed from privacy-safe evidence, and run consistently as a local Docker container.
 
 ## What Changes
 
@@ -11,9 +9,9 @@ privacy-safe evidence, and run consistently as a local Docker container.
 - Add configurable dense and hybrid retrieval, optional reranking, generation controls, and cache behavior.
 - Add OpenAI-compatible providers for embeddings, listwise reranking, and answer generation while keeping provider interfaces replaceable.
 - Add a lightweight Gradio workbench for chat, document administration, evaluation, and diagnostics.
-- Add basic prompt-injection defenses and deterministic PII redactionfor outputs and logs.
+- Add basic prompt-injection defenses and deterministic PII redaction for outputs and logs.
 - Add structured logs, distributed traces, stage-level metrics, cost accounting, and bounded concurrency.
-- Add a reproducible RAG evaluation harness and HTML/JSON report,including two evidence-backed issue investigations with at least 20%post-fix improvement.
+- Add a reproducible RAG evaluation harness and HTML/JSON report, including two evidence-backed issue investigations with at least 10% post-fix improvement.
 - Add production-oriented Docker packaging, health checks, persistent local storage, and repeatable local deployment instructions.
 
 ## Capabilities
@@ -22,7 +20,7 @@ privacy-safe evidence, and run consistently as a local Docker container.
 
 - `knowledge-ingestion`: Import, OCR, normalize, chunk, version, and index supported internal knowledge documents.
 - `model-providers`: Configure replaceable OpenAI-compatible embedding, reranking, and generation providers with usage accounting and safe failure behavior.
-- `etrieval-and-ranking`: Execute configurable dense or hybrid retrieval, rank candidates, apply caches, and expose retrieval evidence.
+- `retrieval-and-ranking`: Execute configurable dense or hybrid retrieval, rank candidates, apply caches, and expose retrieval evidence.
 - `grounded-qa`: Answer bilingual multi-turn questions from retrieved evidence, cite sources, and refuse unsupported requests.
 - `gradio-workbench`: Provide a simple UI for chat, document management, evaluation, and request diagnostics.
 - `privacy-and-safety`: Defend against basic prompt injection and redact supported PII classes from user-visible output and telemetry.
