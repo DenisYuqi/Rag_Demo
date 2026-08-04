@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Configurable retrieval modes
-The system SHALL support `dense`, `hybrid`, and `hybrid-rerank` retrieval modes with `hybrid-rerank` as the configurable default. Each request MUST bind to one committed index revision and use only active chunks from that revision.
+The system SHALL support `dense`, `hybrid`, and `hybrid-rerank` retrieval modes with `hybrid` as the configurable default. Each request MUST bind to one committed index revision and use only active chunks from that revision. Reranking SHALL remain optional and SHALL be enabled in an accepted configuration only when paired evaluation justifies its quality and latency trade-off.
 
 #### Scenario: Execute dense mode
 - **WHEN** a request selects `dense`
@@ -74,11 +74,11 @@ The system SHALL enforce configurable candidate and final-result limits. Every f
 - **WHEN** a returned chunk came from a PDF
 - **THEN** its evidence metadata SHALL include at least one valid page number
 
-### Requirement: Version-safe retrieval caching
-Query-embedding, retrieval, and reranking caches SHALL use keys that include canonical query, active index revision, retrieval mode, model identities, ranking configuration, prompt version, and relevant limits. Failed, cancelled, or degraded results MUST NOT be stored as successful final results.
+### Requirement: Version-safe optional retrieval caching
+Retrieval SHALL operate correctly with caches disabled. Any enabled query-embedding, retrieval, or reranking cache SHALL use keys that include canonical query, active index revision, retrieval mode, model identities, ranking configuration, prompt version, and relevant limits. Failed, cancelled, or degraded results MUST NOT be cached.
 
 #### Scenario: Repeat an identical compatible request
-- **WHEN** a valid unexpired cache entry exactly matches query and configuration versions
+- **WHEN** caching is enabled and a valid unexpired cache entry exactly matches query and configuration versions
 - **THEN** the system SHALL return it without repeating the cached operation and SHALL mark the cache hit
 
 #### Scenario: Corpus or ranking configuration changes

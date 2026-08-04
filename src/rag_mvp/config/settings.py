@@ -49,9 +49,7 @@ class Settings(BaseSettings):
     provider_timeout_seconds: float = Field(default=8.0, gt=0, le=60)
     provider_retry_limit: int = Field(default=1, ge=0, le=5)
 
-    default_retrieval_mode: Literal["dense", "hybrid", "hybrid-rerank"] = (
-        "hybrid-rerank"
-    )
+    default_retrieval_mode: Literal["dense", "hybrid", "hybrid-rerank"] = "hybrid"
     dense_candidate_limit: int = Field(default=20, ge=1, le=100)
     lexical_candidate_limit: int = Field(default=20, ge=1, le=100)
     rerank_candidate_limit: int = Field(default=10, ge=1, le=50)

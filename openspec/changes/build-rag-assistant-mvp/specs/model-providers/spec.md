@@ -60,7 +60,7 @@ Every provider call SHALL have a per-attempt timeout and fit within the request'
 - **THEN** the active provider operation SHALL be cancelled and no new attempt SHALL start
 
 ### Requirement: Role-specific fallback behavior
-Generation and reranking roles SHALL allow ordered compatible fallback routes. Embedding fallback MUST use the exact vector-space identity of the active index. Reranking failure SHALL degrade to the deterministic base ranking rather than fail the QA request.
+Generation and reranking roles MAY configure ordered compatible fallback routes; one route per required role is sufficient for the MVP. If an embedding fallback is configured, it MUST use the exact vector-space identity of the active index. Reranking failure SHALL degrade to the deterministic base ranking rather than fail the QA request.
 
 #### Scenario: Generation fallback succeeds
 - **WHEN** the primary generation route fails with an eligible error and a fallback succeeds within the deadline

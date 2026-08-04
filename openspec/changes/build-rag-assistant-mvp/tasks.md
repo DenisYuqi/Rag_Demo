@@ -1,3 +1,12 @@
+## Delivery Order
+
+Implement and integrate in vertical gates. A gate is complete only when its end-to-end test passes; horizontal task numbers below remain the detailed acceptance checklist.
+
+- **Gate A - Walking skeleton:** 1.1-1.7, minimum models/repositories from 2, fake embedding/generation from 3, text/Markdown path from 5, dense path from 6, non-streamed grounded QA from 7, QA/document APIs from 8, and one restart integration test.
+- **Gate B - Required RAG path:** selective PDF OCR, deterministic recursive chunking, atomic dense/BM25 publication, hybrid RRF, refusal/citations, and Chat/Documents UI.
+- **Gate C - Safe deployable candidate:** redaction and prompt isolation, concurrency/deadlines, structured diagnostics, evaluation corpus/gates, Docker persistence, and acceptance harness.
+- **Gate D - Measured enhancements:** enable reranking, extra caches, provider fallback, validated sentence streaming, and richer telemetry only when required by an unmet gate or supported by measured quality/latency/cost evidence.
+
 ## 1. Application Foundation
 
 - [x] 1.1 Create `pyproject.toml` with Python 3.12 runtime and test dependency groups, generate `uv.lock`, and verify a clean environment with `uv sync --frozen`.
@@ -27,7 +36,7 @@
 - [ ] 3.5 Implement bounded chat generation and normalized content/finish/usage results; verify valid, empty, and malformed responses with `uv run pytest tests/unit/providers/test_openai_generation.py -q`.
 - [ ] 3.6 Implement listwise reranking with versioned prompt and exact candidate-ID permutation validation; verify unknown, duplicate, and missing IDs with `uv run pytest tests/unit/providers/test_openai_reranker.py -q`.
 - [ ] 3.7 Implement deadline-aware timeout, cancellation, transient retry, and non-retriable authentication behavior; verify with `uv run pytest tests/unit/providers/test_resilience.py -q`.
-- [ ] 3.8 Implement ordered generation/reranking fallback, compatible-only embedding fallback, role readiness, and attempt-level usage recording; verify with `uv run pytest tests/unit/providers/test_routing.py -q`.
+- [ ] 3.8 Implement role readiness and attempt-level usage recording; retain ordered generation/reranking and compatible-only embedding fallback support, but configure additional routes only when acceptance evidence requires them; verify with `uv run pytest tests/unit/providers/test_routing.py -q`.
 
 ## 4. Privacy and Prompt Safety
 
@@ -39,7 +48,7 @@
 - [ ] 4.6 Implement recursive output redaction for answers, citations, metadata, errors, diagnostics, and report objects; verify with `uv run pytest tests/unit/safety/test_output_redaction.py -q`.
 - [ ] 4.7 Implement allowlisted telemetry filtering that drops unsafe events on redaction failure; verify captured JSON contains no fixture values with `uv run pytest tests/unit/safety/test_telemetry_filter.py -q`.
 - [ ] 4.8 Implement basic intent-aware user injection checks and retrieved-context instruction isolation; verify bypass, hidden-context, quoted-analysis, and document-injection cases with `uv run pytest tests/unit/safety/test_injection_policy.py -q`.
-- [ ] 4.9 Implement bounded sentence buffering with cross-delta detector state and fail-closed flushing; verify split email, phone, card, IP, and private-key cases with `uv run pytest tests/unit/safety/test_safe_stream.py -q`.
+- [ ] 4.9 Implement complete-response buffering and fail-closed validation first; add sentence-level emission only as a measured optimization, preserving cross-delta detector state; verify split email, phone, card, IP, and private-key cases with `uv run pytest tests/unit/safety/test_safe_stream.py -q`.
 
 ## 5. Knowledge Ingestion
 
@@ -67,7 +76,7 @@
 - [ ] 6.6 Implement bounded reranking orchestration and RRF fallback on timeout or invalid output; verify with `uv run pytest tests/unit/retrieval/test_rerank_stage.py -q`.
 - [ ] 6.7 Implement `dense`, `hybrid`, and `hybrid-rerank` orchestration with configured one-retriever degradation; verify each mode with `uv run pytest tests/unit/retrieval/test_retrieval_service.py -q`.
 - [ ] 6.8 Implement ranked evidence assembly with source/version/locator and real stage scores only; verify PDF and text evidence with `uv run pytest tests/unit/retrieval/test_evidence.py -q`.
-- [ ] 6.9 Implement version-complete embedding, retrieval, and reranking cache keys plus TTL/size bounds; verify corpus/config changes miss prior entries with `uv run pytest tests/unit/retrieval/test_cache.py -q`.
+- [ ] 6.9 Ensure retrieval works with caches disabled, then implement version-complete keys and TTL/size bounds for each cache actually enabled by the accepted configuration; verify corpus/config changes miss prior entries with `uv run pytest tests/unit/retrieval/test_cache.py -q`.
 - [ ] 6.10 Add a persistent-index retrieval integration suite covering bilingual semantic, exact-term, empty, degraded, and restart cases; verify with `uv run pytest tests/integration/test_retrieval_pipeline.py -q`.
 
 ## 7. Grounded QA Pipeline
@@ -77,10 +86,10 @@
 - [ ] 7.3 Implement context selection with chunk-count, per-chunk, and total-token bounds; verify ordering and truncation with `uv run pytest tests/unit/qa/test_context_builder.py -q`.
 - [ ] 7.4 Implement the versioned generator prompt that labels retrieved chunks untrusted and requires structured claims with chunk IDs; verify prompt boundaries without snapshotting secret configuration with `uv run pytest tests/unit/qa/test_prompt_builder.py -q`.
 - [ ] 7.5 Implement structured answer parsing and deterministic citation existence/locator validation; verify invented and stale citations are rejected with `uv run pytest tests/unit/qa/test_citations.py -q`.
-- [ ] 7.6 Implement claim-support validation and supported partial-answer assembly; verify unsupported claims never reach output with `uv run pytest tests/unit/qa/test_grounding.py -q`.
+- [ ] 7.6 Implement deterministic factual-unit citation coverage and request-scoped candidate validation; withhold the complete generated response on invalid coverage and leave semantic scoring to evaluation; verify invalid claims/citations never reach output with `uv run pytest tests/unit/qa/test_grounding.py -q`.
 - [ ] 7.7 Implement calibrated insufficient/conflicting-evidence refusal decisions with stable safe reason codes; verify answerable, partial, absent, and conflict fixtures with `uv run pytest tests/unit/qa/test_refusal_policy.py -q`.
 - [ ] 7.8 Implement the async QA orchestrator with one total deadline, stage budgets, cancellation, retry limits, and optional rerank degradation; verify with fake-clock tests using `uv run pytest tests/unit/qa/test_orchestrator.py -q`.
-- [ ] 7.9 Connect validated sentence streaming to grounding, citation, injection, and redaction gates; verify no raw model delta or pending unsafe tail is emitted with `uv run pytest tests/unit/qa/test_streaming.py -q`.
+- [ ] 7.9 Connect complete-response validated emission to grounding, citation, injection, and redaction gates; add sentence-level validated events only if needed for perceived latency; verify no raw model delta or pending unsafe tail is emitted with `uv run pytest tests/unit/qa/test_streaming.py -q`.
 - [ ] 7.10 Add end-to-end QA integration tests for bilingual answers, multi-turn retrieval, citations, partial answers, refusals, injection, PII, provider failure, and deadline failure; verify with `uv run pytest tests/integration/test_qa_pipeline.py -q`.
 
 ## 8. HTTP API and Gradio Workbench

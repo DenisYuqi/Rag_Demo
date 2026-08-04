@@ -31,18 +31,18 @@ The system SHALL attach citations to the claims they support. Each citation MUST
 
 #### Scenario: Validate citation metadata
 - **WHEN** a generated citation references an unknown chunk or locator
-- **THEN** the system SHALL withhold the affected claim and MUST NOT invent a source or page
+- **THEN** the system SHALL withhold the generated response and MUST NOT invent a source or page
 
-### Requirement: Grounding validation
-Before release, the system SHALL validate that answer claims are entailed by cited retrieved chunks and that citations resolve to the active index revision. Unsupported claims MUST be removed, regenerated within the remaining deadline, or replaced by a refusal.
+### Requirement: Runtime grounding validation
+Before release, the system SHALL deterministically validate that every factual answer unit carries citations, every citation belongs to the request's retrieved candidates, and every citation resolves to the bound active index revision. Unknown, stale, malformed, or missing citations MUST cause the response to be withheld or replaced by a refusal. Semantic faithfulness SHALL be enforced by the grounded prompt and measured by the versioned evaluation gate rather than by a mandatory second model call on every request.
 
 #### Scenario: All answer claims are supported
-- **WHEN** every substantive claim is supported by one or more valid citations
+- **WHEN** every substantive factual unit carries one or more valid retrieved citations
 - **THEN** the system SHALL release the answer with machine-readable and display citations
 
 #### Scenario: A generated claim is unsupported
-- **WHEN** grounding validation rejects a substantive claim
-- **THEN** the system SHALL NOT expose that claim and SHALL return a supported partial answer or refusal
+- **WHEN** runtime validation rejects a factual unit or citation
+- **THEN** the system SHALL NOT expose the generated response and SHALL return a safe refusal or error
 
 ### Requirement: Appropriate refusal and partial answers
 The system SHALL distinguish insufficient evidence, conflicting evidence, unsafe request, dependency failure, and deadline expiration. A refusal MUST be concise, localized, and MUST NOT imply that absent information is false.
@@ -67,11 +67,11 @@ Every QA request SHALL return or stream a structured outcome of `answer`, `refus
 - **THEN** the system SHALL fail closed without returning pending unvalidated model content
 
 ### Requirement: Validated streaming
-When streaming is enabled, the system SHALL buffer model output and emit only complete units that have passed citation, grounding, injection, and PII checks. It MUST NOT expose raw model token deltas.
+When streaming is enabled, the system SHALL buffer model output and emit only complete units that have passed citation, grounding, injection, and PII checks. It MUST NOT expose raw model token deltas. Emitting the fully validated response as one event is a conforming MVP implementation; validated sentence-level events are optional.
 
-#### Scenario: A complete sentence passes validation
-- **WHEN** a generated sentence and its citation pass every release check
-- **THEN** the system SHALL emit them atomically as a validated stream event
+#### Scenario: A complete response passes validation
+- **WHEN** a generated response and its citations pass every release check
+- **THEN** the system SHALL emit it atomically as a validated stream event
 
 #### Scenario: A later sentence fails validation
 - **WHEN** earlier validated sentences were emitted but a pending sentence fails a release check

@@ -6,6 +6,8 @@ The MVP must ingest digital and scanned PDFs, answer only from retrieved evidenc
 
 This change targets local execution and Docker Compose. Azure deployment is intentionally deferred. The design still externalizes provider, data-root, port, secret, and telemetry settings so a later managed-cloud change does not require rewriting the RAG domain.
 
+The implementation follows a thin vertical-slice rule: first make one document travel through extraction, chunking, indexing, retrieval, grounded answer generation, citation display, and restart recovery. Evaluation, observability, caching, and optional reranking then harden that same path; they do not introduce parallel product architectures. This preserves the useful WeKnora Lite boundary without adopting its enterprise platform surface.
+
 ## Goals / Non-Goals
 
 **Goals:**
@@ -16,6 +18,7 @@ This change targets local execution and Docker Compose. Azure deployment is inte
 - Support OpenAI-compatible embeddings, optional LLM listwise reranking, and answer generation through replaceable asynchronous interfaces.
 - Meet the quality, privacy, single-instance concurrency, latency, and cost-reporting requirements with reproducible evidence.
 - Package one secure, persistent, locally deployable container while retaining future provider, retriever, storage, and telemetry extension points.
+- Keep one production implementation per extension point in the MVP; interfaces exist for substitution, not to require multiple backends.
 
 **Non-Goals:**
 
@@ -26,6 +29,7 @@ This change targets local execution and Docker Compose. Azure deployment is inte
 - Broad office-format support, video/audio ingestion, web crawling, or automatic external data synchronization.
 - Perfect semantic PII recognition for names and postal addresses; the MVP covers the deterministic classes listed in `privacy-and-safety`.
 - Autonomous tools, web access, code execution, or actions triggered from retrieved content.
+- Multiple knowledge bases, source-level access control, parent-child chunking, GraphRAG, data-source synchronization, and background worker infrastructure.
 
 ## Decisions
 
@@ -93,15 +97,15 @@ Alternatives considered: PostgreSQL plus pgvector would better support replicas 
 
 PyMuPDF will extract native PDF text and metadata. A configurable text-density/character-quality check decides whether a page requires OCR. OCR will use a local Tesseract Chinese/English adapter for the baseline implementation. Markdown and text use deterministic UTF-8 parsers. Canonical text uses Unicode NFC and normalized line endings.
 
-Chunking is structure-aware where headings are available and page-aware for PDFs. Defaults target roughly 500 tokens with 80-token overlap, but both values and tokenizer identity are versioned. Chunk IDs derive from source, document version, ordinal, and content digest.
+Chunking is page-aware for PDFs and uses headings and paragraph/sentence separators when available, with recursive splitting as the deterministic fallback. Defaults target roughly 500 tokenizer tokens with 80-token overlap; both values and tokenizer identity are versioned. Chunks that would become pathological single-line fragments fall back to recursive splitting. Chunk IDs derive from source, document version, ordinal, and content digest. Source IDs and chunk IDs are server-generated opaque identifiers; model-produced IDs are never used for storage lookup or authorization without validation against the request's retrieved candidate registry.
 
 Rationale: selective OCR controls ingestion cost and preserves reliable page citations. Determinism enables exact reindex and evaluation reproduction.
 
 Alternatives considered: OCR every page is simpler but slower and can degrade digital text; managed OCR can improve difficult scans but would introduce another external provider and cost before the basic workflow is proven.
 
-### 5. Use Chroma plus bilingual BM25 with weighted RRF
+### 5. Use hybrid retrieval as the baseline and measure reranking separately
 
-The retrieval abstraction exposes `dense`, `hybrid`, and `hybrid-rerank` modes. Chroma stores dense vectors and metadata. BM25 uses a deterministic tokenizer supporting English boundaries and Chinese segmentation. In hybrid modes, dense and lexical retrieval run concurrently, candidates join by chunk ID, and weighted Reciprocal Rank Fusion combines ranks without comparing incompatible raw scores.
+The retrieval abstraction exposes `dense`, `hybrid`, and `hybrid-rerank` modes. `hybrid` is the default accepted path. Chroma stores dense vectors and metadata. BM25 uses a deterministic tokenizer supporting English boundaries and Chinese segmentation. In hybrid modes, dense and lexical retrieval run concurrently, candidates join by chunk ID, and weighted Reciprocal Rank Fusion combines ranks without comparing incompatible raw scores.
 
 The default candidate flow is:
 
@@ -112,7 +116,7 @@ Dense top 20 + BM25 top 20
         -> top 5 answer context
 ```
 
-Exact limits remain configurable and are included in cache and evaluation identities. A `Retriever` protocol admits a future `GraphRetriever` or managed search implementation.
+Exact limits remain configurable and are included in evaluation identities and cache identities when caching is enabled. A `Retriever` protocol admits a future managed search implementation, but the MVP does not create an unused graph implementation.
 
 Rationale: dense retrieval covers semantic and cross-language similarity; BM25 recovers identifiers and exact policy terms; RRF is deterministic and robust without score calibration.
 
@@ -120,7 +124,7 @@ Alternatives considered: FAISS is lightweight but requires more metadata/persist
 
 ### 6. Use OpenAI-compatible adapters with explicit compatibility identities
 
-Separate `EmbeddingProvider`, `GenerationProvider`, and `RerankingProvider` protocols use provider-neutral request/result models. The initial adapters use the asynchronous OpenAI client and allow configurable base URLs. Embedding defaults to a small embedding model chosen during configuration. Generation uses a low-latency bounded-output chat model. Optional reranking asks a chat model to return an exact JSON permutation of candidate IDs.
+Separate `EmbeddingProvider`, `GenerationProvider`, and `RerankingProvider` protocols use provider-neutral request/result models. The initial adapters use the asynchronous OpenAI client and allow configurable base URLs. Embedding defaults to a small embedding model chosen during configuration. Generation uses a low-latency bounded-output chat model. Optional reranking asks a chat model to return an exact JSON permutation of candidate IDs. A single configured route per role is sufficient for MVP acceptance; the routing contract permits but does not require fallback routes.
 
 Embedding identity includes provider alias, model, dimension, normalization, and adapter version. An index refuses incompatible query vectors. Every provider attempt records safe model identity, latency, retry/fallback state, and token usage.
 
@@ -128,9 +132,9 @@ Rationale: OpenAI APIs satisfy the requested API-based embedding and reranking p
 
 Alternatives considered: a local BGE reranker can reduce token cost but increases image size, CPU contention, and single-instance latency; a dedicated rerank API may be faster but adds a provider. Both can be added behind the protocol after baseline measurement.
 
-### 7. Treat reranking as optional and deadline-aware
+### 7. Treat reranking as an evidence-gated, deadline-aware enhancement
 
-Reranking receives only the top fused candidates, truncates candidate text to a configured token budget, has a short sub-deadline, and produces only candidate IDs. Invalid output, provider failure, or timeout falls back to RRF without retrying past the latency budget. Degraded results are marked and excluded from final-result cache writes.
+Reranking is disabled in the baseline configuration. It is enabled for the accepted configuration only if a paired evaluation shows a useful Context Precision improvement without breaking the latency gate. When enabled, it receives only the top fused candidates, truncates candidate text to a configured token budget, has a short sub-deadline, and produces only candidate IDs. Invalid output, provider failure, or timeout falls back to RRF without retrying past the latency budget. Degraded results are marked and excluded from cache writes.
 
 Rationale: LLM reranking may improve Context Precision but is the largest optional threat to the 10-second SLA. Explicit fallback allows an evidence-backed quality/latency trade-off.
 
@@ -145,22 +149,22 @@ The QA sequence is:
 3. Bind an active index revision and retrieve evidence.
 4. Apply optional reranking and context/token limits.
 5. Refuse when evidence is absent or below a calibrated decision policy.
-6. Generate a structured answer containing claims and chunk IDs.
-7. Validate citation existence and claim support.
+6. Generate a structured answer whose factual units reference retrieved chunk IDs.
+7. Resolve every cited ID through the request-scoped candidate registry and reject unknown, stale, or uncited factual units.
 8. Apply injection/output policy and PII redaction.
 9. Serialize a structured answer/refusal/error and safe diagnostics.
 
-Conversation history assists query interpretation but is never evidence. The generator prompt wraps chunks as explicitly untrusted context and prohibits outside knowledge. Citation validation is deterministic; claim entailment can use a versioned evaluator model where necessary, bounded by the request deadline.
+Conversation history assists query interpretation but is never evidence. The generator prompt wraps chunks as explicitly untrusted context and prohibits outside knowledge. Runtime validation is deterministic and verifies response shape, citation membership, locators, and complete citation coverage. Semantic faithfulness is measured by the versioned offline evaluation instead of adding a second model call to every production request. If deterministic validation fails, the entire response is withheld or converted to a refusal; partial claim surgery is deferred.
 
 Rationale: explicit stages make failures diagnosable and enforce the grounding contract outside model instructions.
 
 Alternative considered: a framework-managed agent chain would reduce initial code but obscure deadlines, privacy boundaries, and stage-level evidence.
 
-### 9. Stream validated sentences, not raw tokens
+### 9. Never stream raw model tokens
 
-Raw model deltas remain server-side in a bounded sentence buffer. A complete sentence plus citations passes grounding, injection, and PII checks before an event is emitted. Detector state retains enough suffix context to catch PII split across deltas. On ambiguity, buffer overflow, or safety failure, pending text is discarded and a pre-vetted message ends the stream.
+Raw model deltas remain server-side. The baseline buffers and validates the complete structured response, then emits one validated answer event. Sentence-level validated events are an optional optimization after the complete-response path passes privacy, quality, and latency gates. Any streaming implementation must retain enough suffix context to catch PII split across deltas. On ambiguity, buffer overflow, or safety failure, pending text is discarded and a pre-vetted message ends the stream.
 
-Rationale: raw token streaming can leak an email or card-number prefix before detection. Sentence-level streaming retains some perceived responsiveness without violating output-redaction requirements.
+Rationale: raw token streaming can leak an email or card-number prefix before detection. Complete-response validation is smaller and safer for the MVP; validated sentence streaming may improve perceived responsiveness without changing the transport contract.
 
 Alternatives considered: buffering the complete answer is safest but worsens perceived latency; raw streaming is fastest but cannot meet the privacy contract.
 
@@ -197,9 +201,9 @@ Alternatives considered: multiple Uvicorn workers improve HTTP capacity but risk
 
 ### 12. Version every cache and never use cache to prove the SLA
 
-Embedding, retrieval, reranking, and complete-answer caches have separate schemas and bounded TTL/size. Keys include canonical input plus corpus/index, prompt, model, embedding, BM25, ranking, safety, response-schema, and relevant limit versions. Failures and degraded final results are not cached. Diagnostics distinguish each cache level.
+Caching is disabled by default until the uncached vertical slice is correct. The first optimization is a content-digest embedding cache because it is deterministic and directly reduces reindex cost. Query embedding, retrieval, reranking, and complete-answer caches are optional and are added only when measured cost or latency justifies them. Any enabled cache has bounded TTL/size and keys include canonical input plus every corpus/index, prompt, model, ranking, safety, schema, and limit identity that affects its result. Failures and degraded results are never cached.
 
-Rationale: caching reduces normal cost and latency, but stale RAG answers are dangerous. Version-complete keys make invalidation explicit, while uncached acceptance testing demonstrates real capacity.
+Rationale: caching reduces normal cost and latency, but stale RAG answers are dangerous and multiple caches multiply invalidation paths. Starting uncached makes correctness observable; version-complete keys keep later optimizations safe, while uncached acceptance testing demonstrates real capacity.
 
 Alternative considered: one answer cache is easier but cannot safely reuse intermediate work or explain invalidation.
 
@@ -232,7 +236,7 @@ Alternatives considered: Kubernetes or Azure Container Apps would exceed the cur
 - **Chinese BM25 tokenization choice changes results** -> Pin tokenizer dictionaries/version in the index manifest and require reindex after changes.
 - **Grounding validation may consume deadline or make false refusals** -> Prefer deterministic citation checks, bound model-based validation, calibrate refusal on the versioned dataset, and inspect category-level regressions.
 - **Basic regex PII misses names or addresses and may over-redact technical identifiers** -> State supported classes explicitly, use checksum/context validators, maintain bilingual adversarial tests, and defer broader DLP to a separate capability.
-- **Sentence buffering reduces streaming immediacy** -> Measure time-to-first-validated-sentence separately while keeping complete-response latency as the contractual metric.
+- **Complete-response buffering reduces streaming immediacy** -> Keep complete-response latency as the contractual metric and add validated sentence emission only if measurement shows it is needed.
 - **Controlled issue baselines could be mistaken for real incidents** -> Label them test-only in configuration and reports, retain exact baseline deltas, and prove the controls are absent from the accepted candidate.
 - **Evaluation model nondeterminism weakens reproducibility** -> Use fixed settings, version prompts/models, repeat key runs, record per-case evidence, and define tolerances instead of claiming bit-for-bit identity.
 - **The 500-request acceptance run can create material API cost** -> Estimate cost before running, use a representative bounded output length, require explicit acceptance-run confirmation, and retain evidence so it need not be repeated unnecessarily.
@@ -249,6 +253,13 @@ Alternatives considered: Kubernetes or Azure Container Apps would exceed the cur
 7. Build and scan the Docker image, run Compose persistence and lifecycle tests, then execute quality and single-instance performance gates against the exact image.
 8. Tag the accepted image/configuration and retain reports, manifests, and reproduction commands.
 
+Implementation proceeds through releaseable gates rather than completing every horizontal subsystem before integration:
+
+1. **Walking skeleton:** one text/Markdown document, fake providers, dense retrieval, one grounded non-streamed answer, citation, API, and restart persistence.
+2. **Required corpus path:** PDF native extraction, selective OCR, deterministic recursive chunking, hybrid BM25+dense retrieval, refusal, and Gradio Chat/Documents.
+3. **Safety and acceptance path:** output redaction, prompt isolation, bounded concurrency/deadlines, safe diagnostics, Docker persistence, and the evaluation dataset.
+4. **Measured enhancements:** optional reranking, optional caches, richer telemetry, validated sentence streaming, and provider fallback only where a gate or measured result requires them.
+
 Rollback consists of stopping the candidate container and restarting the previous image with the same data volume. Index revisions are immutable, so an operator can repoint to the prior validated manifest if a new revision is defective. Before migrations that alter SQLite or manifest schemas, the runbook requires a data-volume backup and documents restoration. Destructive migrations are not permitted in this MVP.
 
 ## Open Questions
@@ -260,3 +271,4 @@ Rollback consists of stopping the candidate container and restarting the previou
 - Is local Tesseract Chinese/English OCR available in the target Docker environment, or must OCR be optional until language data is supplied?
 - Should the first MVP bind only to loopback, or will it be used on a trusted LAN requiring basic authentication in this change?
 - Which pricing source and currency should be frozen for the per-1,000-call cost report?
+- Does paired evaluation justify enabling reranking in the final configuration, or should deterministic hybrid RRF remain the accepted default?

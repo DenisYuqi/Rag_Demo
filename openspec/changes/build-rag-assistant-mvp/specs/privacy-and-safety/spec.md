@@ -38,7 +38,7 @@ Application logs and traces SHALL use allowlisted structured fields and MUST NOT
 - **THEN** the system SHALL drop the event and MAY increment a content-free failure counter
 
 ### Requirement: Safe streaming across chunk boundaries
-The system SHALL maintain a private output buffer and PII detector state across model deltas. It MUST NOT emit a prefix that could become part of a sensitive value until a safe boundary has been validated.
+The system SHALL maintain a private output buffer across model deltas. It MUST NOT emit a prefix that could become part of a sensitive value until a safe boundary has been validated. The MVP MAY validate and emit the complete response as one event; if it emits smaller units, detector state MUST span model deltas and emitted-unit boundaries.
 
 #### Scenario: An email is split across deltas
 - **WHEN** one delta ends with `person@` and a later delta completes the domain
