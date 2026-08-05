@@ -30,6 +30,16 @@ class FakeCreateResource:
         return self.response
 
 
+class SequentialFakeCreateResource(FakeCreateResource):
+    def __init__(self, responses: list[object]) -> None:
+        super().__init__()
+        self.responses = responses
+
+    async def create(self, **kwargs: Any) -> object:
+        self.calls.append(kwargs)
+        return self.responses[len(self.calls) - 1]
+
+
 @dataclass
 class FakeClient:
     embeddings: FakeCreateResource
@@ -63,13 +73,43 @@ async def test_embedding_restores_input_order_and_records_usage(
     assert resource.calls[0]["dimensions"] == 2
 
 
+async def test_embedding_batches_requests_and_preserves_global_order(
+    provider_context: ProviderCallContext,
+) -> None:
+    resource = SequentialFakeCreateResource(
+        [
+            {
+                "data": [
+                    {"index": 1, "embedding": [3.0, 4.0]},
+                    {"index": 0, "embedding": [1.0, 2.0]},
+                ],
+                "usage": {"prompt_tokens": 5},
+            },
+            {
+                "data": [{"index": 0, "embedding": [5.0, 6.0]}],
+                "usage": {"prompt_tokens": 3},
+            },
+        ]
+    )
+    provider = OpenAIEmbeddingProvider(FakeClient(resource), identity(), batch_size=2)
+
+    result = await provider.embed(EmbeddingRequest(("first", "second", "third")), provider_context)
+
+    assert [call["input"] for call in resource.calls] == [
+        ["first", "second"],
+        ["third"],
+    ]
+    assert result.vectors == ((1.0, 2.0), (3.0, 4.0), (5.0, 6.0))
+    assert result.identity == identity()
+    assert result.usage.input_tokens == 8
+    assert result.usage.output_tokens is None
+
+
 async def test_embedding_applies_declared_l2_normalization(
     provider_context: ProviderCallContext,
 ) -> None:
     resource = FakeCreateResource({"data": [{"index": 0, "embedding": [3.0, 4.0]}]})
-    provider = OpenAIEmbeddingProvider(
-        FakeClient(resource), identity(NormalizationPolicy.L2)
-    )
+    provider = OpenAIEmbeddingProvider(FakeClient(resource), identity(NormalizationPolicy.L2))
 
     result = await provider.embed(EmbeddingRequest(("text",)), provider_context)
 
@@ -131,3 +171,9 @@ async def test_raw_provider_error_text_is_not_exposed(
 
     assert raw_secret not in str(caught.value)
     assert caught.value.category is ProviderErrorCategory.UNAVAILABLE
+
+
+@pytest.mark.parametrize("batch_size", [0, -1, True])
+def test_embedding_rejects_invalid_batch_size(batch_size: int) -> None:
+    with pytest.raises(ValueError, match="batch_size"):
+        OpenAIEmbeddingProvider(FakeClient(FakeCreateResource()), identity(), batch_size=batch_size)

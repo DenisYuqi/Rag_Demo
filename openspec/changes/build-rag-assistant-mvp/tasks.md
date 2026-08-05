@@ -29,14 +29,14 @@ Implement and integrate in vertical gates. A gate is complete only when its end-
 
 ## 3. OpenAI-Compatible Model Providers
 
-- [ ] 3.1 Define asynchronous embedding, generation, and reranking protocols plus normalized error categories; verify protocol test doubles with `uv run pytest tests/unit/providers/test_protocols.py -q`.
-- [ ] 3.2 Implement deterministic fake embedding, generation, and reranking providers for offline tests; verify reproducibility with `uv run pytest tests/unit/providers/test_fakes.py -q`.
-- [ ] 3.3 Implement the shared asynchronous OpenAI-compatible client factory without logging credentials; verify configuration using mocked HTTP with `uv run pytest tests/unit/providers/test_openai_client.py -q`.
-- [ ] 3.4 Implement embedding batching, response count/dimension validation, and embedding-space identity; verify malformed responses are rejected with `uv run pytest tests/unit/providers/test_openai_embedding.py -q`.
-- [ ] 3.5 Implement bounded chat generation and normalized content/finish/usage results; verify valid, empty, and malformed responses with `uv run pytest tests/unit/providers/test_openai_generation.py -q`.
-- [ ] 3.6 Implement listwise reranking with versioned prompt and exact candidate-ID permutation validation; verify unknown, duplicate, and missing IDs with `uv run pytest tests/unit/providers/test_openai_reranker.py -q`.
-- [ ] 3.7 Implement deadline-aware timeout, cancellation, transient retry, and non-retriable authentication behavior; verify with `uv run pytest tests/unit/providers/test_resilience.py -q`.
-- [ ] 3.8 Implement role readiness and attempt-level usage recording; retain ordered generation/reranking and compatible-only embedding fallback support, but configure additional routes only when acceptance evidence requires them; verify with `uv run pytest tests/unit/providers/test_routing.py -q`.
+- [x] 3.1 Define asynchronous embedding, generation, and reranking protocols plus normalized error categories; verify protocol test doubles with `uv run pytest tests/unit/providers/test_protocols.py -q`.
+- [x] 3.2 Implement deterministic fake embedding, generation, and reranking providers for offline tests; verify reproducibility with `uv run pytest tests/unit/providers/test_fakes.py -q`.
+- [x] 3.3 Implement the shared asynchronous OpenAI-compatible client factory without logging credentials; verify configuration using mocked HTTP with `uv run pytest tests/unit/providers/test_openai_client.py -q`.
+- [x] 3.4 Implement embedding batching, response count/dimension validation, and embedding-space identity; verify malformed responses are rejected with `uv run pytest tests/unit/providers/test_openai_embedding.py -q`.
+- [x] 3.5 Implement bounded chat generation and normalized content/finish/usage results; verify valid, empty, and malformed responses with `uv run pytest tests/unit/providers/test_openai_generation.py -q`.
+- [x] 3.6 Implement listwise reranking with versioned prompt and exact candidate-ID permutation validation; verify unknown, duplicate, and missing IDs with `uv run pytest tests/unit/providers/test_openai_reranker.py -q`.
+- [x] 3.7 Implement deadline-aware timeout, cancellation, transient retry, and non-retriable authentication behavior; verify with `uv run pytest tests/unit/providers/test_resilience.py -q`.
+- [x] 3.8 Implement role readiness and attempt-level usage recording; retain ordered generation/reranking and compatible-only embedding fallback support, but configure additional routes only when acceptance evidence requires them; verify with `uv run pytest tests/unit/providers/test_routing.py -q`.
 
 ## 4. Privacy and Prompt Safety
 

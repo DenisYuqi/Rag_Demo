@@ -22,7 +22,6 @@ from rag_mvp.providers.resilience import (
     execute_with_resilience,
 )
 
-
 IDENTITY = ModelIdentity("provider", "model", "v1")
 ROUTE = RouteMetadata("primary", ProviderRole.GENERATION, IDENTITY)
 
@@ -41,7 +40,10 @@ async def test_transient_failures_retry_with_all_attempts_accounted() -> None:
         if calls < 3:
             raise ProviderError(ProviderErrorCategory.NETWORK)
         return GenerationResult(
-            "ok", IDENTITY, finish_reason="stop", usage=TokenUsage(7, 2)  # type: ignore[arg-type]
+            "ok",
+            IDENTITY,
+            finish_reason="stop",
+            usage=TokenUsage(7, 2),  # type: ignore[arg-type]
         )
 
     result = await execute_with_resilience(
@@ -63,13 +65,19 @@ async def test_transient_failures_retry_with_all_attempts_accounted() -> None:
     assert recorder.attempts == result.attempts
 
 
-async def test_authentication_and_invalid_request_are_not_retried() -> None:
+@pytest.mark.parametrize(
+    "category",
+    [ProviderErrorCategory.AUTHENTICATION, ProviderErrorCategory.INVALID_REQUEST],
+)
+async def test_authentication_and_invalid_request_are_not_retried(
+    category: ProviderErrorCategory,
+) -> None:
     calls = 0
 
     async def operation() -> object:
         nonlocal calls
         calls += 1
-        raise ProviderError(ProviderErrorCategory.AUTHENTICATION)
+        raise ProviderError(category)
 
     with pytest.raises(ProviderOperationError) as caught:
         await execute_with_resilience(
@@ -81,7 +89,7 @@ async def test_authentication_and_invalid_request_are_not_retried() -> None:
         )
 
     assert calls == 1
-    assert caught.value.category is ProviderErrorCategory.AUTHENTICATION
+    assert caught.value.category is category
 
 
 async def test_expired_deadline_starts_no_attempt() -> None:
@@ -122,6 +130,46 @@ async def test_attempt_timeout_is_bounded_by_policy() -> None:
 
     assert caught.value.category is ProviderErrorCategory.TIMEOUT
     assert len(caught.value.attempts) == 1
+
+
+async def test_active_attempt_expiring_at_total_deadline_is_not_retried() -> None:
+    calls = 0
+
+    async def operation() -> object:
+        nonlocal calls
+        calls += 1
+        await asyncio.Event().wait()
+        return object()
+
+    with pytest.raises(ProviderOperationError) as caught:
+        await execute_with_resilience(
+            operation,
+            context=context(0.01),
+            route=ROUTE,
+            policy=RetryPolicy(1, max_retries=3, initial_backoff_seconds=0),
+            is_fallback=False,
+        )
+
+    assert calls == 1
+    assert caught.value.category is ProviderErrorCategory.DEADLINE_EXCEEDED
+    assert len(caught.value.attempts) == 1
+    assert caught.value.attempts[0].error_category is ProviderErrorCategory.DEADLINE_EXCEEDED
+
+
+async def test_provider_timeout_before_total_deadline_remains_timeout() -> None:
+    async def operation() -> object:
+        raise ProviderError(ProviderErrorCategory.TIMEOUT)
+
+    with pytest.raises(ProviderOperationError) as caught:
+        await execute_with_resilience(
+            operation,
+            context=context(0.05),
+            route=ROUTE,
+            policy=RetryPolicy(1),
+            is_fallback=False,
+        )
+
+    assert caught.value.category is ProviderErrorCategory.TIMEOUT
 
 
 async def test_cancellation_stops_active_operation_and_records_it() -> None:
@@ -178,4 +226,3 @@ async def test_retry_is_not_started_when_backoff_cannot_fit_deadline() -> None:
 
     assert calls == 1
     assert caught.value.category is ProviderErrorCategory.DEADLINE_EXCEEDED
-

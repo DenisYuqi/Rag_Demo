@@ -12,7 +12,6 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Generic, TypeVar
 
 
 def _require_text(value: str, field_name: str) -> None:
@@ -269,9 +268,7 @@ class Deadline:
             raise ValueError("deadline must be finite")
 
     @classmethod
-    def after(
-        cls, seconds: float, *, clock: Callable[[], float] = time.monotonic
-    ) -> Deadline:
+    def after(cls, seconds: float, *, clock: Callable[[], float] = time.monotonic) -> Deadline:
         if not math.isfinite(seconds) or seconds <= 0:
             raise ValueError("deadline duration must be positive and finite")
         return cls(clock() + seconds, clock)
@@ -345,17 +342,14 @@ class RoleReadiness:
             raise ValueError("unready role requires a safe reason")
 
 
-T = TypeVar("T")
-
-
 @dataclass(frozen=True, slots=True)
-class AttemptedResult(Generic[T]):
+class AttemptedResult[T]:
     value: T
     attempts: tuple[ModelAttempt, ...]
 
 
 @dataclass(frozen=True, slots=True)
-class RoutedResult(Generic[T]):
+class RoutedResult[T]:
     value: T
     attempts: tuple[ModelAttempt, ...]
     used_fallback: bool
@@ -375,4 +369,3 @@ class RoutedRerankResult:
             raise ValueError("an applied rerank cannot be degraded")
         if self.degraded and self.degradation_reason is None:
             raise ValueError("degraded reranking requires a reason")
-

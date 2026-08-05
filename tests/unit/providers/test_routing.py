@@ -29,7 +29,6 @@ from rag_mvp.providers.models import (
 from rag_mvp.providers.resilience import InMemoryAttemptRecorder, RetryPolicy
 from rag_mvp.providers.routing import ModelProviderRouter, ProviderRoute
 
-
 POLICY = RetryPolicy(1, max_retries=0)
 
 
@@ -59,9 +58,7 @@ class InvalidReranker:
     def identity(self) -> ModelIdentity:
         return self._identity
 
-    async def rerank(
-        self, request: RerankRequest, context: ProviderCallContext
-    ) -> RerankResult:
+    async def rerank(self, request: RerankRequest, context: ProviderCallContext) -> RerankResult:
         del context
         return RerankResult(
             (request.candidate_ids[0], request.candidate_ids[0]),
@@ -92,6 +89,7 @@ async def test_generation_primary_failure_uses_ordered_fallback(
     assert primary.call_count == 1
     assert fallback.call_count == 1
     assert [attempt.route_id for attempt in result.attempts] == ["primary", "fallback"]
+    assert result.attempts[-1].usage == result.value.usage
     assert recorder.attempts == result.attempts
 
 
@@ -145,9 +143,7 @@ async def test_no_compatible_embedding_route_makes_no_provider_call(
     provider_context: ProviderCallContext,
 ) -> None:
     provider = DeterministicEmbeddingProvider()
-    router = ModelProviderRouter(
-        embedding_routes=(ProviderRoute("embedding", provider, POLICY),)
-    )
+    router = ModelProviderRouter(embedding_routes=(ProviderRoute("embedding", provider, POLICY),))
     other_space = EmbeddingSpaceIdentity(
         "other", "model", provider.identity.dimension, NormalizationPolicy.L2, "v1"
     )
@@ -167,9 +163,7 @@ async def test_all_reranking_routes_fail_closed_to_base_order(
 ) -> None:
     identity = ModelIdentity("fake", "reranker", "v1")
     invalid = InvalidReranker(identity)
-    router = ModelProviderRouter(
-        reranking_routes=(ProviderRoute("invalid", invalid, POLICY),)
-    )
+    router = ModelProviderRouter(reranking_routes=(ProviderRoute("invalid", invalid, POLICY),))
     request = RerankRequest(
         "query",
         (RerankCandidate("c1", "one"), RerankCandidate("c2", "two")),
@@ -210,15 +204,20 @@ async def test_reranking_fallback_can_succeed(
 
 def test_optional_reranking_does_not_block_qa_readiness() -> None:
     router = ModelProviderRouter(
-        embedding_routes=(
-            ProviderRoute("embedding", DeterministicEmbeddingProvider(), POLICY),
-        ),
-        generation_routes=(
-            ProviderRoute("generation", DeterministicGenerationProvider(), POLICY),
-        ),
+        embedding_routes=(ProviderRoute("embedding", DeterministicEmbeddingProvider(), POLICY),),
+        generation_routes=(ProviderRoute("generation", DeterministicGenerationProvider(), POLICY),),
     )
 
     readiness = {status.role: status for status in router.readiness}
     assert router.qa_ready
     assert not readiness[ProviderRole.RERANKING].ready
     assert readiness[ProviderRole.RERANKING].reason == "reranking_provider_unavailable"
+
+
+def test_missing_required_roles_make_qa_unready() -> None:
+    router = ModelProviderRouter()
+
+    readiness = {status.role: status for status in router.readiness}
+    assert not router.qa_ready
+    assert readiness[ProviderRole.EMBEDDING].reason == "embedding_provider_unavailable"
+    assert readiness[ProviderRole.GENERATION].reason == "generation_provider_unavailable"

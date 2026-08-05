@@ -107,4 +107,3 @@ async def test_candidate_count_is_bounded_before_provider_call(
 
     assert caught.value.category is ProviderErrorCategory.INVALID_REQUEST
     assert resource.calls == []
-

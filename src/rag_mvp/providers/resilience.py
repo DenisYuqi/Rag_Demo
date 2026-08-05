@@ -7,9 +7,9 @@ import math
 import threading
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import TypeVar
 
 from rag_mvp.providers.errors import (
+    ProviderError,
     ProviderOperationError,
     classify_provider_exception,
 )
@@ -35,17 +35,11 @@ class RetryPolicy:
     max_backoff_seconds: float = 0.5
 
     def __post_init__(self) -> None:
-        if (
-            not math.isfinite(self.attempt_timeout_seconds)
-            or self.attempt_timeout_seconds <= 0
-        ):
+        if not math.isfinite(self.attempt_timeout_seconds) or self.attempt_timeout_seconds <= 0:
             raise ValueError("attempt timeout must be positive and finite")
         if isinstance(self.max_retries, bool) or self.max_retries < 0:
             raise ValueError("max_retries must be non-negative")
-        if (
-            not math.isfinite(self.initial_backoff_seconds)
-            or self.initial_backoff_seconds < 0
-        ):
+        if not math.isfinite(self.initial_backoff_seconds) or self.initial_backoff_seconds < 0:
             raise ValueError("initial backoff must be finite and non-negative")
         if not math.isfinite(self.max_backoff_seconds) or self.max_backoff_seconds < 0:
             raise ValueError("maximum backoff must be finite and non-negative")
@@ -59,7 +53,7 @@ class RetryPolicy:
             raise ValueError("retry_number must be positive")
         return min(
             self.max_backoff_seconds,
-            self.initial_backoff_seconds * (2 ** (retry_number - 1)),
+            self.initial_backoff_seconds * (2.0 ** (retry_number - 1)),
         )
 
 
@@ -80,15 +74,12 @@ class InMemoryAttemptRecorder:
             return tuple(self._attempts)
 
 
-T = TypeVar("T")
-
-
 def _result_usage(value: object) -> TokenUsage:
     usage = getattr(value, "usage", None)
     return usage if isinstance(usage, TokenUsage) else TokenUsage()
 
 
-async def execute_with_resilience(
+async def execute_with_resilience[T](
     operation: Callable[[], Awaitable[T]],
     *,
     context: ProviderCallContext,
@@ -115,9 +106,11 @@ async def execute_with_resilience(
             )
         attempt_number += 1
         attempt_timeout = min(policy.attempt_timeout_seconds, remaining)
+        deadline_limited = remaining <= policy.attempt_timeout_seconds
         started_at = context.deadline.clock()
+        timeout_scope = asyncio.timeout(attempt_timeout)
         try:
-            async with asyncio.timeout(attempt_timeout):
+            async with timeout_scope:
                 value = await operation()
         except asyncio.CancelledError:
             attempt = ModelAttempt(
@@ -137,6 +130,14 @@ async def execute_with_resilience(
             raise
         except Exception as raw_error:
             error = classify_provider_exception(raw_error)
+            if error.category is ProviderErrorCategory.TIMEOUT and (
+                deadline_limited and timeout_scope.expired()
+            ):
+                error = ProviderError(
+                    ProviderErrorCategory.DEADLINE_EXCEEDED,
+                    retryable=False,
+                    fallback_eligible=False,
+                )
             attempt = ModelAttempt(
                 request_id=context.request_id,
                 operation_id=context.operation_id,
@@ -201,4 +202,3 @@ async def execute_with_resilience(
         return AttemptedResult(value=value, attempts=tuple(attempts))
 
     raise AssertionError("retry loop exhausted without returning")
-

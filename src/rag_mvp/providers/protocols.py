@@ -57,4 +57,3 @@ class NullAttemptRecorder:
 
     def record(self, attempt: ModelAttempt) -> None:
         del attempt
-

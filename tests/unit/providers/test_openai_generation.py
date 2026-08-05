@@ -53,9 +53,7 @@ async def test_generation_normalizes_content_finish_and_usage(
 ) -> None:
     provider, resource = provider_for(
         {
-            "choices": [
-                {"message": {"content": "grounded answer"}, "finish_reason": "stop"}
-            ],
+            "choices": [{"message": {"content": "grounded answer"}, "finish_reason": "stop"}],
             "usage": {"prompt_tokens": 11, "completion_tokens": 4},
         }
     )
@@ -73,6 +71,8 @@ async def test_generation_normalizes_content_finish_and_usage(
     assert result.usage.output_tokens == 4
     assert resource.calls[0]["response_format"] == {"type": "json_object"}
     assert resource.calls[0]["max_tokens"] == 100
+    assert resource.calls[0]["n"] == 1
+    assert resource.calls[0]["stream"] is False
 
 
 async def test_missing_usage_remains_unknown(
@@ -119,4 +119,3 @@ async def test_empty_and_malformed_generation_is_rejected(
         )
 
     assert caught.value.category is ProviderErrorCategory.INCOMPATIBLE_RESPONSE
-

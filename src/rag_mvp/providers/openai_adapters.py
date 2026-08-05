@@ -132,10 +132,14 @@ class OpenAIEmbeddingProvider:
         identity: EmbeddingSpaceIdentity,
         *,
         send_dimensions: bool = True,
+        batch_size: int = 128,
     ) -> None:
+        if isinstance(batch_size, bool) or batch_size <= 0:
+            raise ValueError("embedding batch_size must be positive")
         self._client = cast(_EmbeddingClient, client)
         self._identity = identity
         self._send_dimensions = send_dimensions
+        self._batch_size = batch_size
 
     @property
     def identity(self) -> EmbeddingSpaceIdentity:
@@ -145,16 +149,27 @@ class OpenAIEmbeddingProvider:
         self, request: EmbeddingRequest, context: ProviderCallContext
     ) -> EmbeddingResult:
         del context
-        arguments: dict[str, object] = {
-            "model": self.identity.model,
-            "input": list(request.texts),
-            "encoding_format": "float",
-        }
-        if self._send_dimensions:
-            arguments["dimensions"] = self.identity.dimension
         try:
-            response = await self._client.embeddings.create(**arguments)
-            return self._normalize(response, expected_count=len(request.texts))
+            vectors: list[tuple[float, ...]] = []
+            usages: list[TokenUsage] = []
+            for start in range(0, len(request.texts), self._batch_size):
+                texts = request.texts[start : start + self._batch_size]
+                arguments: dict[str, object] = {
+                    "model": self.identity.model,
+                    "input": list(texts),
+                    "encoding_format": "float",
+                }
+                if self._send_dimensions:
+                    arguments["dimensions"] = self.identity.dimension
+                response = await self._client.embeddings.create(**arguments)
+                batch = self._normalize(response, expected_count=len(texts))
+                vectors.extend(batch.vectors)
+                usages.append(batch.usage)
+            return EmbeddingResult(
+                vectors=tuple(vectors),
+                identity=self.identity,
+                usage=_combine_usage(usages),
+            )
         except asyncio.CancelledError:
             raise
         except ProviderError:
@@ -201,6 +216,18 @@ class OpenAIEmbeddingProvider:
         return EmbeddingResult(vectors=vectors, identity=self.identity, usage=_usage(response))
 
 
+def _combine_usage(usages: Sequence[TokenUsage]) -> TokenUsage:
+    def total(values: Sequence[int | None]) -> int | None:
+        if any(value is None for value in values):
+            return None
+        return sum(cast(int, value) for value in values)
+
+    return TokenUsage(
+        input_tokens=total(tuple(usage.input_tokens for usage in usages)),
+        output_tokens=total(tuple(usage.output_tokens for usage in usages)),
+    )
+
+
 class OpenAIChatGenerationProvider:
     """Normalize bounded chat-completion generation into the provider contract."""
 
@@ -226,14 +253,15 @@ class OpenAIChatGenerationProvider:
     ) -> GenerationResult:
         del context
         messages = [
-            {"role": message.role.value, "content": message.content}
-            for message in request.messages
+            {"role": message.role.value, "content": message.content} for message in request.messages
         ]
         arguments: dict[str, object] = {
             "model": self.identity.model,
             "messages": messages,
             self._max_tokens_parameter: request.max_output_tokens,
             "temperature": request.temperature,
+            "n": 1,
+            "stream": False,
         }
         if request.response_format is GenerationFormat.JSON_OBJECT:
             arguments["response_format"] = {"type": "json_object"}
@@ -285,9 +313,7 @@ class OpenAIListwiseRerankingProvider:
     def truncator_version(self) -> str:
         return self._truncator.version
 
-    async def rerank(
-        self, request: RerankRequest, context: ProviderCallContext
-    ) -> RerankResult:
+    async def rerank(self, request: RerankRequest, context: ProviderCallContext) -> RerankResult:
         if len(request.candidates) > self._max_candidates:
             raise ProviderError(
                 ProviderErrorCategory.INVALID_REQUEST,
@@ -298,9 +324,7 @@ class OpenAIListwiseRerankingProvider:
         candidates = [
             {
                 "id": candidate.candidate_id,
-                "text": self._truncator.truncate(
-                    candidate.text, request.max_candidate_tokens
-                ),
+                "text": self._truncator.truncate(candidate.text, request.max_candidate_tokens),
             }
             for candidate in request.candidates
         ]

@@ -25,8 +25,10 @@ class SafeStream:
     _private_key_begin: Final[re.Pattern[str]] = re.compile(
         r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----", re.IGNORECASE
     )
+    _ambiguous_email_tail: Final[re.Pattern[str]] = re.compile(
+        r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]*\Z"
+    )
     _ambiguous_tails: Final[tuple[re.Pattern[str], ...]] = (
-        re.compile(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]*\Z"),
         re.compile(r"(?:\d[ .-]?){6,}\Z"),
         re.compile(r"(?:\d{1,3}\.){1,3}\d{0,3}\Z"),
         re.compile(
@@ -170,14 +172,32 @@ class SafeStream:
     def _has_uncovered_ambiguous_tail(
         cls, candidate: str, spans: tuple[DetectionSpan, ...]
     ) -> bool:
+        scan_text = candidate.rstrip()
+        email_match = cls._ambiguous_email_tail.search(scan_text)
+        if email_match is not None:
+            if not cls._is_tail_covered(email_match.start(), email_match.end(), spans):
+                if not cls._is_terminal_email_punctuation_covered(email_match, spans):
+                    return True
+
         for pattern in cls._ambiguous_tails:
-            match = pattern.search(candidate)
+            match = pattern.search(scan_text)
             if match is None:
                 continue
-            covered = any(span.start <= match.start() and span.end >= match.end() for span in spans)
-            if not covered:
+            if not cls._is_tail_covered(match.start(), match.end(), spans):
                 return True
         return False
+
+    @staticmethod
+    def _is_tail_covered(start: int, end: int, spans: tuple[DetectionSpan, ...]) -> bool:
+        return any(span.start <= start and span.end >= end for span in spans)
+
+    @classmethod
+    def _is_terminal_email_punctuation_covered(
+        cls, match: re.Match[str], spans: tuple[DetectionSpan, ...]
+    ) -> bool:
+        if match.group(0)[-1:] not in ".!?":
+            return False
+        return cls._is_tail_covered(match.start(), match.end() - 1, spans)
 
     @classmethod
     def _protected_private_key_ranges(cls, text: str) -> tuple[tuple[int, int], ...]:

@@ -132,9 +132,7 @@ class DeterministicRerankingProvider:
     def identity(self) -> ModelIdentity:
         return self._identity
 
-    async def rerank(
-        self, request: RerankRequest, context: ProviderCallContext
-    ) -> RerankResult:
+    async def rerank(self, request: RerankRequest, context: ProviderCallContext) -> RerankResult:
         del context
         self.call_count += 1
 

@@ -8,7 +8,6 @@ from typing import Final
 
 from rag_mvp.providers.models import ModelAttempt, ProviderErrorCategory
 
-
 _SAFE_MESSAGES: Final[Mapping[ProviderErrorCategory, str]] = {
     ProviderErrorCategory.NETWORK: "provider_network_error",
     ProviderErrorCategory.TIMEOUT: "provider_timeout",
@@ -113,4 +112,3 @@ def classify_provider_exception(error: Exception) -> ProviderError:
     if "badrequest" in class_name or "unprocessable" in class_name:
         return ProviderError(ProviderErrorCategory.INVALID_REQUEST)
     return ProviderError(ProviderErrorCategory.UNAVAILABLE, retryable=False)
-

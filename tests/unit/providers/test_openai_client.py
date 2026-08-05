@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import httpx
 import pytest
 
 from rag_mvp.providers.openai_client import (
@@ -37,6 +38,33 @@ async def test_factory_disables_hidden_sdk_retries() -> None:
         await client.close()
 
 
+async def test_factory_applies_configuration_to_mocked_http() -> None:
+    requests: list[httpx.Request] = []
+
+    async def handle_request(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"object": "list", "data": []})
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handle_request))
+    client = create_async_openai_client(
+        OpenAIClientConfig(
+            base_url="https://compatible.example/v1/",
+            api_key="sk-mocked",
+            secret_reference="env:OPENAI_API_KEY",
+            timeout_seconds=2,
+        ),
+        http_client=http_client,
+    )
+    try:
+        await client.models.list()
+    finally:
+        await client.close()
+
+    assert len(requests) == 1
+    assert str(requests[0].url) == "https://compatible.example/v1/models"
+    assert requests[0].headers["authorization"] == "Bearer sk-mocked"
+
+
 @pytest.mark.parametrize(
     "url",
     ["file:///tmp/provider", "api.openai.com/v1", "https://user:pass@example.test/v1"],
@@ -51,4 +79,3 @@ def test_client_requires_resolved_secret_and_reference() -> None:
         OpenAIClientConfig("https://example.test/v1", "", "env:KEY", 1)
     with pytest.raises(ValueError):
         OpenAIClientConfig("https://example.test/v1", "sk-test", "", 1)
-

@@ -34,8 +34,7 @@ async def test_fake_embeddings_are_reproducible_and_ordered(
     assert first.vectors[0] == first.vectors[2]
     assert first.vectors[0] != first.vectors[1]
     assert all(
-        math.isclose(math.sqrt(sum(value**2 for value in vector)), 1)
-        for vector in first.vectors
+        math.isclose(math.sqrt(sum(value**2 for value in vector)), 1) for vector in first.vectors
     )
     assert first_provider.call_count == 1
 

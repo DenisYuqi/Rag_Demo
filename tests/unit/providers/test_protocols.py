@@ -35,4 +35,3 @@ def test_provider_assigned_to_unsupported_role_fails_configuration() -> None:
 
     with pytest.raises(ProviderConfigurationError, match="embedding_capability_missing"):
         ModelProviderRouter(embedding_routes=(invalid_route,))
-

@@ -12,4 +12,3 @@ def provider_context() -> ProviderCallContext:
         operation_id="operation-test",
         deadline=Deadline.after(5),
     )
-

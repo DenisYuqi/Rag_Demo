@@ -59,4 +59,3 @@ def create_async_openai_client(
     if http_client is not None:
         kwargs["http_client"] = http_client
     return AsyncOpenAI(**kwargs)  # type: ignore[arg-type]
-

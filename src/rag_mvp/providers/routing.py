@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Generic, TypeVar
 
 from rag_mvp.providers.errors import (
     ProviderConfigurationError,
@@ -23,9 +22,9 @@ from rag_mvp.providers.models import (
     RerankRequest,
     RerankResult,
     RoleReadiness,
-    RouteMetadata,
     RoutedRerankResult,
     RoutedResult,
+    RouteMetadata,
 )
 from rag_mvp.providers.protocols import (
     AttemptRecorder,
@@ -37,11 +36,8 @@ from rag_mvp.providers.protocols import (
 from rag_mvp.providers.resilience import RetryPolicy, execute_with_resilience
 
 
-P = TypeVar("P")
-
-
 @dataclass(frozen=True, slots=True)
-class ProviderRoute(Generic[P]):
+class ProviderRoute[P]:
     route_id: str
     provider: P
     retry_policy: RetryPolicy
