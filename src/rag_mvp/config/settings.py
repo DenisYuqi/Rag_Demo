@@ -7,6 +7,7 @@ import json
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -24,7 +25,7 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="RAG_MVP_",
-        env_file=".env",
+        env_file=(".env", ".env.local"),
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
@@ -42,6 +43,7 @@ class Settings(BaseSettings):
     provider_backend: Literal["offline", "openai"] = "offline"
     openai_api_key: SecretStr | None = Field(default=None, repr=False)
     openai_base_url: str = "https://api.openai.com/v1"
+    openai_proxy_url: SecretStr | None = Field(default=None, repr=False)
     embedding_model: str = "text-embedding-3-small"
     embedding_dimension: int = Field(default=1536, ge=1, le=65536)
     generation_model: str = "gpt-4.1-mini"
@@ -91,6 +93,17 @@ class Settings(BaseSettings):
             raise ValueError("provider base URL must use http or https")
         return normalized
 
+    @field_validator("openai_proxy_url", mode="before")
+    @classmethod
+    def validate_openai_proxy_url(cls, value: object) -> object:
+        if value is None or value == "":
+            return None
+        raw_value = value.get_secret_value() if isinstance(value, SecretStr) else str(value)
+        parsed = urlsplit(raw_value)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("provider proxy URL must be an absolute HTTP(S) URL")
+        return raw_value.rstrip("/")
+
     @model_validator(mode="after")
     def validate_limits(self) -> Settings:
         if self.chunk_overlap_tokens >= self.chunk_target_tokens:
@@ -117,8 +130,9 @@ class Settings(BaseSettings):
     def safe_dump(self) -> dict[str, Any]:
         """Return diagnostics-safe settings with credentials replaced, never revealed."""
         values = self.model_dump(mode="json")
-        values["openai_api_key"] = (
-            "[REDACTED_SECRET]" if self.openai_api_key is not None else None
+        values["openai_api_key"] = "[REDACTED_SECRET]" if self.openai_api_key is not None else None
+        values["openai_proxy_url"] = (
+            "[REDACTED_SECRET]" if self.openai_proxy_url is not None else None
         )
         return values
 

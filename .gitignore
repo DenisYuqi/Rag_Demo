@@ -11,4 +11,5 @@ data/
 dist/
 *.egg-info/
 .env
+.env.local
 .DS_Store

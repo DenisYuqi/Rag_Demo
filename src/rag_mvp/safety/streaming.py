@@ -174,10 +174,12 @@ class SafeStream:
     ) -> bool:
         scan_text = candidate.rstrip()
         email_match = cls._ambiguous_email_tail.search(scan_text)
-        if email_match is not None:
-            if not cls._is_tail_covered(email_match.start(), email_match.end(), spans):
-                if not cls._is_terminal_email_punctuation_covered(email_match, spans):
-                    return True
+        if (
+            email_match is not None
+            and not cls._is_tail_covered(email_match.start(), email_match.end(), spans)
+            and not cls._is_terminal_email_punctuation_covered(email_match, spans)
+        ):
+            return True
 
         for pattern in cls._ambiguous_tails:
             match = pattern.search(scan_text)

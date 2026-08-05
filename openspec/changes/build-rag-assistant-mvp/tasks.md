@@ -40,15 +40,15 @@ Implement and integrate in vertical gates. A gate is complete only when its end-
 
 ## 4. Privacy and Prompt Safety
 
-- [ ] 4.1 Implement the typed redaction result and detector registry; verify deterministic overlap precedence with `uv run pytest tests/unit/safety/test_redactor_core.py -q`.
-- [ ] 4.2 Add email and international/Chinese phone recognition; verify positive and negative bilingual fixtures with `uv run pytest tests/unit/safety/test_contact_redaction.py -q`.
-- [ ] 4.3 Add Chinese ID and US SSN recognition with format/checksum validation; verify with `uv run pytest tests/unit/safety/test_identity_redaction.py -q`.
-- [ ] 4.4 Add payment-card recognition with separator normalization and Luhn validation; verify plausible and false-positive fixtures with `uv run pytest tests/unit/safety/test_payment_redaction.py -q`.
-- [ ] 4.5 Add IPv4/IPv6 and common API-key, bearer-token, password, and private-key recognition; verify full-value masking with `uv run pytest tests/unit/safety/test_network_secret_redaction.py -q`.
-- [ ] 4.6 Implement recursive output redaction for answers, citations, metadata, errors, diagnostics, and report objects; verify with `uv run pytest tests/unit/safety/test_output_redaction.py -q`.
-- [ ] 4.7 Implement allowlisted telemetry filtering that drops unsafe events on redaction failure; verify captured JSON contains no fixture values with `uv run pytest tests/unit/safety/test_telemetry_filter.py -q`.
-- [ ] 4.8 Implement basic intent-aware user injection checks and retrieved-context instruction isolation; verify bypass, hidden-context, quoted-analysis, and document-injection cases with `uv run pytest tests/unit/safety/test_injection_policy.py -q`.
-- [ ] 4.9 Implement complete-response buffering and fail-closed validation first; add sentence-level emission only as a measured optimization, preserving cross-delta detector state; verify split email, phone, card, IP, and private-key cases with `uv run pytest tests/unit/safety/test_safe_stream.py -q`.
+- [x] 4.1 Implement the typed redaction result and detector registry; verify deterministic overlap precedence with `uv run pytest tests/unit/safety/test_redactor_core.py -q`.
+- [x] 4.2 Add email and international/Chinese phone recognition; verify positive and negative bilingual fixtures with `uv run pytest tests/unit/safety/test_contact_redaction.py -q`.
+- [x] 4.3 Add Chinese ID and US SSN recognition with format/checksum validation; verify with `uv run pytest tests/unit/safety/test_identity_redaction.py -q`.
+- [x] 4.4 Add payment-card recognition with separator normalization and Luhn validation; verify plausible and false-positive fixtures with `uv run pytest tests/unit/safety/test_payment_redaction.py -q`.
+- [x] 4.5 Add IPv4/IPv6 and common API-key, bearer-token, password, and private-key recognition; verify full-value masking with `uv run pytest tests/unit/safety/test_network_secret_redaction.py -q`.
+- [x] 4.6 Implement recursive output redaction for answers, citations, metadata, errors, diagnostics, and report objects; verify with `uv run pytest tests/unit/safety/test_output_redaction.py -q`.
+- [x] 4.7 Implement allowlisted telemetry filtering that drops unsafe events on redaction failure; verify captured JSON contains no fixture values with `uv run pytest tests/unit/safety/test_telemetry_filter.py -q`.
+- [x] 4.8 Implement basic intent-aware user injection checks and retrieved-context instruction isolation; verify bypass, hidden-context, quoted-analysis, and document-injection cases with `uv run pytest tests/unit/safety/test_injection_policy.py -q`.
+- [x] 4.9 Implement complete-response buffering and fail-closed validation first; add sentence-level emission only as a measured optimization, preserving cross-delta detector state; verify split email, phone, card, IP, and private-key cases with `uv run pytest tests/unit/safety/test_safe_stream.py -q`.
 
 ## 5. Knowledge Ingestion
 

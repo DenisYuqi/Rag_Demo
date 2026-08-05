@@ -23,6 +23,7 @@ class OpenAIClientConfig:
     api_key: str = field(repr=False)
     secret_reference: str
     timeout_seconds: float
+    proxy_url: str | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         parsed = urlsplit(self.base_url)
@@ -36,6 +37,10 @@ class OpenAIClientConfig:
             raise ValueError("provider secret reference is required")
         if not math.isfinite(self.timeout_seconds) or self.timeout_seconds <= 0:
             raise ValueError("provider timeout must be positive and finite")
+        if self.proxy_url is not None:
+            parsed_proxy = urlsplit(self.proxy_url)
+            if parsed_proxy.scheme not in {"http", "https"} or not parsed_proxy.netloc:
+                raise ValueError("provider proxy URL must be an absolute HTTP(S) URL")
 
 
 def create_async_openai_client(
@@ -56,6 +61,12 @@ def create_async_openai_client(
         "timeout": config.timeout_seconds,
         "max_retries": 0,
     }
-    if http_client is not None:
-        kwargs["http_client"] = http_client
+    resolved_http_client = http_client
+    if resolved_http_client is None and config.proxy_url is not None:
+        resolved_http_client = httpx.AsyncClient(
+            proxy=config.proxy_url,
+            timeout=config.timeout_seconds,
+        )
+    if resolved_http_client is not None:
+        kwargs["http_client"] = resolved_http_client
     return AsyncOpenAI(**kwargs)  # type: ignore[arg-type]

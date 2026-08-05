@@ -66,6 +66,7 @@ markers = [
   "api: HTTP API contract tests",
   "ui: Gradio workbench tests",
   "privacy: privacy regression tests",
+  "live: opt-in tests that call external paid services",
 ]
 
 [tool.ruff]

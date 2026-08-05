@@ -7,7 +7,7 @@ from rag_mvp.config.settings import Settings
 
 
 def test_defaults_are_safe_and_offline_ready(tmp_path: object) -> None:
-    settings = Settings(data_root=tmp_path)
+    settings = Settings(data_root=tmp_path, _env_file=None)
 
     assert settings.host == "127.0.0.1"
     assert settings.provider_readiness_errors() == ()
@@ -17,7 +17,11 @@ def test_defaults_are_safe_and_offline_ready(tmp_path: object) -> None:
 
 def test_secret_never_appears_in_repr_or_safe_dump(tmp_path: object) -> None:
     raw_secret = "sk-test-do-not-log"
-    settings = Settings(data_root=tmp_path, openai_api_key=SecretStr(raw_secret))
+    settings = Settings(
+        data_root=tmp_path,
+        openai_api_key=SecretStr(raw_secret),
+        _env_file=None,
+    )
 
     assert raw_secret not in repr(settings)
     assert raw_secret not in str(settings.safe_dump())
@@ -25,7 +29,7 @@ def test_secret_never_appears_in_repr_or_safe_dump(tmp_path: object) -> None:
 
 
 def test_openai_backend_reports_safe_missing_credentials(tmp_path: object) -> None:
-    settings = Settings(data_root=tmp_path, provider_backend="openai")
+    settings = Settings(data_root=tmp_path, provider_backend="openai", _env_file=None)
 
     assert settings.provider_readiness_errors() == ("provider_credentials_missing",)
 
@@ -33,9 +37,33 @@ def test_openai_backend_reports_safe_missing_credentials(tmp_path: object) -> No
 @pytest.mark.parametrize("path", ["/", "/api", "/api/v1", "/healthz", "/metrics"])
 def test_reserved_workbench_paths_are_rejected(tmp_path: object, path: str) -> None:
     with pytest.raises(ValidationError):
-        Settings(data_root=tmp_path, workbench_path=path)
+        Settings(data_root=tmp_path, workbench_path=path, _env_file=None)
 
 
 def test_limit_invariants_are_validated(tmp_path: object) -> None:
     with pytest.raises(ValidationError):
-        Settings(data_root=tmp_path, chunk_target_tokens=100, chunk_overlap_tokens=100)
+        Settings(
+            data_root=tmp_path,
+            chunk_target_tokens=100,
+            chunk_overlap_tokens=100,
+            _env_file=None,
+        )
+
+
+def test_proxy_credentials_never_appear_in_diagnostics(tmp_path: object) -> None:
+    raw_proxy = "http://proxy-user:proxy-password@127.0.0.1:7890"
+    settings = Settings(
+        data_root=tmp_path,
+        openai_proxy_url=SecretStr(raw_proxy),
+        _env_file=None,
+    )
+
+    assert raw_proxy not in repr(settings)
+    assert raw_proxy not in str(settings.safe_dump())
+    assert settings.safe_dump()["openai_proxy_url"] == "[REDACTED_SECRET]"
+
+
+@pytest.mark.parametrize("proxy_url", ["127.0.0.1:7890", "file:///tmp/proxy"])
+def test_unsafe_proxy_urls_are_rejected(tmp_path: object, proxy_url: str) -> None:
+    with pytest.raises(ValidationError):
+        Settings(data_root=tmp_path, openai_proxy_url=proxy_url, _env_file=None)

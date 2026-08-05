@@ -11,14 +11,17 @@ from rag_mvp.providers.openai_client import (
 
 def test_client_configuration_masks_secret_and_supports_custom_url() -> None:
     raw_secret = "sk-do-not-log-this-value"
+    raw_proxy = "http://proxy-user:proxy-password@127.0.0.1:7890"
     config = OpenAIClientConfig(
         base_url="https://compatible.example/v1/",
         api_key=raw_secret,
         secret_reference="env:RAG_MVP_OPENAI_API_KEY",
         timeout_seconds=2,
+        proxy_url=raw_proxy,
     )
 
     assert raw_secret not in repr(config)
+    assert raw_proxy not in repr(config)
     assert config.secret_reference in repr(config)
 
 
@@ -79,3 +82,15 @@ def test_client_requires_resolved_secret_and_reference() -> None:
         OpenAIClientConfig("https://example.test/v1", "", "env:KEY", 1)
     with pytest.raises(ValueError):
         OpenAIClientConfig("https://example.test/v1", "sk-test", "", 1)
+
+
+@pytest.mark.parametrize("proxy_url", ["127.0.0.1:7890", "file:///tmp/proxy"])
+def test_client_rejects_unsafe_proxy_urls(proxy_url: str) -> None:
+    with pytest.raises(ValueError, match="proxy URL"):
+        OpenAIClientConfig(
+            "https://example.test/v1",
+            "sk-test",
+            "env:KEY",
+            1,
+            proxy_url,
+        )
