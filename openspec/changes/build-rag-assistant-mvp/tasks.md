@@ -97,12 +97,12 @@ Implement and integrate in vertical gates. A gate is complete only when its end-
 
 - [x] 8.1 Implement document upload/list/job-status/delete/reindex API routes with shared schemas; verify status codes and atomic behavior with `uv run pytest tests/api/test_documents.py -q`.
 - [x] 8.2 Implement the QA API route and validated streaming response contract; verify answer, refusal, error, cancellation, and malformed-event cases with `uv run pytest tests/api/test_qa.py -q`.
-- [ ] 8.3 Implement evaluation start/status/report and safe request-diagnostics API routes; verify with `uv run pytest tests/api/test_evaluation_diagnostics.py -q`.
-- [ ] 8.4 Mount Gradio at the configured FastAPI path and add the four primary tabs; verify route coexistence and component labels with `uv run pytest tests/ui/test_mount.py -q`.
-- [ ] 8.5 Implement Chat controls, mode selection, validated updates, inline citations, source previews, reset, and cancel; verify callback behavior with `uv run pytest tests/ui/test_chat.py -q`.
-- [ ] 8.6 Implement Documents upload, progress, metadata, reindex, and confirmed deletion views; verify callbacks with `uv run pytest tests/ui/test_documents.py -q`.
-- [ ] 8.7 Implement Evaluation run/compare/failure-table/download views and Diagnostics health/request-trace views; verify redacted callbacks with `uv run pytest tests/ui/test_evaluation_diagnostics.py -q`.
-- [ ] 8.8 Add a Gradio client smoke test for session isolation and safe UI error states; verify with `uv run pytest tests/ui/test_workbench_smoke.py -q`.
+- [x] 8.3 Implement evaluation start/status/report and safe request-diagnostics API routes; verify with `uv run pytest tests/api/test_evaluation_diagnostics.py -q`.
+- [x] 8.4 Mount Gradio at the configured FastAPI path and add the four primary tabs; verify route coexistence and component labels with `uv run pytest tests/ui/test_mount.py -q`.
+- [x] 8.5 Implement Chat controls, mode selection, validated updates, inline citations, source previews, reset, and cancel; verify callback behavior with `uv run pytest tests/ui/test_chat.py -q`.
+- [x] 8.6 Implement Documents upload, progress, metadata, reindex, and confirmed deletion views; verify callbacks with `uv run pytest tests/ui/test_documents.py -q`.
+- [x] 8.7 Implement Evaluation run/compare/failure-table/download views and Diagnostics health/request-trace views; verify redacted callbacks with `uv run pytest tests/ui/test_evaluation_diagnostics.py -q`.
+- [x] 8.8 Add a Gradio client smoke test for session isolation and safe UI error states; verify with `uv run pytest tests/ui/test_workbench_smoke.py -q`.
 
 ## 9. Observability, Cost, and Performance Controls
 

@@ -6,12 +6,18 @@ import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 
 from rag_mvp.api.documents import router as documents_router
 from rag_mvp.api.errors import install_error_handlers
+from rag_mvp.api.evaluation_diagnostics import (
+    DiagnosticOperations,
+    EvaluationOperations,
+)
+from rag_mvp.api.evaluation_diagnostics import router as evaluation_diagnostics_router
 from rag_mvp.api.qa import (
     QARuntimeReadinessCheck,
     QARuntimeServices,
@@ -25,6 +31,9 @@ from rag_mvp.ingestion.service import IngestionService
 from rag_mvp.safety.redactor import DEFAULT_REDACTOR, Redactor
 from rag_mvp.storage.layout import DataLayout
 
+if TYPE_CHECKING:
+    from rag_mvp.ui.services import WorkbenchServices
+
 
 @dataclass(slots=True)
 class RuntimeState:
@@ -35,6 +44,9 @@ class RuntimeState:
     owns_ingestion_service: bool = False
     qa_services: QARuntimeServices | None = None
     owns_qa_services: bool = False
+    evaluation_service: EvaluationOperations | None = None
+    diagnostics_service: DiagnosticOperations | None = None
+    workbench_services: WorkbenchServices | None = None
     redactor: Redactor | None = DEFAULT_REDACTOR
     accepting_traffic: bool = True
     ingestion_tasks: set[asyncio.Task[IngestionJob]] = field(default_factory=set)
@@ -76,6 +88,9 @@ def _build_runtime(
     owns_ingestion_service: bool,
     qa_services: QARuntimeServices | None,
     owns_qa_services: bool,
+    evaluation_service: EvaluationOperations | None,
+    diagnostics_service: DiagnosticOperations | None,
+    workbench_services: WorkbenchServices | None,
     redactor: Redactor | None,
 ) -> RuntimeState:
     layout = DataLayout.from_root(settings.data_root)
@@ -116,6 +131,9 @@ def _build_runtime(
         owns_ingestion_service=owns_ingestion_service,
         qa_services=qa_services,
         owns_qa_services=owns_qa_services,
+        evaluation_service=evaluation_service,
+        diagnostics_service=diagnostics_service,
+        workbench_services=workbench_services,
         redactor=redactor,
     )
 
@@ -127,6 +145,9 @@ def create_app(
     owns_ingestion_service: bool = False,
     qa_services: QARuntimeServices | None = None,
     owns_qa_services: bool = False,
+    evaluation_service: EvaluationOperations | None = None,
+    diagnostics_service: DiagnosticOperations | None = None,
+    workbench_services: WorkbenchServices | None = None,
     redactor: Redactor | None = DEFAULT_REDACTOR,
 ) -> FastAPI:
     """Compose one single-process service from explicit or environment settings."""
@@ -141,8 +162,29 @@ def create_app(
         owns_ingestion_service=owns_ingestion_service,
         qa_services=qa_services,
         owns_qa_services=owns_qa_services,
+        evaluation_service=evaluation_service,
+        diagnostics_service=diagnostics_service,
+        workbench_services=workbench_services,
         redactor=redactor,
     )
+    if resolved_settings.workbench_enabled and runtime.workbench_services is None:
+        from rag_mvp.ui.services import (
+            RuntimeDiagnosticsGateway,
+            configured_workbench_services,
+        )
+
+        diagnostics_gateway = (
+            RuntimeDiagnosticsGateway(diagnostics_service, runtime.readiness.report)
+            if diagnostics_service is not None
+            else None
+        )
+        runtime.workbench_services = configured_workbench_services(
+            settings=resolved_settings,
+            qa=qa_services,
+            ingestion=ingestion_service,
+            diagnostics=diagnostics_gateway,
+            redactor=redactor,
+        )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -192,6 +234,7 @@ def create_app(
     install_error_handlers(app)
     app.include_router(documents_router)
     app.include_router(qa_router)
+    app.include_router(evaluation_diagnostics_router)
     install_qa_openapi_contract(app)
 
     @app.get("/healthz", tags=["operations"])
@@ -215,6 +258,28 @@ def create_app(
             payload,
             status_code=status.HTTP_200_OK if ready else status.HTTP_503_SERVICE_UNAVAILABLE,
         )
+
+    if resolved_settings.workbench_enabled:
+        from rag_mvp.ui.workbench import mount_workbench
+
+        workbench_check = StaticReadinessCheck(
+            "workbench", ready=False, reason="workbench_initializing"
+        )
+        runtime.readiness.register(workbench_check)
+        try:
+            if runtime.workbench_services is None:
+                raise RuntimeError("workbench_services_missing")
+            app = mount_workbench(
+                app,
+                settings=resolved_settings,
+                services=runtime.workbench_services,
+            )
+            app.state.runtime = runtime
+            workbench_check.ready = True
+            workbench_check.reason = None
+        except Exception:
+            workbench_check.ready = False
+            workbench_check.reason = "workbench_initialization_failed"
 
     return app
 

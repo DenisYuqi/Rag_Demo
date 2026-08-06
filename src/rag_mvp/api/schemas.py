@@ -6,6 +6,7 @@ from typing import Annotated, Literal, Self
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
 
+from rag_mvp.domain.evaluation import EvaluationRun, EvaluationRunStatus
 from rag_mvp.domain.ingestion import (
     Document,
     DocumentKind,
@@ -14,6 +15,7 @@ from rag_mvp.domain.ingestion import (
     IngestionOperation,
     IngestionStage,
 )
+from rag_mvp.domain.qa import RequestDiagnostic
 from rag_mvp.domain.retrieval import RetrievalMode
 from rag_mvp.retrieval.request import DEFAULT_MAXIMUM_QUERY_CHARACTERS
 
@@ -24,6 +26,10 @@ SafeApiCode = Annotated[
 OpaqueApiId = Annotated[
     str,
     Field(min_length=1, max_length=255, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,254}$"),
+]
+VersionApiId = Annotated[
+    str,
+    Field(min_length=1, max_length=255, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$"),
 ]
 SESSION_ID_PATTERN = r"^session_[0-9a-f]{32}$"
 SessionApiId = Annotated[
@@ -124,3 +130,73 @@ class ActiveDocumentResponse(ApiSchema):
 class DocumentListResponse(ApiSchema):
     active_index_revision: str | None
     documents: tuple[ActiveDocumentResponse, ...]
+
+
+class EvaluationStartRequest(ApiSchema):
+    dataset_id: OpaqueApiId
+    dataset_version: VersionApiId
+
+
+class EvaluationRunResponse(ApiSchema):
+    run_id: OpaqueApiId
+    status: EvaluationRunStatus
+    dataset_id: OpaqueApiId
+    dataset_version: VersionApiId
+    configuration_id: OpaqueApiId
+    total_cases: Annotated[int, Field(ge=0)]
+    completed_cases: Annotated[int, Field(ge=0)]
+    failed_cases: Annotated[int, Field(ge=0)]
+    safe_error_code: SafeApiCode | None = None
+    created_at: AwareDatetime
+    updated_at: AwareDatetime
+
+    @classmethod
+    def from_domain(cls, run: EvaluationRun) -> Self:
+        return cls(
+            run_id=run.run_id,
+            status=run.status,
+            dataset_id=run.dataset_id,
+            dataset_version=run.dataset_version,
+            configuration_id=run.configuration_id,
+            total_cases=run.total_cases,
+            completed_cases=run.completed_cases,
+            failed_cases=run.failed_cases,
+            safe_error_code=run.safe_error_code,
+            created_at=run.created_at,
+            updated_at=run.updated_at,
+        )
+
+
+class RequestDiagnosticResponse(ApiSchema):
+    request_id: OpaqueApiId
+    session_id: str | None = None
+    trace_id: str | None = None
+    outcome: OpaqueApiId
+    safe_error_category: SafeApiCode | None = None
+    stage_timings_ms: dict[str, float]
+    cache_status: dict[str, str]
+    model_identities: dict[str, str]
+    token_counts: dict[str, Annotated[int, Field(ge=0)]]
+    metadata: dict[str, str | int | float | bool | None]
+    created_at: AwareDatetime
+
+    @classmethod
+    def from_domain(
+        cls,
+        diagnostic: RequestDiagnostic,
+        *,
+        metadata: dict[str, str | int | float | bool | None],
+    ) -> Self:
+        return cls(
+            request_id=diagnostic.request_id,
+            session_id=diagnostic.session_id,
+            trace_id=diagnostic.trace_id,
+            outcome=diagnostic.outcome,
+            safe_error_category=diagnostic.safe_error_category,
+            stage_timings_ms=dict(diagnostic.stage_timings_ms),
+            cache_status=dict(diagnostic.cache_status),
+            model_identities=dict(diagnostic.model_identities),
+            token_counts=dict(diagnostic.token_counts),
+            metadata=metadata,
+            created_at=diagnostic.created_at,
+        )
