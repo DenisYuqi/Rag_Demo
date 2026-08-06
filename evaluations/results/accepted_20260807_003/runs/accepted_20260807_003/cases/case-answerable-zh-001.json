@@ -1,0 +1,112 @@
+{
+  "schema_version": "1.0.0",
+  "run_id": "accepted_20260807_003",
+  "case_id": "case-answerable-zh-001",
+  "succeeded": true,
+  "execution": {
+    "case_id": "case-answerable-zh-001",
+    "owner_id": "eval_owner_0cc11e14a7ac6bdd0efc7b5667488072594c5ca73c767828baf0955bb220a4da",
+    "session_id": "session_a5de2164b2034a23b4673ec89ad535a9",
+    "request_id": "eval_request_8b9882e84914498186fb666d1af364e5",
+    "event": {
+      "request_id": "eval_request_8b9882e84914498186fb666d1af364e5",
+      "session_id": "session_a5de2164b2034a23b4673ec89ad535a9",
+      "sequence": 0,
+      "kind": "answer",
+      "response_language": "zh-CN",
+      "content": "员工乘坐高铁出差时，标准席位为二等座。",
+      "claims": [
+        {
+          "text": "员工乘坐高铁出差时，标准席位为二等座。",
+          "citation_chunk_ids": [
+            "chk_2440923d990d8d056c9a972ac5202947"
+          ]
+        }
+      ],
+      "citations": [
+        {
+          "source_title": "境内差旅与报销政策",
+          "document_version": 1,
+          "chunk_id": "chk_2440923d990d8d056c9a972ac5202947",
+          "locator": {
+            "pages": [],
+            "section_path": [
+              "境内差旅与报销政策",
+              "交通标准"
+            ],
+            "char_start": 13,
+            "char_end": 76
+          }
+        }
+      ],
+      "reason": null,
+      "error_code": null,
+      "retryable": null,
+      "diagnostics": {
+        "trace_id": null,
+        "stage_timings_ms": {
+          "validation": 16.00000000325963,
+          "retrieval": 500.0,
+          "evidence_assessment": 765.9999999887077,
+          "generation": 1797.0000000059372,
+          "finalization": 0.0,
+          "total": 3093.9999999973224,
+          "query_embedding": 437.0000000053551,
+          "dense": 16.00000000325963,
+          "bm25": 0.0,
+          "fusion": 0.0,
+          "rerank": 0.0
+        },
+        "cache_status": {
+          "query_embedding": "not-applicable",
+          "retrieval": "not-applicable",
+          "rerank": "not-applicable",
+          "final": "not-applicable"
+        },
+        "model_identities": {
+          "embedding": "{\"adapter\":\"openai-compatible-v1\",\"dimension\":1536,\"model\":\"text-embedding-3-small\",\"normalization\":\"none\",\"provider\":\"openai-compatible-d9617135d6fdd0a2\"}",
+          "dense": "{\"metric\":\"cosine\",\"schema\":\"chroma-revision-v1\"}",
+          "bm25": "{\"algorithm\":\"bm25-okapi-v1\",\"b\":0.75,\"k1\":1.5,\"schema\":\"bm25-snapshot-v3\",\"tokenizer\":\"latin-jieba-cjk-ngram-v2:jieba-0.42.1:dict-sha256-7197c3211ddd98962b036cdf40324d1ea2bfaa12bd028e68faa70111a88e12a8:hmm-false\"}",
+          "rrf": "{\"dense_weight\":1.0,\"k\":60,\"lexical_weight\":1.0,\"tie_policy\":\"rrf-score-best-rank-chunk-id-v1\",\"version\":\"weighted-rrf-v1\"}",
+          "generation": "openai-compatible-d9617135d6fdd0a2/gpt-5.4/openai-compatible-v1"
+        },
+        "token_counts": {
+          "embedding-input": 25,
+          "generation-input": 572,
+          "generation-output": 85
+        },
+        "degradation_reasons": [],
+        "metadata": {
+          "index_revision": "rev_eval_40719423095a14cd0dd5d0c993ba68417135e69a6a00121fdf62f53b5e26d866",
+          "requested_mode": "hybrid",
+          "effective_mode": "hybrid",
+          "dense_candidate_count": 10,
+          "lexical_candidate_count": 4,
+          "fused_candidate_count": 10,
+          "reranked_candidate_count": 0,
+          "candidate_count": 5,
+          "generation_attempts": 1,
+          "generation_fallback": false,
+          "decision_code": "answerable",
+          "refusal_policy_version": "normalized-fact-support-v1",
+          "context_count": 1
+        }
+      },
+      "terminal": true
+    },
+    "cache_policy": "bypass",
+    "retrieved_chunk_ids": [
+      "chk_2440923d990d8d056c9a972ac5202947",
+      "chk_071908b9c04e8e4af44ea463ce51ed0f",
+      "chk_411f370dd1d0636883d060dc29b88018",
+      "chk_23677766a2cf21f87af44586896c0f8f",
+      "chk_9f0b3f681a73323e217ba3f98dd6365a"
+    ],
+    "context_chunk_ids": [
+      "chk_2440923d990d8d056c9a972ac5202947"
+    ],
+    "latency_ms": 3146.524600000703
+  },
+  "safe_error_code": null,
+  "completed_at": "2026-08-06T20:08:54.384943Z"
+}

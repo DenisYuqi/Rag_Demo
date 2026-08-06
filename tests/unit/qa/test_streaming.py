@@ -40,11 +40,12 @@ def _answer_outcome(
     *,
     source_title: str = "Employee Handbook",
     section_path: tuple[str, ...] = ("Leave",),
+    chunk_id: str = "chunk-1",
 ) -> OrchestratedResponse:
     citation = Citation(
         source_title=source_title,
         document_version=1,
-        chunk_id="chunk-1",
+        chunk_id=chunk_id,
         locator=ChunkLocator(section_path=section_path),
     )
     claims = (AnswerClaim(text=answer, citation_chunk_ids=(citation.chunk_id,)),)
@@ -76,6 +77,7 @@ def _assert_safe_failure(
     assert event.kind is StreamEventKind.ERROR
     assert event.content == SAFE_UNAVAILABLE_MESSAGE
     assert event.terminal is True
+    assert event.diagnostics.metadata["release_failure_code"]
     assert conversations.list_turns(session_id, "owner-1") == ()
 
 
@@ -97,6 +99,21 @@ def test_grounded_answer_is_emitted_once_then_persisted(
     assert [(turn.role, turn.content) for turn in turns] == [
         (ConversationRole.ASSISTANT, event.content)
     ]
+
+
+def test_content_addressed_chunk_id_with_numeric_tail_is_not_treated_as_pii(
+    conversations: tuple[ConversationService, str],
+) -> None:
+    service, session_id = conversations
+    chunk_id = "chk_2440923d990d8d056c9a972ac5202947"
+
+    (event,) = CompleteResponseEmitter(service).emit(
+        _answer_outcome(session_id, chunk_id=chunk_id),
+        owner_id="owner-1",
+    )
+
+    assert event.kind is StreamEventKind.ANSWER
+    assert event.citations[0].chunk_id == chunk_id
 
 
 def test_complete_sensitive_values_are_redacted_before_emission_and_persistence(

@@ -49,8 +49,8 @@ class QALatencyBudgets:
     bm25_seconds: float = 0.8
     fusion_seconds: float = 0.2
     rerank_seconds: float = 1.2
-    evidence_assessment_seconds: float = 0.3
-    generation_seconds: float = 5.3
+    evidence_assessment_seconds: float = 2.0
+    generation_seconds: float = 4.7
     grounding_seconds: float = 0.3
     redaction_seconds: float = 0.2
     serialization_seconds: float = 0.1
@@ -85,8 +85,8 @@ class QALatencyBudgets:
             bm25_seconds=stage("qa_bm25_budget_seconds", 0.8),
             fusion_seconds=stage("qa_fusion_budget_seconds", 0.2),
             rerank_seconds=settings.rerank_deadline_seconds,
-            evidence_assessment_seconds=stage("qa_evidence_assessment_budget_seconds", 0.3),
-            generation_seconds=stage("qa_generation_budget_seconds", 5.3),
+            evidence_assessment_seconds=stage("qa_evidence_assessment_budget_seconds", 2.0),
+            generation_seconds=stage("qa_generation_budget_seconds", 4.7),
             grounding_seconds=stage("qa_grounding_budget_seconds", 0.3),
             redaction_seconds=stage("qa_redaction_budget_seconds", 0.2),
             serialization_seconds=stage("qa_serialization_budget_seconds", 0.1),

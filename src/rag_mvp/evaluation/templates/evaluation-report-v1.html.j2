@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="rag-report-schema-version" content="{{ report.schema_version }}">
+  <meta name="rag-report-run-id" content="{{ report.run_id }}">
+  <title>RAG evaluation report — {{ report.run_id }}</title>
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+    body { margin: 0 auto; max-width: 76rem; padding: 2rem; line-height: 1.45; }
+    header, section { border-bottom: 1px solid #8885; padding: 0 0 1.25rem; margin-bottom: 1.5rem; }
+    h1, h2 { line-height: 1.15; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid #8885; padding: .45rem .6rem; text-align: left; vertical-align: top; }
+    th { background: #8882; }
+    .pass { color: #16803a; font-weight: 700; }
+    .fail { color: #b42318; font-weight: 700; }
+    .mono, pre { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: .8rem; }
+    .card { border: 1px solid #8885; border-radius: .35rem; padding: .8rem; }
+    .label { color: #666; display: block; font-size: .82rem; }
+    details { margin: .6rem 0; }
+    pre { overflow: auto; white-space: pre-wrap; word-break: break-word; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>RAG evaluation report</h1>
+    <div class="cards">
+      <div class="card"><span class="label">Run ID</span><span class="mono" data-report-pointer="/run_id">{{ report.run_id | display_value }}</span></div>
+      <div class="card"><span class="label">Schema</span><span data-report-pointer="/schema_version">{{ report.schema_version | display_value }}</span></div>
+      <div class="card"><span class="label">Generated</span><span data-report-pointer="/generated_at">{{ report.generated_at | display_value }}</span></div>
+      <div class="card"><span class="label">Final gate</span><span class="{{ 'pass' if report.gate.final_passed else 'fail' }}" data-report-pointer="/gate/final_passed">{{ report.gate.final_passed | display_value }}</span></div>
+    </div>
+  </header>
+
+  <section>
+    <h2>Provenance</h2>
+    <table>
+      <tbody>
+        <tr><th>Code revision</th><td class="mono" data-report-pointer="/provenance/code_revision">{{ report.provenance.code_revision | display_value }}</td></tr>
+        <tr><th>Dataset</th><td><span data-report-pointer="/provenance/dataset/id">{{ report.provenance.dataset.id | display_value }}</span> @ <span data-report-pointer="/provenance/dataset/version">{{ report.provenance.dataset.version | display_value }}</span></td></tr>
+        <tr><th>Corpus</th><td data-report-pointer="/provenance/corpus/version">{{ report.provenance.corpus.version | display_value }}</td></tr>
+        <tr><th>Configuration</th><td class="mono" data-report-pointer="/provenance/configuration_id">{{ report.provenance.configuration_id | display_value }}</td></tr>
+        <tr><th>Cache policy</th><td data-report-pointer="/provenance/cache_policy">{{ report.provenance.cache_policy | display_value }}</td></tr>
+        <tr><th>Pricing version</th><td data-report-pointer="/provenance/pricing_version">{{ report.provenance.pricing_version | display_value }}</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Aggregate quality metrics</h2>
+    <table>
+      <thead><tr><th>Metric</th><th>Unrounded value</th><th>Eligible cases</th><th>Gate</th><th>Decision</th></tr></thead>
+      <tbody>
+      {% for name, metric in report.metrics.aggregate.items() %}
+        <tr>
+          <th>{{ name }}</th>
+          <td data-report-pointer="/metrics/aggregate/{{ name | pointer_token }}/value">{{ metric.value | display_value }}</td>
+          <td data-report-pointer="/metrics/aggregate/{{ name | pointer_token }}/eligible_cases">{{ metric.eligible_cases | display_value }}</td>
+          <td><span data-report-pointer="/metrics/aggregate/{{ name | pointer_token }}/operator">{{ metric.operator | display_value }}</span> <span data-report-pointer="/metrics/aggregate/{{ name | pointer_token }}/threshold">{{ metric.threshold | display_value }}</span></td>
+          <td class="{{ 'pass' if metric.passed else 'fail' }}" data-report-pointer="/metrics/aggregate/{{ name | pointer_token }}/passed">{{ metric.passed | display_value }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Category coverage</h2>
+    <table>
+      <thead><tr><th>Category</th><th>Cases</th><th>Metrics</th></tr></thead>
+      <tbody>
+      {% for category, result in report.metrics.categories.items() %}
+        <tr>
+          <th>{{ category }}</th>
+          <td data-report-pointer="/metrics/categories/{{ category | pointer_token }}/case_count">{{ result.case_count | display_value }}</td>
+          <td data-report-pointer="/metrics/categories/{{ category | pointer_token }}/metrics">{{ result.metrics | canonical_value }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Performance and cost</h2>
+    <div class="cards">
+      <div class="card"><span class="label">Cases</span><span data-report-pointer="/performance/case_count">{{ report.performance.case_count | display_value }}</span></div>
+      <div class="card"><span class="label">P90 complete latency (ms)</span>{% if report.performance.complete_latency_ms is not none %}<span data-report-pointer="/performance/complete_latency_ms/p90">{{ report.performance.complete_latency_ms.p90 | display_value }}</span>{% else %}<span data-report-pointer="/performance/complete_latency_ms">{{ report.performance.complete_latency_ms | display_value }}</span>{% endif %}</div>
+      <div class="card"><span class="label">Input tokens</span><span data-report-pointer="/cost/input_tokens">{{ report.cost.input_tokens | display_value }}</span></div>
+      <div class="card"><span class="label">Output tokens</span><span data-report-pointer="/cost/output_tokens">{{ report.cost.output_tokens | display_value }}</span></div>
+      <div class="card"><span class="label">Estimated cost</span><span data-report-pointer="/cost/estimated_cost">{{ report.cost.estimated_cost | display_value }}</span> <span data-report-pointer="/cost/currency">{{ report.cost.currency | display_value }}</span></div>
+      <div class="card"><span class="label">Cost / 1,000 calls</span><span data-report-pointer="/cost/cost_per_1000_calls">{{ report.cost.cost_per_1000_calls | display_value }}</span></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Privacy</h2>
+    <div class="cards">
+      <div class="card"><span class="label">Privacy gate</span><span class="{{ 'pass' if report.privacy.passed else 'fail' }}" data-report-pointer="/privacy/passed">{{ report.privacy.passed | display_value }}</span></div>
+      <div class="card"><span class="label">Raw supported PII matches</span><span data-report-pointer="/privacy/raw_supported_pii_matches">{{ report.privacy.raw_supported_pii_matches | display_value }}</span></div>
+      <div class="card"><span class="label">Raw secret matches</span><span data-report-pointer="/privacy/raw_secret_matches">{{ report.privacy.raw_secret_matches | display_value }}</span></div>
+    </div>
+    <table>
+      <thead><tr><th>Check</th><th>Matches</th><th>Decision</th></tr></thead>
+      <tbody>
+      {% for check in report.privacy.checks %}
+        <tr>
+          <th data-report-pointer="/privacy/checks/{{ loop.index0 }}/check_id">{{ check.check_id | display_value }}</th>
+          <td data-report-pointer="/privacy/checks/{{ loop.index0 }}/matches">{{ check.matches | display_value }}</td>
+          <td class="{{ 'pass' if check.passed else 'fail' }}" data-report-pointer="/privacy/checks/{{ loop.index0 }}/passed">{{ check.passed | display_value }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Failed cases</h2>
+    {% if report.failed_cases %}
+      <table>
+        <thead><tr><th>Case</th><th>Category</th><th>Failed metrics</th><th>Rationale</th></tr></thead>
+        <tbody>
+        {% for item in report.failed_cases %}
+          <tr>
+            <th data-report-pointer="/failed_cases/{{ loop.index0 }}/case_id">{{ item.case_id | display_value }}</th>
+            <td data-report-pointer="/failed_cases/{{ loop.index0 }}/category">{{ item.category | display_value }}</td>
+            <td data-report-pointer="/failed_cases/{{ loop.index0 }}/failed_metrics">{{ item.failed_metrics | canonical_value }}</td>
+            <td data-report-pointer="/failed_cases/{{ loop.index0 }}/rationale">{{ item.rationale | display_value }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p>No failed cases.</p>
+    {% endif %}
+  </section>
+
+  <section>
+    <h2>Issue investigations</h2>
+    {% if report.issues %}
+      <table>
+        <thead><tr><th>Issue</th><th>Classification</th><th>Primary metric</th><th>Improvement (%)</th><th>Decision</th></tr></thead>
+        <tbody>
+        {% for issue in report.issues %}
+          <tr>
+            <th data-report-pointer="/issues/{{ loop.index0 }}/issue_id">{{ issue.issue_id | display_value }}</th>
+            <td data-report-pointer="/issues/{{ loop.index0 }}/classification">{{ issue.classification | display_value }}</td>
+            <td data-report-pointer="/issues/{{ loop.index0 }}/primary_metric">{{ issue.primary_metric | display_value }}</td>
+            <td data-report-pointer="/issues/{{ loop.index0 }}/relative_improvement_percent">{{ issue.relative_improvement_percent | display_value }}</td>
+            <td class="{{ 'pass' if issue.passed else 'fail' }}" data-report-pointer="/issues/{{ loop.index0 }}/passed">{{ issue.passed | display_value }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p>No completed issue investigations are attached to this run.</p>
+    {% endif %}
+  </section>
+
+  <section>
+    <h2>Canonical source sections</h2>
+    <p>These values are rendered directly from the source JSON and are checked offline for exact parity.</p>
+    {% for section in canonical_sections %}
+      <details>
+        <summary>{{ section }}</summary>
+        <pre data-report-pointer="/{{ section | pointer_token }}">{{ report[section] | canonical_value }}</pre>
+      </details>
+    {% endfor %}
+  </section>
+
+  <script id="evaluation-report-json" type="application/json">{{ canonical_json | safe }}</script>
+</body>
+</html>

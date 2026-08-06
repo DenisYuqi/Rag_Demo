@@ -238,10 +238,36 @@ def _validated_events(
     if not isinstance(raw_events, tuple) or len(raw_events) != 1:
         raise StreamContractError("stream_events_invalid")
     try:
-        redacted = redact_output(raw_events[0], redactor=redactor)
+        raw_event = ValidatedStreamEvent.model_validate(raw_events[0])
+        _validate_stream_event_contract(
+            raw_event,
+            request_id=request_id,
+            session_id=session_id,
+            response_language=response_language,
+        )
+        redacted = _restore_stream_structural_ids(
+            redact_output(raw_event, redactor=redactor),
+            raw_event,
+        )
         event = ValidatedStreamEvent.model_validate(redacted)
     except (TypeError, ValueError, ValidationError, RecursionError):
         raise StreamContractError("stream_event_invalid") from None
+    _validate_stream_event_contract(
+        event,
+        request_id=request_id,
+        session_id=session_id,
+        response_language=response_language,
+    )
+    return (event,)
+
+
+def _validate_stream_event_contract(
+    event: ValidatedStreamEvent,
+    *,
+    request_id: str,
+    session_id: str,
+    response_language: str,
+) -> None:
     if (
         event.request_id != request_id
         or event.session_id != session_id
@@ -255,7 +281,37 @@ def _validated_events(
         StreamEventKind.ERROR,
     }:
         raise StreamContractError("terminal_event_invalid")
-    return (event,)
+
+
+def _restore_stream_structural_ids(
+    redacted: object,
+    original: ValidatedStreamEvent,
+) -> dict[str, object]:
+    """Keep trusted envelope IDs out of natural-language PII heuristics."""
+
+    if not isinstance(redacted, dict):
+        raise StreamContractError("stream_event_invalid")
+    payload = dict(redacted)
+    payload["request_id"] = original.request_id
+    payload["session_id"] = original.session_id
+    payload["response_language"] = original.response_language
+
+    claims = payload.get("claims")
+    if not isinstance(claims, list) or len(claims) != len(original.claims):
+        raise StreamContractError("stream_event_invalid")
+    for raw_claim, claim in zip(claims, original.claims, strict=True):
+        if not isinstance(raw_claim, dict):
+            raise StreamContractError("stream_event_invalid")
+        raw_claim["citation_chunk_ids"] = list(claim.citation_chunk_ids)
+
+    citations = payload.get("citations")
+    if not isinstance(citations, list) or len(citations) != len(original.citations):
+        raise StreamContractError("stream_event_invalid")
+    for raw_citation, citation in zip(citations, original.citations, strict=True):
+        if not isinstance(raw_citation, dict):
+            raise StreamContractError("stream_event_invalid")
+        raw_citation["chunk_id"] = citation.chunk_id
+    return payload
 
 
 async def stream_qa_events(

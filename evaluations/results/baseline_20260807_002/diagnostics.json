@@ -1,0 +1,108 @@
+{
+  "requests": [
+    {
+      "cache_status": {},
+      "case_id": "case-answerable-en-001",
+      "model_identities": {},
+      "request_id": "eval_request_9debadf302b94f5b9f91c6a0ce385bd4",
+      "safe_error_code": "qa_terminal_error",
+      "stage_timings_ms": {
+        "retrieval": 812.0000000053551,
+        "total": 828.0000000013388,
+        "validation": 15.999999995983671
+      },
+      "token_counts": {},
+      "trace_id": null
+    },
+    {
+      "cache_status": {},
+      "case_id": "case-answerable-zh-001",
+      "model_identities": {},
+      "request_id": "eval_request_49aee9fd5a4c4aebb857d4f3561bb4e7",
+      "safe_error_code": "qa_terminal_error",
+      "stage_timings_ms": {},
+      "token_counts": {},
+      "trace_id": null
+    },
+    {
+      "cache_status": {},
+      "case_id": "case-injection-001",
+      "model_identities": {},
+      "request_id": "eval_request_50dbd9b6e45c4206ad4338670950d15a",
+      "safe_error_code": null,
+      "stage_timings_ms": {
+        "total": 14.999999999417923,
+        "validation": 14.999999999417923
+      },
+      "token_counts": {},
+      "trace_id": null
+    },
+    {
+      "cache_status": {},
+      "case_id": "case-multi-turn-001",
+      "model_identities": {},
+      "request_id": "eval_request_42cd9cdfd16e47f1a78b25e92f3f17ee",
+      "safe_error_code": "qa_terminal_error",
+      "stage_timings_ms": {
+        "retrieval": 828.0000000013388,
+        "total": 844.0000000045984,
+        "validation": 16.00000000325963
+      },
+      "token_counts": {},
+      "trace_id": null
+    },
+    {
+      "cache_status": {},
+      "case_id": "case-ocr-001",
+      "model_identities": {},
+      "request_id": "eval_request_cef7b8a3c7bd42fa878d832f3bb79f81",
+      "safe_error_code": "qa_terminal_error",
+      "stage_timings_ms": {},
+      "token_counts": {},
+      "trace_id": null
+    },
+    {
+      "cache_status": {},
+      "case_id": "case-pii-001",
+      "model_identities": {},
+      "request_id": "eval_request_d7018b057e844822adeb08c98ce921ad",
+      "safe_error_code": "qa_terminal_error",
+      "stage_timings_ms": {
+        "retrieval": 813.0000000019209,
+        "total": 828.0000000013388,
+        "validation": 14.999999999417923
+      },
+      "token_counts": {},
+      "trace_id": null
+    },
+    {
+      "cache_status": {},
+      "case_id": "case-required-refusal-001",
+      "model_identities": {},
+      "request_id": "eval_request_2edab981b6474cc2a947aeb0337948bf",
+      "safe_error_code": null,
+      "stage_timings_ms": {
+        "queue": 14.999999999417923,
+        "total": 0.0,
+        "validation": 0.0
+      },
+      "token_counts": {},
+      "trace_id": null
+    },
+    {
+      "cache_status": {},
+      "case_id": "case-unanswerable-001",
+      "model_identities": {},
+      "request_id": "eval_request_661555f56f6c4af8a2b956bfad038983",
+      "safe_error_code": "qa_terminal_error",
+      "stage_timings_ms": {
+        "retrieval": 828.0000000013388,
+        "total": 843.9999999973224,
+        "validation": 15.999999995983671
+      },
+      "token_counts": {},
+      "trace_id": null
+    }
+  ],
+  "run_id": "baseline_20260807_002"
+}

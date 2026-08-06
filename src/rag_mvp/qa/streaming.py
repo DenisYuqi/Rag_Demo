@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from pydantic import ValidationError
 
 from rag_mvp.domain.qa import (
@@ -12,6 +14,7 @@ from rag_mvp.domain.qa import (
     QARefusal,
     QAResponse,
     RefusalReason,
+    SafeQADiagnostics,
     StreamEventKind,
     ValidatedStreamEvent,
 )
@@ -21,6 +24,8 @@ from rag_mvp.safety.injection import InjectionPolicy
 from rag_mvp.safety.output import SAFE_UNAVAILABLE_MESSAGE, redact_output
 from rag_mvp.safety.redactor import DEFAULT_REDACTOR, Redactor
 from rag_mvp.safety.streaming import SafeStream
+
+_CONTENT_ADDRESSED_CHUNK_ID = re.compile(r"^chk_[0-9a-f]{32}$")
 
 
 class ResponseReleaseError(ValueError):
@@ -70,8 +75,10 @@ class CompleteResponseEmitter:
             self._persist_if_conversational(redacted, event.content, owner_id)
             return (event,)
         # This service-boundary gate never lets dynamic exception content cross it.
+        except ResponseReleaseError as error:
+            return (self._failure_event(response, error.code),)
         except Exception:
-            return (self._failure_event(response),)
+            return (self._failure_event(response, "response_release_failed"),)
 
     @staticmethod
     def _validate_pipeline_proof(outcome: OrchestratedResponse) -> None:
@@ -118,6 +125,9 @@ class CompleteResponseEmitter:
         payload = redact_output(response, redactor=self._redactor)
         if not isinstance(payload, dict):
             raise ResponseReleaseError("redacted_response_invalid")
+        payload["request_id"] = response.request_id
+        payload["session_id"] = response.session_id
+        payload["response_language"] = response.response_language
         content_field = "answer" if isinstance(response, QAAnswer) else "message"
         payload[content_field] = self._safe_complete_text(_response_content(response))
         if isinstance(response, QAAnswer):
@@ -125,10 +135,16 @@ class CompleteResponseEmitter:
             if not isinstance(raw_claims, (list, tuple)) or len(raw_claims) != len(response.claims):
                 raise ResponseReleaseError("redacted_claims_invalid")
             safe_claim_texts = self._safe_claim_texts(response)
-            for raw_claim, safe_text in zip(raw_claims, safe_claim_texts, strict=True):
+            for raw_claim, claim, safe_text in zip(
+                raw_claims,
+                response.claims,
+                safe_claim_texts,
+                strict=True,
+            ):
                 if not isinstance(raw_claim, dict):
                     raise ResponseReleaseError("redacted_claims_invalid")
                 raw_claim["text"] = safe_text
+                raw_claim["citation_chunk_ids"] = list(claim.citation_chunk_ids)
         raw_citations = payload.get("citations")
         if not isinstance(raw_citations, (list, tuple)) or len(raw_citations) != len(
             response.citations
@@ -138,7 +154,7 @@ class CompleteResponseEmitter:
             if not isinstance(raw, dict):
                 raise ResponseReleaseError("redacted_citations_invalid")
             raw["source_title"] = self._safe_complete_text(original.source_title)
-            raw["chunk_id"] = self._safe_complete_text(original.chunk_id)
+            raw["chunk_id"] = self._safe_chunk_id(original.chunk_id)
             locator = raw.get("locator")
             if not isinstance(locator, dict):
                 raise ResponseReleaseError("redacted_citations_invalid")
@@ -160,6 +176,14 @@ class CompleteResponseEmitter:
         if "".join(safe_claims) != safe_combined:
             raise ResponseReleaseError("cross_claim_sensitive_value")
         return safe_claims
+
+    def _safe_chunk_id(self, chunk_id: str) -> str:
+        # Ingestion-generated chunk IDs are opaque content-addressed identifiers.
+        # Passing their numeric hash suffix through the natural-language stream
+        # ambiguity check can misclassify it as an incomplete phone/account value.
+        if _CONTENT_ADDRESSED_CHUNK_ID.fullmatch(chunk_id) is not None:
+            return chunk_id
+        return self._safe_complete_text(chunk_id)
 
     def _safe_complete_text(self, text: str) -> str:
         stream = SafeStream(
@@ -231,7 +255,7 @@ class CompleteResponseEmitter:
         )
 
     @staticmethod
-    def _failure_event(response: QAResponse) -> ValidatedStreamEvent:
+    def _failure_event(response: QAResponse, failure_code: str) -> ValidatedStreamEvent:
         return ValidatedStreamEvent(
             request_id=response.request_id,
             session_id=response.session_id,
@@ -241,6 +265,9 @@ class CompleteResponseEmitter:
             content=SAFE_UNAVAILABLE_MESSAGE,
             error_code=QAErrorCode.SAFETY_UNAVAILABLE,
             retryable=True,
+            diagnostics=SafeQADiagnostics(
+                metadata={"release_failure_code": failure_code},
+            ),
             terminal=True,
         )
 

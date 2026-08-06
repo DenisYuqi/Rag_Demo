@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import re
+import shutil
 import time
 import unicodedata
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +22,7 @@ from rag_mvp.domain.ingestion import (
     Document,
     DocumentKind,
     DocumentVersion,
+    IndexRevision,
     IndexRevisionStatus,
     IngestionCommand,
     IngestionJob,
@@ -250,6 +253,134 @@ class IngestionService:
     @property
     def upload_max_bytes(self) -> int:
         return self._upload_max_bytes
+
+    @property
+    def chunking_config(self) -> ChunkingConfig:
+        """Return the immutable chunking identity used by this runtime."""
+
+        return self._chunking
+
+    @property
+    def derivation_config(self) -> Mapping[str, JsonValue]:
+        """Return a detached copy of the non-secret document derivation identity."""
+
+        return copy.deepcopy(self._derivation_config)
+
+    async def publish_prechunked_snapshot(
+        self,
+        *,
+        revision_id: str,
+        chunks: Sequence[Chunk],
+        titles: Mapping[str, str],
+        active_sources: Mapping[str, int],
+        request_id: str,
+        cleanup_failed: bool = False,
+    ) -> IndexRevision:
+        """Publish a fully verified pre-chunked snapshot through the production index path.
+
+        This narrow hook exists for immutable evaluation corpora whose chunks have
+        already been reproduced and compared against the production chunker. Document
+        and version metadata must be registered before this method is called. Callers
+        owning an otherwise-empty target may request removal of an unpublished failed
+        revision so the complete higher-level installation can be retried atomically.
+        """
+
+        if type(cleanup_failed) is not bool:
+            raise TypeError("cleanup_failed must be a boolean")
+        async with self._mutation_lock:
+            normalized_titles = dict(titles)
+            normalized_sources = dict(active_sources)
+            self._validate_prechunked_metadata(normalized_titles, normalized_sources)
+            expected_active_id = self._repositories.index_revisions.get_active_revision_id()
+            context = ProviderCallContext(
+                request_id=request_id,
+                operation_id=revision_id,
+                deadline=Deadline.after(self._operation_deadline_seconds),
+            )
+            revision = await self._stager.stage(
+                revision_id,
+                tuple(chunks),
+                normalized_titles,
+                normalized_sources,
+                context,
+            )
+            try:
+                self._repositories.index_revisions.create(revision)
+            except BaseException:
+                await self._remove_revision_artifacts(revision_id)
+                raise
+            try:
+                await self._chroma_worker_pool.run_cancel_safe(
+                    self._publisher.validate,
+                    revision,
+                )
+                return await self._chroma_worker_pool.run_cancel_safe(
+                    self._publisher.publish,
+                    revision_id,
+                    expected_active_revision_id=expected_active_id,
+                )
+            except BaseException:
+                with suppress(Exception):
+                    self._repositories.index_revisions.mark_failed(revision_id)
+                if (
+                    cleanup_failed
+                    and self._repositories.index_revisions.get_active_revision_id() != revision_id
+                ):
+                    self._delete_unpublished_revision(revision_id)
+                    await self._remove_revision_artifacts(revision_id)
+                raise
+
+    def _validate_prechunked_metadata(
+        self,
+        titles: Mapping[str, str],
+        active_sources: Mapping[str, int],
+    ) -> None:
+        if set(titles) != set(active_sources):
+            raise IngestionSubmissionError("prechunked_metadata_invalid")
+        for source_id, version_number in active_sources.items():
+            document = self._repositories.documents.get(source_id)
+            version = self._repositories.documents.get_version(source_id, version_number)
+            if (
+                document is None
+                or document.deleted_at is not None
+                or version is None
+                or version.source_id != source_id
+                or version.version != version_number
+                or version.derivation_config_digest != self._derivation_digest
+                or titles.get(source_id) != document.display_title
+            ):
+                raise IngestionSubmissionError("prechunked_metadata_invalid")
+
+    def _delete_unpublished_revision(self, revision_id: str) -> None:
+        with self._database.transaction() as connection:
+            if (
+                self._repositories.index_revisions.get_active_revision_id(connection=connection)
+                == revision_id
+            ):
+                raise RepositoryConflict("cannot delete an active index revision")
+            revision = self._repositories.index_revisions.get(
+                revision_id,
+                connection=connection,
+            )
+            if revision is None:
+                return
+            if revision.status not in {
+                IndexRevisionStatus.STAGED,
+                IndexRevisionStatus.FAILED,
+            }:
+                raise RepositoryConflict("only an unpublished index revision can be deleted")
+            connection.execute(
+                "DELETE FROM index_revisions WHERE revision_id = ?",
+                (revision_id,),
+            )
+
+    async def _remove_revision_artifacts(self, revision_id: str) -> None:
+        revision_path = self._layout.index_revision_path(revision_id)
+        if revision_path.exists():
+            await self._chroma_worker_pool.run_cancel_safe(
+                shutil.rmtree,
+                revision_path,
+            )
 
     def close(self) -> None:
         if self._owned_embedding_cache is not None:

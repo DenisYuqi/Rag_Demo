@@ -50,6 +50,7 @@ def test_prompt_uses_versioned_json_generation_contract() -> None:
     assert request.temperature == 0
     assert request.max_output_tokens == 321
     assert [message.role for message in request.messages] == [ChatRole.SYSTEM, ChatRole.USER]
+    assert "answer must equal the ordered concatenation" in request.messages[0].content
 
     schema = _payload(request)["required_output_schema"]
     assert isinstance(schema, dict)

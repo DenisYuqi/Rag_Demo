@@ -87,6 +87,22 @@ def test_absent_evidence_returns_stable_insufficient_refusal() -> None:
     assert decision.citation_chunk_ids == ()
 
 
+def test_default_calibration_accepts_supported_partial_evidence() -> None:
+    candidate = _candidate("chunk-1", 1)
+
+    decision = RefusalPolicy().decide(
+        (
+            FactEvidence("fact-supported", 0.55, ("chunk-1",)),
+            FactEvidence("fact-unsupported", 0),
+        ),
+        candidates=(candidate,),
+        revision_id="revision-current",
+    )
+
+    assert decision.kind is EvidenceDecisionKind.PARTIAL
+    assert decision.supported_fact_ids == ("fact-supported",)
+
+
 def test_below_threshold_evidence_is_insufficient_at_a_stable_boundary() -> None:
     candidate = _candidate("chunk-1", 1)
     policy = RefusalPolicy(minimum_support_score=0.7)

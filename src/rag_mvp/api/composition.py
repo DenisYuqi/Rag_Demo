@@ -44,6 +44,7 @@ from rag_mvp.qa.context import ContextBuilder
 from rag_mvp.qa.deadlines import QAStageBudgets
 from rag_mvp.qa.evidence_assessor import SemanticFactEvidenceAssessor
 from rag_mvp.qa.orchestrator import QAOrchestrator, SnapshotRetrievalGateway
+from rag_mvp.qa.refusal import RefusalPolicy
 from rag_mvp.qa.sessions import ConversationService
 from rag_mvp.qa.streaming import CompleteResponseEmitter
 from rag_mvp.retrieval.binding import BoundRetrievalSnapshotFactory
@@ -264,6 +265,9 @@ def _compose_qa(
         ),
         context_builder=ContextBuilder(maximum_chunks=settings.context_chunk_limit),
         injection_policy=injection_policy,
+        refusal_policy=RefusalPolicy(
+            minimum_support_score=settings.qa_minimum_support_score,
+        ),
         budgets=_qa_budgets(settings),
         maximum_provider_attempts=settings.provider_retry_limit + 1,
     )
@@ -336,13 +340,14 @@ def _close_failed_worker_pools(worker_pools: RagWorkerPools) -> None:
 
 def _qa_budgets(settings: Settings) -> QAStageBudgets:
     resolved = QALatencyBudgets.from_settings(settings)
+    defaults = QAStageBudgets()
     return QAStageBudgets(
         total_seconds=resolved.total_seconds,
         validation_seconds=resolved.validation_seconds,
         retrieval_seconds=(
             settings.qa_retrieval_budget_seconds
             if "qa_retrieval_budget_seconds" in settings.model_fields_set
-            else 0.8 * (settings.qa_deadline_seconds / 9.5)
+            else defaults.retrieval_seconds * (settings.qa_deadline_seconds / 9.5)
         ),
         rerank_seconds=resolved.rerank_seconds,
         evidence_assessment_seconds=resolved.evidence_assessment_seconds,

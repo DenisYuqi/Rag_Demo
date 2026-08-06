@@ -1,0 +1,929 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rag-mvp.local/schemas/evaluation-report-v1.schema.json",
+  "title": "RAG MVP evaluation report",
+  "description": "Immutable source-of-truth report for one completed evaluation run.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "generated_at",
+    "provenance",
+    "configuration",
+    "thresholds",
+    "metrics",
+    "failed_cases",
+    "performance",
+    "cost",
+    "privacy",
+    "issues",
+    "gate"
+  ],
+  "properties": {
+    "$schema": {
+      "const": "https://rag-mvp.local/schemas/evaluation-report-v1.schema.json"
+    },
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "run_id": {
+      "$ref": "#/$defs/identifier"
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "provenance": {
+      "$ref": "#/$defs/provenance"
+    },
+    "configuration": {
+      "type": "object",
+      "minProperties": 1
+    },
+    "thresholds": {
+      "$ref": "#/$defs/qualityThresholds"
+    },
+    "metrics": {
+      "$ref": "#/$defs/metrics"
+    },
+    "case_results": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/caseResult"
+      }
+    },
+    "failed_cases": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/failedCase"
+      }
+    },
+    "performance": {
+      "$ref": "#/$defs/performance"
+    },
+    "cost": {
+      "$ref": "#/$defs/cost"
+    },
+    "privacy": {
+      "$ref": "#/$defs/privacy"
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/issue"
+      }
+    },
+    "gate": {
+      "$ref": "#/$defs/gate"
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]*$"
+    },
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1
+    },
+    "digest": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 255,
+      "pattern": "^(sha256:)?[A-Fa-f0-9]{8,}$"
+    },
+    "jsonScalar": {
+      "type": ["string", "number", "integer", "boolean", "null"]
+    },
+    "identityObject": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "$ref": "#/$defs/jsonScalar"
+      }
+    },
+    "versionMap": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/nonEmptyString"
+      }
+    },
+    "datasetIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "content_hash"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "version": {
+          "$ref": "#/$defs/identifier"
+        },
+        "content_hash": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "corpusIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "content_hash"],
+      "properties": {
+        "version": {
+          "$ref": "#/$defs/identifier"
+        },
+        "content_hash": {
+          "$ref": "#/$defs/digest"
+        },
+        "index_revision": {
+          "$ref": "#/$defs/identifier"
+        }
+      }
+    },
+    "providerModel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "model"],
+      "properties": {
+        "provider": {
+          "$ref": "#/$defs/identifier"
+        },
+        "model": {
+          "$ref": "#/$defs/identifier"
+        },
+        "base_url_identity": {
+          "$ref": "#/$defs/identifier"
+        }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/jsonScalar"
+      },
+      "required": ["python_version", "platform", "deployment"],
+      "properties": {
+        "python_version": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "platform": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "deployment": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code_revision",
+        "dataset",
+        "corpus",
+        "configuration_id",
+        "prompt_versions",
+        "provider_models",
+        "embedding_identity",
+        "chunking_identity",
+        "retrieval_configuration",
+        "scorer_versions",
+        "pricing_version",
+        "random_seeds",
+        "cache_policy",
+        "environment"
+      ],
+      "properties": {
+        "code_revision": {
+          "$ref": "#/$defs/identifier"
+        },
+        "dataset": {
+          "$ref": "#/$defs/datasetIdentity"
+        },
+        "corpus": {
+          "$ref": "#/$defs/corpusIdentity"
+        },
+        "configuration_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "prompt_versions": {
+          "$ref": "#/$defs/versionMap"
+        },
+        "provider_models": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/providerModel"
+          }
+        },
+        "provider_metadata": {
+          "$ref": "#/$defs/identityObject"
+        },
+        "embedding_identity": {
+          "$ref": "#/$defs/identityObject"
+        },
+        "chunking_identity": {
+          "$ref": "#/$defs/identityObject"
+        },
+        "retrieval_configuration": {
+          "$ref": "#/$defs/identityObject"
+        },
+        "scorer_versions": {
+          "$ref": "#/$defs/versionMap"
+        },
+        "pricing_version": {
+          "$ref": "#/$defs/identifier"
+        },
+        "random_seeds": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "integer"
+          }
+        },
+        "cache_policy": {
+          "$ref": "#/$defs/identifier"
+        },
+        "environment": {
+          "$ref": "#/$defs/environment"
+        }
+      }
+    },
+    "threshold": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operator", "value"],
+      "properties": {
+        "operator": {
+          "enum": [">", ">=", "<", "<=", "=="]
+        },
+        "value": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    },
+    "qualityThresholds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "faithfulness",
+        "context_precision",
+        "answer_completeness",
+        "style_consistency",
+        "refusal_appropriateness"
+      ],
+      "properties": {
+        "faithfulness": {
+          "$ref": "#/$defs/threshold"
+        },
+        "context_precision": {
+          "$ref": "#/$defs/threshold"
+        },
+        "answer_completeness": {
+          "$ref": "#/$defs/threshold"
+        },
+        "style_consistency": {
+          "$ref": "#/$defs/threshold"
+        },
+        "refusal_appropriateness": {
+          "$ref": "#/$defs/threshold"
+        }
+      }
+    },
+    "metricResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "eligible_cases", "operator", "threshold", "passed"],
+      "properties": {
+        "value": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "eligible_cases": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "operator": {
+          "enum": [">", ">=", "<", "<=", "=="]
+        },
+        "threshold": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "passed": {
+          "type": "boolean"
+        },
+        "rationale": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "evidence_references": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/identifier"
+          },
+          "uniqueItems": true
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "eligible_cases": {"const": 0}
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {"type": "null"},
+              "passed": {"const": false}
+            }
+          },
+          "else": {
+            "properties": {
+              "value": {"type": "number"}
+            }
+          }
+        }
+      ]
+    },
+    "aggregateMetrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "faithfulness",
+        "context_precision",
+        "answer_completeness",
+        "style_consistency",
+        "refusal_appropriateness"
+      ],
+      "properties": {
+        "faithfulness": {
+          "$ref": "#/$defs/metricResult"
+        },
+        "context_precision": {
+          "$ref": "#/$defs/metricResult"
+        },
+        "answer_completeness": {
+          "$ref": "#/$defs/metricResult"
+        },
+        "style_consistency": {
+          "$ref": "#/$defs/metricResult"
+        },
+        "refusal_appropriateness": {
+          "$ref": "#/$defs/metricResult"
+        }
+      }
+    },
+    "categoryResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["case_count", "metrics"],
+      "properties": {
+        "case_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "metrics": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "$ref": "#/$defs/metricResult"
+          }
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["aggregate", "categories"],
+      "properties": {
+        "aggregate": {
+          "$ref": "#/$defs/aggregateMetrics"
+        },
+        "categories": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/categoryResult"
+          }
+        }
+      }
+    },
+    "caseMetric": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["eligible", "value", "rationale", "evidence_references"],
+      "properties": {
+        "eligible": {
+          "type": "boolean"
+        },
+        "value": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "rationale": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "evidence_references": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/identifier"
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "caseResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["case_id", "category", "outcome", "metrics"],
+      "properties": {
+        "case_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "category": {
+          "$ref": "#/$defs/identifier"
+        },
+        "outcome": {
+          "enum": ["answer", "refusal", "error"]
+        },
+        "metrics": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "$ref": "#/$defs/caseMetric"
+          }
+        },
+        "trace_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "safe_error_code": {
+          "type": ["string", "null"]
+        }
+      }
+    },
+    "failedCase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["case_id", "category", "outcome", "failed_metrics", "rationale"],
+      "properties": {
+        "case_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "category": {
+          "$ref": "#/$defs/identifier"
+        },
+        "outcome": {
+          "enum": ["answer", "refusal", "error"]
+        },
+        "failed_metrics": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/identifier"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "rationale": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "safe_error_code": {
+          "type": ["string", "null"]
+        },
+        "trace_id": {
+          "$ref": "#/$defs/identifier"
+        }
+      }
+    },
+    "latencySummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["count", "p50", "p90", "max"],
+      "properties": {
+        "count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "p50": {
+          "type": "number",
+          "minimum": 0
+        },
+        "p90": {
+          "type": "number",
+          "minimum": 0
+        },
+        "p99": {
+          "type": "number",
+          "minimum": 0
+        },
+        "max": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "performance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["case_count", "complete_latency_ms", "stage_latency_ms"],
+      "properties": {
+        "case_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "complete_latency_ms": {
+          "oneOf": [
+            {"$ref": "#/$defs/latencySummary"},
+            {"type": "null"}
+          ]
+        },
+        "stage_latency_ms": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/latencySummary"
+          }
+        },
+        "latency_evidence_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unknown_reasons": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/identifier"
+          },
+          "uniqueItems": true
+        },
+        "attempts": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "successes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "errors": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "error_rate": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "concurrency": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "instance_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "representative_trace_references": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/identifier"
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "money": {
+      "oneOf": [
+        {
+          "type": "number",
+          "minimum": 0
+        },
+        {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?$"
+        }
+      ]
+    },
+    "nullableMoney": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/money"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "cost": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pricing_version",
+        "currency",
+        "complete",
+        "input_tokens",
+        "output_tokens",
+        "known_cost",
+        "estimated_cost",
+        "cost_per_1000_calls",
+        "unknown_reasons"
+      ],
+      "properties": {
+        "pricing_version": {
+          "$ref": "#/$defs/identifier"
+        },
+        "currency": {
+          "type": ["string", "null"]
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "input_tokens": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "output_tokens": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "known_cost": {
+          "$ref": "#/$defs/nullableMoney"
+        },
+        "estimated_cost": {
+          "$ref": "#/$defs/nullableMoney"
+        },
+        "cost_per_1000_calls": {
+          "$ref": "#/$defs/nullableMoney"
+        },
+        "unknown_reasons": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/identifier"
+          },
+          "uniqueItems": true
+        },
+        "attempt_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "successful_calls": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "assumptions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          }
+        }
+      }
+    },
+    "privacyCheck": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["check_id", "passed", "matches", "evidence_references"],
+      "properties": {
+        "check_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "passed": {
+          "type": "boolean"
+        },
+        "matches": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "evidence_references": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/identifier"
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["passed", "raw_supported_pii_matches", "raw_secret_matches", "checks"],
+      "properties": {
+        "passed": {
+          "type": "boolean"
+        },
+        "raw_supported_pii_matches": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "raw_secret_matches": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "checks": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/privacyCheck"
+          }
+        }
+      }
+    },
+    "issue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "issue_id",
+        "classification",
+        "affected_case_ids",
+        "symptom",
+        "metric_references",
+        "log_references",
+        "run_references",
+        "trace_references",
+        "root_cause",
+        "exact_fix",
+        "fix_rationale",
+        "primary_metric",
+        "direction",
+        "baseline_value",
+        "post_fix_value",
+        "relative_improvement_percent",
+        "comparison",
+        "passed"
+      ],
+      "properties": {
+        "issue_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "classification": {
+          "enum": ["genuine", "controlled"]
+        },
+        "affected_case_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/identifier"
+          }
+        },
+        "symptom": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "metric_references": {
+          "$ref": "#/$defs/nonEmptyIdentifierArray"
+        },
+        "log_references": {
+          "$ref": "#/$defs/nonEmptyIdentifierArray"
+        },
+        "run_references": {
+          "$ref": "#/$defs/nonEmptyIdentifierArray"
+        },
+        "trace_references": {
+          "$ref": "#/$defs/nonEmptyIdentifierArray"
+        },
+        "root_cause": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "exact_fix": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "fix_rationale": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "primary_metric": {
+          "$ref": "#/$defs/identifier"
+        },
+        "direction": {
+          "enum": ["higher-is-better", "lower-is-better"]
+        },
+        "baseline_value": {
+          "type": "number",
+          "minimum": 0
+        },
+        "post_fix_value": {
+          "type": "number",
+          "minimum": 0
+        },
+        "relative_improvement_percent": {
+          "type": "number"
+        },
+        "comparison": {
+          "$ref": "#/$defs/issueComparison"
+        },
+        "passed": {
+          "type": "boolean"
+        }
+      }
+    },
+    "nonEmptyIdentifierArray": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/identifier"
+      }
+    },
+    "comparisonIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "run_id",
+        "dataset_version",
+        "corpus_version",
+        "case_ids_hash",
+        "scorer_version",
+        "eligible_cases",
+        "configuration_id"
+      ],
+      "properties": {
+        "run_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "dataset_version": {
+          "$ref": "#/$defs/identifier"
+        },
+        "corpus_version": {
+          "$ref": "#/$defs/identifier"
+        },
+        "case_ids_hash": {
+          "$ref": "#/$defs/digest"
+        },
+        "scorer_version": {
+          "$ref": "#/$defs/identifier"
+        },
+        "eligible_cases": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "configuration_id": {
+          "$ref": "#/$defs/identifier"
+        }
+      }
+    },
+    "issueComparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["baseline", "post_fix"],
+      "properties": {
+        "baseline": {
+          "$ref": "#/$defs/comparisonIdentity"
+        },
+        "post_fix": {
+          "$ref": "#/$defs/comparisonIdentity"
+        }
+      }
+    },
+    "gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "valid",
+        "quality_passed",
+        "privacy_passed",
+        "reporting_passed",
+        "issues_passed",
+        "final_passed",
+        "failures"
+      ],
+      "properties": {
+        "valid": {
+          "type": "boolean"
+        },
+        "quality_passed": {
+          "type": "boolean"
+        },
+        "privacy_passed": {
+          "type": "boolean"
+        },
+        "reporting_passed": {
+          "type": "boolean"
+        },
+        "issues_passed": {
+          "type": "boolean"
+        },
+        "final_passed": {
+          "type": "boolean"
+        },
+        "failures": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/identifier"
+          }
+        }
+      }
+    }
+  }
+}

@@ -13,7 +13,7 @@ from rag_mvp.domain.qa import RefusalReason
 from rag_mvp.domain.retrieval import RankingEvidence
 
 REFUSAL_POLICY_VERSION = "normalized-fact-support-v1"
-DEFAULT_MINIMUM_SUPPORT_SCORE = 0.65
+DEFAULT_MINIMUM_SUPPORT_SCORE = 0.55
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$")
 
 

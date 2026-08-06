@@ -15,10 +15,10 @@ from rag_mvp.providers.models import Deadline
 class QAStageBudgets:
     total_seconds: float = 9.5
     validation_seconds: float = 0.2
-    retrieval_seconds: float = 0.8
+    retrieval_seconds: float = 1.8
     rerank_seconds: float = 1.2
-    evidence_assessment_seconds: float = 0.3
-    generation_seconds: float = 5.3
+    evidence_assessment_seconds: float = 2.0
+    generation_seconds: float = 4.7
     finalization_seconds: float = 0.6
 
     def __post_init__(self) -> None:

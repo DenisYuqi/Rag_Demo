@@ -1,0 +1,25 @@
+{
+  "schema_version": "rag-evaluation-corpus-v1",
+  "snapshot_id": "mvp-synthetic-corpus",
+  "version": "1.0.0",
+  "content_hash": "sha256:40719423095a14cd0dd5d0c993ba68417135e69a6a00121fdf62f53b5e26d866",
+  "hash_algorithm": "sha256-canonical-json-v1",
+  "documents_file": "documents.jsonl",
+  "chunks_file": "chunks.jsonl",
+  "derivation": {
+    "extraction_version": "extraction-v1",
+    "normalization_version": "unicode-nfc-lines-v1",
+    "chunking_version": "structure-page-token-v1",
+    "tokenizer_version": "unicode-word-cjk-v1",
+    "target_tokens": 500,
+    "overlap_tokens": 80
+  },
+  "active_sources": {
+    "src-benefits-en": 1,
+    "src-travel-zh": 1,
+    "src-security-bilingual": 1,
+    "src-expense-ocr": 1
+  },
+  "document_count": 4,
+  "chunk_count": 10
+}

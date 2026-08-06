@@ -1,0 +1,10 @@
+{
+  "configuration_id": "f232499c7477d973",
+  "corpus_hash": "sha256:40719423095a14cd0dd5d0c993ba68417135e69a6a00121fdf62f53b5e26d866",
+  "dataset_hash": "sha256:330df745c7df79e106fbb80b6137d1b55fb39ec63215f479aed858f7eb7f05f2",
+  "final_passed": false,
+  "quality_passed": false,
+  "report": "D:\\pythonWorkspace\\Rag_Demo\\evaluations\\results\\baseline_20260807_002\\report.json",
+  "run_id": "baseline_20260807_002",
+  "status": "completed"
+}

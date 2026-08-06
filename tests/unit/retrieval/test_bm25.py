@@ -12,6 +12,7 @@ from rag_mvp.retrieval.tokenizer import (
     BILINGUAL_TOKENIZER_IDENTITY,
     JIEBA_DICTIONARY_SHA256,
     JIEBA_PACKAGE_VERSION,
+    BilingualTokenizer,
 )
 
 
@@ -91,6 +92,15 @@ def test_tokenizer_identity_pins_package_dictionary_and_implementation() -> None
     assert f"jieba-{JIEBA_PACKAGE_VERSION}" in BILINGUAL_TOKENIZER_IDENTITY
     assert f"dict-sha256-{JIEBA_DICTIONARY_SHA256}" in BILINGUAL_TOKENIZER_IDENTITY
     assert BILINGUAL_TOKENIZER_IDENTITY.endswith("hmm-false")
+
+
+def test_tokenizer_reuses_the_verified_read_only_backend() -> None:
+    first = BilingualTokenizer()
+    second = BilingualTokenizer()
+
+    assert first is not second
+    assert first._jieba is second._jieba
+    assert first.tokenize("年假 policy") == second.tokenize("年假 policy")
 
 
 @pytest.mark.parametrize(

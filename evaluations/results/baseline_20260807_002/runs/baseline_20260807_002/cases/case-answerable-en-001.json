@@ -1,0 +1,45 @@
+{
+  "schema_version": "1.0.0",
+  "run_id": "baseline_20260807_002",
+  "case_id": "case-answerable-en-001",
+  "succeeded": false,
+  "execution": {
+    "case_id": "case-answerable-en-001",
+    "owner_id": "eval_owner_24c42a6266d31df2e1bf660245c0b89ab0cee8e0a5149793a4c2e06317281218",
+    "session_id": "session_59e746d3c3114acd8432c4f1edf62b3b",
+    "request_id": "eval_request_9debadf302b94f5b9f91c6a0ce385bd4",
+    "event": {
+      "request_id": "eval_request_9debadf302b94f5b9f91c6a0ce385bd4",
+      "session_id": "session_59e746d3c3114acd8432c4f1edf62b3b",
+      "sequence": 0,
+      "kind": "error",
+      "response_language": "en",
+      "content": "The request reached its deadline.",
+      "claims": [],
+      "citations": [],
+      "reason": null,
+      "error_code": "deadline-expired",
+      "retryable": true,
+      "diagnostics": {
+        "trace_id": null,
+        "stage_timings_ms": {
+          "validation": 15.999999995983671,
+          "retrieval": 812.0000000053551,
+          "total": 828.0000000013388
+        },
+        "cache_status": {},
+        "model_identities": {},
+        "token_counts": {},
+        "degradation_reasons": [],
+        "metadata": {}
+      },
+      "terminal": true
+    },
+    "cache_policy": "bypass",
+    "retrieved_chunk_ids": [],
+    "context_chunk_ids": [],
+    "latency_ms": 845.6683999975212
+  },
+  "safe_error_code": "qa_terminal_error",
+  "completed_at": "2026-08-06T19:31:22.505450Z"
+}

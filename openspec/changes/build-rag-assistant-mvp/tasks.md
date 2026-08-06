@@ -119,21 +119,21 @@ Implement and integrate in vertical gates. A gate is complete only when its end-
 
 ## 10. RAG Evaluation and Issue Evidence
 
-- [ ] 10.1 Implement versioned dataset/manifest loading, content hashing, corpus-version checks, and category eligibility validation; verify with `uv run pytest tests/unit/evaluation/test_dataset.py -q`.
-- [ ] 10.2 Add non-sensitive bilingual sample documents and an initial answerable Chinese/English case set with authoritative chunk mappings; validate with `uv run python -m rag_mvp.evaluation.validate_dataset evaluations/datasets/mvp-v1`.
-- [ ] 10.3 Extend the same dataset with multi-turn, OCR, unanswerable, required-refusal, injection, and PII categories; rerun the dataset validator and confirm every required category is eligible.
-- [ ] 10.4 Implement the evaluation runner through the production QA pipeline with isolated sessions, disabled final caches, progress persistence, and immutable run manifest; verify with `uv run pytest tests/unit/evaluation/test_runner.py -q`.
-- [ ] 10.5 Implement versioned Faithfulness and Context Precision scoring with per-case rationale/evidence; verify formulas and strict eligibility with `uv run pytest tests/unit/evaluation/test_grounding_metrics.py -q`.
-- [ ] 10.6 Implement Answer Completeness, Style Consistency, and Refusal Appropriateness scoring; verify boundary and inappropriate-refusal cases with `uv run pytest tests/unit/evaluation/test_answer_metrics.py -q`.
-- [ ] 10.7 Implement the unrounded quality gate for `>0.85`, `>0.70`, `>=80%`, `>=80%`, and `>=80%`; verify every boundary operator with `uv run pytest tests/unit/evaluation/test_quality_gate.py -q`.
-- [ ] 10.8 Implement versioned JSON report generation and JSON Schema validation; verify required provenance, metric, performance, cost, privacy, and issue sections with `uv run pytest tests/unit/evaluation/test_json_report.py -q`.
-- [ ] 10.9 Implement Jinja2 HTML rendering from JSON and automated value-parity checks; verify with `uv run pytest tests/unit/evaluation/test_html_report.py -q`.
-- [ ] 10.10 Run the first real baseline evaluation, persist its immutable report and manifests, and verify it with `uv run python -m rag_mvp.evaluation.verify_report <baseline-report.json>`.
-- [ ] 10.11 Select the first genuine baseline issue, or an explicitly test-only controlled compliance baseline if needed; attach affected cases, config delta, safe logs/metrics/traces, root cause, and proposed fix to the report.
-- [ ] 10.12 Implement the smallest justified fix for issue one, rerun the identical case set, and verify its declared primary metric improves at least 10% relative without failing global gates.
-- [ ] 10.13 Select and evidence a distinct second genuine issue, or an explicitly test-only controlled refusal baseline if needed; verify it uses the same dataset/corpus/scorers as its planned post-fix run.
-- [ ] 10.14 Implement the smallest justified fix for issue two, rerun the identical case set, and verify its declared primary metric improves at least 10% relative without regressing accepted issue one.
-- [ ] 10.15 Generate the final combined JSON/HTML validation report and verify both issue records, calculations, configuration identities, and report parity with `uv run python -m rag_mvp.evaluation.verify_report <final-report.json>`.
+- [x] 10.1 Implement versioned dataset/manifest loading, content hashing, corpus-version checks, and category eligibility validation; verify with `uv run pytest tests/unit/evaluation/test_dataset.py -q`.
+- [x] 10.2 Add non-sensitive bilingual sample documents and an initial answerable Chinese/English case set with authoritative chunk mappings; validate with `uv run python -m rag_mvp.evaluation.validate_dataset evaluations/datasets/mvp-v1`.
+- [x] 10.3 Extend the same dataset with multi-turn, OCR, unanswerable, required-refusal, injection, and PII categories; rerun the dataset validator and confirm every required category is eligible.
+- [x] 10.4 Implement the evaluation runner through the production QA pipeline with isolated sessions, disabled final caches, progress persistence, and immutable run manifest; verify with `uv run pytest tests/unit/evaluation/test_runner.py -q`.
+- [x] 10.5 Implement versioned Faithfulness and Context Precision scoring with per-case rationale/evidence; verify formulas and strict eligibility with `uv run pytest tests/unit/evaluation/test_grounding_metrics.py -q`.
+- [x] 10.6 Implement Answer Completeness, Style Consistency, and Refusal Appropriateness scoring; verify boundary and inappropriate-refusal cases with `uv run pytest tests/unit/evaluation/test_answer_metrics.py -q`.
+- [x] 10.7 Implement the unrounded quality gate for `>0.85`, `>0.70`, `>=80%`, `>=80%`, and `>=80%`; verify every boundary operator with `uv run pytest tests/unit/evaluation/test_quality_gate.py -q`.
+- [x] 10.8 Implement versioned JSON report generation and JSON Schema validation; verify required provenance, metric, performance, cost, privacy, and issue sections with `uv run pytest tests/unit/evaluation/test_json_report.py -q`.
+- [x] 10.9 Implement Jinja2 HTML rendering from JSON and automated value-parity checks; verify with `uv run pytest tests/unit/evaluation/test_html_report.py -q`.
+- [x] 10.10 Run the first real baseline evaluation, persist its immutable report and manifests, and verify it with `uv run python -m rag_mvp.evaluation.verify_report <baseline-report.json>`.
+- [x] 10.11 Select the first genuine baseline issue, or an explicitly test-only controlled compliance baseline if needed; attach affected cases, config delta, safe logs/metrics/traces, root cause, and proposed fix to the report.
+- [x] 10.12 Implement the smallest justified fix for issue one, rerun the identical case set, and verify its declared primary metric improves at least 10% relative without failing global gates.
+- [x] 10.13 Select and evidence a distinct second genuine issue, or an explicitly test-only controlled refusal baseline if needed; verify it uses the same dataset/corpus/scorers as its planned post-fix run.
+- [x] 10.14 Implement the smallest justified fix for issue two, rerun the identical case set, and verify its declared primary metric improves at least 10% relative without regressing accepted issue one.
+- [x] 10.15 Generate the final combined JSON/HTML validation report and verify both issue records, calculations, configuration identities, and report parity with `uv run python -m rag_mvp.evaluation.verify_report <final-report.json>`.
 
 ## 11. Load Evidence and Local Container Deployment
 

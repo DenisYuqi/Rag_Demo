@@ -330,6 +330,37 @@ def test_answer_stream_is_atomic_redacted_and_correlated(qa_harness: QAHarness) 
     assert turns[-1].content == event["content"]
 
 
+@pytest.mark.asyncio
+async def test_structural_request_id_is_not_redacted_as_a_payment_card(
+    tmp_path: Path,
+) -> None:
+    conversations = _conversations(tmp_path)
+    session = conversations.create_session("owner-1")
+    request_id = "request_4111111111111111"
+    services = QARuntimeServices(
+        conversations=conversations,
+        orchestrator=ScriptedOrchestrator("answer"),
+        emitter=CompleteResponseEmitter(conversations),
+    )
+    stream = stream_qa_events(
+        services,
+        request_id=request_id,
+        session_id=session.session_id,
+        owner_id="owner-1",
+        question="What is the policy?",
+        mode="hybrid",
+        requested_language="en",
+        response_language="en",
+        redactor=DEFAULT_REDACTOR,
+    )
+
+    event = await _next_stream_event(stream)
+
+    assert event["kind"] == "answer"
+    assert event["request_id"] == request_id
+    assert "person@example.com" not in json.dumps(event)
+
+
 @pytest.mark.parametrize(
     ("outcome", "kind", "detail_name", "detail_value"),
     [

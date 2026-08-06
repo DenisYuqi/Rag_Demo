@@ -211,7 +211,7 @@ class PaymentCardDetector:
 
     name = "payment_card"
     priority = 85
-    _candidate: Final[re.Pattern[str]] = re.compile(r"(?<!\d)(?:\d[ -]?){12,18}\d(?!\d)")
+    _candidate: Final[re.Pattern[str]] = re.compile(r"(?<!\w)(?:\d[ -]?){12,18}\d(?!\w)")
 
     @staticmethod
     def passes_luhn(value: str) -> bool:

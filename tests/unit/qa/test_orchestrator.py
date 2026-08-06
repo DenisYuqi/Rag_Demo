@@ -649,6 +649,7 @@ async def test_invalid_generated_citation_never_becomes_output_or_assistant_hist
 
     assert isinstance(response, QAError)
     assert response.code is QAErrorCode.DEPENDENCY_FAILURE
+    assert response.diagnostics.metadata["failure_detail_code"] == "citation_unknown"
     assert raw_answer not in response.message
     assert [turn.role for turn in conversations.list_turns(session_id, "owner-1")] == [
         ConversationRole.USER

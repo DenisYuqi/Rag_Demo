@@ -1,0 +1,32 @@
+{
+  "schema_version": "rag-evaluation-dataset-v1",
+  "dataset_id": "mvp-bilingual-rag",
+  "version": "1.0.0",
+  "content_hash": "sha256:330df745c7df79e106fbb80b6137d1b55fb39ec63215f479aed858f7eb7f05f2",
+  "hash_algorithm": "sha256-canonical-json-v1",
+  "cases_file": "cases.jsonl",
+  "case_count": 8,
+  "corpus": {
+    "snapshot_id": "mvp-synthetic-corpus",
+    "version": "1.0.0",
+    "content_hash": "sha256:40719423095a14cd0dd5d0c993ba68417135e69a6a00121fdf62f53b5e26d866",
+    "manifest_file": "corpus/manifest.json"
+  },
+  "required_categories": [
+    "answerable-zh",
+    "answerable-en",
+    "multi-turn",
+    "ocr",
+    "unanswerable",
+    "required-refusal",
+    "injection",
+    "pii"
+  ],
+  "required_metrics": [
+    "faithfulness",
+    "context-precision",
+    "answer-completeness",
+    "style-consistency",
+    "refusal-appropriateness"
+  ]
+}

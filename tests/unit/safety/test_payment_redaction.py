@@ -25,5 +25,11 @@ def test_invalid_or_implausible_card_is_not_redacted(value: str) -> None:
     assert PaymentCardDetector().detect(value) == ()
 
 
+def test_luhn_shaped_digits_inside_an_opaque_identifier_are_not_redacted() -> None:
+    value = "eval_request_4111111111111111_suffix"
+
+    assert redact_text(value) == value
+
+
 def test_luhn_helper_ignores_visual_separators() -> None:
     assert PaymentCardDetector.passes_luhn("4111-1111 1111-1111")

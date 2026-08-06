@@ -170,6 +170,8 @@ class OrchestratedResponse:
     response: QAResponse = field(repr=False)
     grounded_answer: ValidatedGroundedAnswer | None = field(default=None, repr=False)
     application_suffix: str | None = field(default=None, repr=False)
+    retrieved_chunk_ids: tuple[str, ...] = field(default=(), repr=False)
+    context_chunk_ids: tuple[str, ...] = field(default=(), repr=False)
     _proof: object | None = field(default=None, repr=False, compare=False)
 
     @classmethod
@@ -179,11 +181,15 @@ class OrchestratedResponse:
         *,
         grounded_answer: ValidatedGroundedAnswer | None = None,
         application_suffix: str | None = None,
+        retrieved_chunk_ids: tuple[str, ...] = (),
+        context_chunk_ids: tuple[str, ...] = (),
     ) -> OrchestratedResponse:
         return cls(
             response=response,
             grounded_answer=grounded_answer,
             application_suffix=application_suffix,
+            retrieved_chunk_ids=retrieved_chunk_ids,
+            context_chunk_ids=context_chunk_ids,
             _proof=_ORCHESTRATION_PROOF,
         )
 
@@ -502,7 +508,13 @@ class QAOrchestrator:
                         retrieval=retrieval_result,
                         decision=decision,
                         extra_degradation=safety_reasons,
-                    )
+                    ),
+                    retrieved_chunk_ids=tuple(
+                        evidence.chunk_id for evidence in retrieval_result.evidence
+                    ),
+                    context_chunk_ids=tuple(
+                        evidence.chunk_id for evidence in retrieval_result.evidence
+                    ),
                 )
 
             approved_evidence = self._approved_evidence(
@@ -573,8 +585,11 @@ class QAOrchestrator:
                         application_suffix = _PARTIAL_MESSAGES[language]
                         answer_text = f"{answer_text.rstrip()}\n\n{application_suffix}"
                     self._ensure_deadline(finalization_deadline)
-            except (StructuredAnswerError, GroundingValidationError):
-                raise _PipelineFailure(QAErrorCode.DEPENDENCY_FAILURE) from None
+            except (StructuredAnswerError, GroundingValidationError) as error:
+                raise _PipelineFailure(
+                    QAErrorCode.DEPENDENCY_FAILURE,
+                    detail_code=error.code,
+                ) from None
             finally:
                 timings["finalization"] = self._elapsed_ms(finalization_started)
             self._ensure_deadline(root_deadline)
@@ -597,6 +612,10 @@ class QAOrchestrator:
                 ),
                 grounded_answer=grounded,
                 application_suffix=application_suffix,
+                retrieved_chunk_ids=tuple(
+                    evidence.chunk_id for evidence in retrieval_result.evidence
+                ),
+                context_chunk_ids=tuple(chunk.chunk_id for chunk in context.chunks),
             )
         except asyncio.CancelledError:
             raise
@@ -632,6 +651,7 @@ class QAOrchestrator:
                     generation_result,
                     decision,
                     safety_reasons,
+                    failure_detail=error.detail_code,
                 )
             )
         except (QueryRewriteError, TypeError, ValueError):
@@ -879,6 +899,8 @@ class QAOrchestrator:
         generation: RoutedResult[GenerationResult] | None,
         decision: EvidenceDecision | None,
         extra_degradation: Sequence[str],
+        *,
+        failure_detail: str | None = None,
     ) -> QAError:
         return QAError(
             request_id=request_id,
@@ -897,6 +919,11 @@ class QAOrchestrator:
                 generation=generation,
                 decision=decision,
                 extra_degradation=extra_degradation,
+                extra_metadata=(
+                    {"failure_detail_code": failure_detail}
+                    if failure_detail is not None
+                    else None
+                ),
             ),
         )
 
@@ -975,9 +1002,16 @@ class _DeadlineExpired(TimeoutError):
 
 
 class _PipelineFailure(RuntimeError):
-    def __init__(self, code: QAErrorCode, *, retryable: bool = False) -> None:
+    def __init__(
+        self,
+        code: QAErrorCode,
+        *,
+        retryable: bool = False,
+        detail_code: str | None = None,
+    ) -> None:
         self.code = code
         self.retryable = retryable
+        self.detail_code = detail_code
         super().__init__(code.value)
 
 

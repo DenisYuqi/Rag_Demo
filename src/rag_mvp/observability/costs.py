@@ -124,14 +124,17 @@ class PricingCatalog:
                 Decimal(attempt.usage.input_tokens) * pricing.input_per_million / _ONE_MILLION
             )
 
-        if attempt.usage.output_tokens is None:
-            reasons.append(UnknownCostReason.OUTPUT_USAGE_UNKNOWN)
-        elif pricing.output_per_million is None:
-            reasons.append(UnknownCostReason.OUTPUT_PRICE_UNKNOWN)
-        else:
-            known_parts.append(
-                Decimal(attempt.usage.output_tokens) * pricing.output_per_million / _ONE_MILLION
-            )
+        if attempt.role is not ModelRole.EMBEDDING:
+            if attempt.usage.output_tokens is None:
+                reasons.append(UnknownCostReason.OUTPUT_USAGE_UNKNOWN)
+            elif pricing.output_per_million is None:
+                reasons.append(UnknownCostReason.OUTPUT_PRICE_UNKNOWN)
+            else:
+                known_parts.append(
+                    Decimal(attempt.usage.output_tokens)
+                    * pricing.output_per_million
+                    / _ONE_MILLION
+                )
 
         known_cost = sum(known_parts, start=Decimal(0)) if known_parts else None
         complete = not reasons

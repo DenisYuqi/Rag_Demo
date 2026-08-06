@@ -1,0 +1,41 @@
+{
+  "schema_version": "1.0.0",
+  "run_id": "baseline_20260807_002",
+  "case_id": "case-answerable-zh-001",
+  "succeeded": false,
+  "execution": {
+    "case_id": "case-answerable-zh-001",
+    "owner_id": "eval_owner_26ff0c2a7c3e59579edb3a332e1042ad81987d43d5cbe568cdf2cabbf708350b",
+    "session_id": "session_ada598a46f60446a824b5a2809df28af",
+    "request_id": "eval_request_49aee9fd5a4c4aebb857d4f3561bb4e7",
+    "event": {
+      "request_id": "eval_request_49aee9fd5a4c4aebb857d4f3561bb4e7",
+      "session_id": "session_ada598a46f60446a824b5a2809df28af",
+      "sequence": 0,
+      "kind": "error",
+      "response_language": "zh",
+      "content": "内容暂时无法安全显示。Content is temporarily unavailable.",
+      "claims": [],
+      "citations": [],
+      "reason": null,
+      "error_code": "safety-unavailable",
+      "retryable": true,
+      "diagnostics": {
+        "trace_id": null,
+        "stage_timings_ms": {},
+        "cache_status": {},
+        "model_identities": {},
+        "token_counts": {},
+        "degradation_reasons": [],
+        "metadata": {}
+      },
+      "terminal": true
+    },
+    "cache_policy": "bypass",
+    "retrieved_chunk_ids": [],
+    "context_chunk_ids": [],
+    "latency_ms": 843.32269999868
+  },
+  "safe_error_code": "qa_terminal_error",
+  "completed_at": "2026-08-06T19:31:23.363055Z"
+}

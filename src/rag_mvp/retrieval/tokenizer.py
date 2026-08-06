@@ -7,6 +7,7 @@ import importlib.metadata
 import importlib.resources
 import re
 from dataclasses import dataclass, field
+from functools import cache
 
 import jieba
 
@@ -21,6 +22,25 @@ BILINGUAL_TOKENIZER_IDENTITY = (
 )
 
 
+@cache
+def _verified_jieba_tokenizer() -> jieba.Tokenizer:
+    """Initialize the pinned read-only dictionary once per process."""
+
+    try:
+        package_version = importlib.metadata.version("jieba")
+        dictionary = importlib.resources.files("jieba").joinpath("dict.txt").read_bytes()
+    except (ImportError, OSError):
+        raise ValueError("unsupported_tokenizer_implementation") from None
+    if (
+        package_version != JIEBA_PACKAGE_VERSION
+        or hashlib.sha256(dictionary).hexdigest() != JIEBA_DICTIONARY_SHA256
+    ):
+        raise ValueError("unsupported_tokenizer_implementation")
+    tokenizer = jieba.Tokenizer()
+    tokenizer.initialize()
+    return tokenizer
+
+
 @dataclass(frozen=True, slots=True)
 class BilingualTokenizer:
     version: str = BILINGUAL_TOKENIZER_IDENTITY
@@ -29,19 +49,7 @@ class BilingualTokenizer:
     def __post_init__(self) -> None:
         if self.version != BILINGUAL_TOKENIZER_IDENTITY:
             raise ValueError("unsupported_tokenizer_identity")
-        try:
-            package_version = importlib.metadata.version("jieba")
-            dictionary = importlib.resources.files("jieba").joinpath("dict.txt").read_bytes()
-        except (ImportError, OSError):
-            raise ValueError("unsupported_tokenizer_implementation") from None
-        if (
-            package_version != JIEBA_PACKAGE_VERSION
-            or hashlib.sha256(dictionary).hexdigest() != JIEBA_DICTIONARY_SHA256
-        ):
-            raise ValueError("unsupported_tokenizer_implementation")
-        tokenizer = jieba.Tokenizer()
-        tokenizer.initialize()
-        object.__setattr__(self, "_jieba", tokenizer)
+        object.__setattr__(self, "_jieba", _verified_jieba_tokenizer())
 
     def tokenize(self, text: str) -> tuple[str, ...]:
         if not isinstance(text, str):
