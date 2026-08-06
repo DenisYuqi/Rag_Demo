@@ -95,7 +95,7 @@ async def test_bilingual_snapshot_persists_complete_identity_and_metadata(tmp_pa
         revision_id=revision.revision_id,
         identity=revision.embedding_space,
     ) as dense:
-        dense_results = await dense.search(
+        dense_results = dense.query(
             vectors[0],
             query_identity=revision.embedding_space,
             limit=2,
@@ -232,7 +232,10 @@ async def test_missing_and_corrupt_indexes_fail_open_without_creation(tmp_path: 
     corrupt_lexical.parent.mkdir(parents=True)
     corrupt_lexical.write_text("{not-json", encoding="utf-8")
     with pytest.raises(LexicalIndexError, match="invalid_snapshot"):
-        PersistentBm25Index.load(corrupt_lexical)
+        PersistentBm25Index.load(
+            corrupt_lexical,
+            expected_revision_id="revision-corrupt-json",
+        )
     assert corrupt_lexical.read_text(encoding="utf-8") == "{not-json"
 
     chunk = _chunk("chunk-corrupt", "source-corrupt", "corrupt metadata", 0)

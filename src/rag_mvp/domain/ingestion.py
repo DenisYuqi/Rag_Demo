@@ -6,7 +6,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Annotated, Literal
 
-from pydantic import AwareDatetime, Field, model_validator
+from pydantic import AwareDatetime, Field, StringConstraints, field_validator, model_validator
 
 from rag_mvp.domain._base import (
     Digest,
@@ -139,11 +139,18 @@ class Chunk(DomainModel):
     source_id: Identifier
     document_version: Annotated[int, Field(gt=0)]
     ordinal: Annotated[int, Field(ge=0)]
-    text: NonEmptyText
+    text: Annotated[str, StringConstraints(strip_whitespace=False, min_length=1)]
     content_digest: Digest
     locator: ChunkLocator
     language_hint: str | None = None
     token_count: Annotated[int, Field(gt=0)] | None = None
+
+    @field_validator("text")
+    @classmethod
+    def text_has_content(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("chunk text must not be blank")
+        return value
 
 
 class IndexRevision(DomainModel):
@@ -160,7 +167,7 @@ class IndexRevision(DomainModel):
     chunk_count: Annotated[int, Field(ge=0)] = 0
     dense_schema_version: Identifier = "chroma-revision-v1"
     dense_metric: Identifier = "cosine"
-    lexical_schema_version: Identifier = "bm25-snapshot-v2"
+    lexical_schema_version: Identifier = "bm25-snapshot-v3"
     lexical_algorithm_version: Identifier = "bm25-okapi-v1"
     lexical_k1: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 1.5
     lexical_b: Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)] = 0.75

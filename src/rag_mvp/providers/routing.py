@@ -25,6 +25,7 @@ from rag_mvp.providers.models import (
     RoutedRerankResult,
     RoutedResult,
     RouteMetadata,
+    TokenUsage,
 )
 from rag_mvp.providers.protocols import (
     AttemptRecorder,
@@ -251,7 +252,9 @@ class ModelProviderRouter:
 
         attempts: list[ModelAttempt] = []
         last_category = ProviderErrorCategory.UNAVAILABLE
+        last_route: RerankingRoute | None = None
         for position, route in enumerate(self._reranking_routes):
+            last_route = route
             is_fallback = position > 0
             metadata = RouteMetadata(
                 route.route_id,
@@ -264,8 +267,10 @@ class ModelProviderRouter:
             ) -> RerankResult:
                 result = await selected.provider.rerank(request, context)
                 if (
-                    result.identity != selected.provider.identity
+                    not isinstance(result, RerankResult)
+                    or result.identity != selected.provider.identity
                     or result.prompt_version != request.prompt_version
+                    or not isinstance(result.usage, TokenUsage)
                     or not _is_exact_permutation(result.ordered_ids, base_order)
                 ):
                     raise ProviderError(ProviderErrorCategory.INCOMPATIBLE_RESPONSE)
@@ -292,6 +297,10 @@ class ModelProviderRouter:
                 attempts=tuple(attempts),
                 applied=True,
                 degraded=False,
+                route_id=route.route_id,
+                identity=attempted.value.identity,
+                prompt_version=attempted.value.prompt_version,
+                usage=attempted.value.usage,
             )
 
         return RoutedRerankResult(
@@ -300,6 +309,9 @@ class ModelProviderRouter:
             applied=False,
             degraded=True,
             degradation_reason=last_category,
+            route_id=None if last_route is None else last_route.route_id,
+            identity=None if last_route is None else last_route.provider.identity,
+            prompt_version=None if last_route is None else request.prompt_version,
         )
 
 

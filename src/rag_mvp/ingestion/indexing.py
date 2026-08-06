@@ -13,12 +13,10 @@ from rag_mvp.domain.ingestion import (
 )
 from rag_mvp.ingestion.chunking import CHUNKING_VERSION
 from rag_mvp.ingestion.embedding import EmbeddingStage
-from rag_mvp.providers.models import (
-    EmbeddingSpaceIdentity as ProviderEmbeddingSpaceIdentity,
-)
 from rag_mvp.providers.models import ProviderCallContext
 from rag_mvp.retrieval.bm25 import PersistentBm25Index
 from rag_mvp.retrieval.dense import PersistentChromaIndex
+from rag_mvp.retrieval.identity import domain_embedding_identity
 from rag_mvp.retrieval.snapshot import (
     RECORD_DIGEST_ALGORITHM,
     chunk_record_digest,
@@ -61,7 +59,7 @@ class RevisionStager:
             raise ValueError("index_version_invalid")
         self._layout = layout
         self._embedding_stage = embedding_stage
-        self._embedding_space = _domain_embedding_identity(embedding_stage)
+        self._embedding_space = _embedding_identity(embedding_stage)
         self._extraction_version = extraction_version
         self._chunking_version = chunking_version
         self._tokenizer = tokenizer or BilingualTokenizer()
@@ -86,7 +84,7 @@ class RevisionStager:
         ingestion_job_id: str | None = None,
         progress_hook: ProgressHook | None = None,
     ) -> IndexRevision:
-        if _domain_embedding_identity(self._embedding_stage) != self._embedding_space:
+        if _embedding_identity(self._embedding_stage) != self._embedding_space:
             raise IndexingError("embedding_identity_changed")
         ordered_chunks = tuple(chunks)
         normalized_titles = dict(titles)
@@ -109,7 +107,7 @@ class RevisionStager:
         embedding_result = await self._embedding_stage.embed(ordered_chunks, context)
         if progress_hook is not None:
             progress_hook("indexing")
-        if _domain_embedding_identity(self._embedding_stage) != self._embedding_space:
+        if _embedding_identity(self._embedding_stage) != self._embedding_space:
             raise IndexingError("embedding_identity_changed")
         created_revision_path = False
         dense: PersistentChromaIndex | None = None
@@ -367,18 +365,8 @@ def _validate_parity(
         raise IndexingError("chunk_set_digest_mismatch")
 
 
-def _domain_embedding_identity(stage: EmbeddingStage) -> EmbeddingSpaceIdentity:
+def _embedding_identity(stage: EmbeddingStage) -> EmbeddingSpaceIdentity:
     try:
-        provider = getattr(stage, "_provider", None)
-        identity = getattr(provider, "identity", None)
+        return domain_embedding_identity(stage.identity)
     except Exception:
         raise IndexingError("embedding_identity_invalid") from None
-    if not isinstance(identity, ProviderEmbeddingSpaceIdentity):
-        raise IndexingError("embedding_identity_invalid")
-    return EmbeddingSpaceIdentity(
-        provider_alias=identity.provider,
-        model=identity.model,
-        dimension=identity.dimension,
-        normalization=identity.normalization.value,
-        adapter_version=identity.adapter_version,
-    )

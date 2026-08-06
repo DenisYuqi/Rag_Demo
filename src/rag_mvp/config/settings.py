@@ -59,6 +59,8 @@ class Settings(BaseSettings):
     rrf_k: int = Field(default=60, ge=1, le=1000)
     dense_weight: float = Field(default=1.0, gt=0, le=10)
     lexical_weight: float = Field(default=1.0, gt=0, le=10)
+    allow_single_retriever_degradation: bool = False
+    retrieval_cache_enabled: bool = False
 
     upload_max_bytes: int = Field(default=25 * 1024 * 1024, ge=1)
     chunk_target_tokens: int = Field(default=500, ge=64, le=4096)
@@ -93,6 +95,15 @@ class Settings(BaseSettings):
             raise ValueError("provider base URL must use http or https")
         return normalized
 
+    @field_validator("reranking_model", mode="before")
+    @classmethod
+    def normalize_optional_reranking_model(cls, value: object) -> object:
+        if value is None:
+            return None
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
     @field_validator("openai_proxy_url", mode="before")
     @classmethod
     def validate_openai_proxy_url(cls, value: object) -> object:
@@ -112,6 +123,8 @@ class Settings(BaseSettings):
             raise ValueError("rerank candidate limit cannot be below context chunk limit")
         if self.rerank_deadline_seconds >= self.qa_deadline_seconds:
             raise ValueError("rerank deadline must be below the total QA deadline")
+        if self.default_retrieval_mode == "hybrid-rerank" and self.reranking_model is None:
+            raise ValueError("hybrid-rerank default requires a configured reranking model")
         return self
 
     def provider_readiness_errors(self) -> tuple[str, ...]:

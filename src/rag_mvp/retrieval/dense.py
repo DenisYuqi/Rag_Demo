@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Mapping, Sequence
+from numbers import Real
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Self, cast
@@ -299,7 +300,7 @@ class PersistentChromaIndex:
         self._sealed = True
         return chunk_set_digest(inventory)
 
-    async def search(
+    def query(
         self,
         query_vector: Sequence[float],
         *,
@@ -308,6 +309,13 @@ class PersistentChromaIndex:
     ) -> tuple[RetrievalCandidate, ...]:
         if query_identity != self.identity:
             raise DenseIndexError("embedding_identity_mismatch")
+        if isinstance(query_vector, (str, bytes, bytearray)) or not isinstance(
+            query_vector,
+            Sequence,
+        ):
+            raise DenseIndexError("incompatible_embedding") from None
+        if any(isinstance(value, bool) or not isinstance(value, Real) for value in query_vector):
+            raise DenseIndexError("incompatible_embedding")
         try:
             vector = [float(value) for value in query_vector]
         except (TypeError, ValueError, OverflowError):
@@ -316,41 +324,84 @@ class PersistentChromaIndex:
             math.isfinite(value) for value in vector
         ):
             raise DenseIndexError("incompatible_embedding")
-        if limit < 1:
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
             raise ValueError("limit must be positive")
         inventory = self._read_inventory()
         if not inventory:
             return ()
         collection = self._open_collection()
-        result: dict[str, Any] = collection.query(
-            query_embeddings=[vector],
-            n_results=min(limit, len(inventory)),
-            include=["documents", "metadatas", "distances"],
-        )
-        rows = list(
-            zip(
-                result["ids"][0],
-                result["documents"][0],
-                result["metadatas"][0],
-                result["distances"][0],
-                strict=True,
-            )
-        )
-        rows.sort(key=lambda row: (float(row[3]), str(row[0])))
         try:
-            return tuple(
-                RetrievalCandidate(
-                    chunk_id=str(chunk_id),
-                    source_id=str(metadata["source_id"]),
-                    display_title=str(metadata["display_title"]),
-                    document_version=int(metadata["document_version"]),
-                    locator=ChunkLocator.model_validate_json(str(metadata["locator"])),
-                    text=str(document),
-                    dense_rank=rank,
-                    dense_score=1.0 - float(distance),
-                )
-                for rank, (chunk_id, document, metadata, distance) in enumerate(rows, start=1)
+            result: dict[str, Any] = collection.query(
+                query_embeddings=[vector],
+                n_results=len(inventory),
+                include=["documents", "metadatas", "distances"],
             )
+        except Exception:
+            raise DenseIndexError("dense_query_failed") from None
+        try:
+            rows = list(
+                zip(
+                    result["ids"][0],
+                    result["documents"][0],
+                    result["metadatas"][0],
+                    result["distances"][0],
+                    strict=True,
+                )
+            )
+            if len(rows) != len(inventory) or {str(row[0]) for row in rows} != set(inventory):
+                raise DenseIndexError("dense_query_inventory_mismatch")
+            if any(not math.isfinite(float(row[3])) for row in rows):
+                raise DenseIndexError("dense_query_record_invalid")
+            rows.sort(key=lambda row: (float(row[3]), str(row[0])))
+        except DenseIndexError:
+            raise
+        except (KeyError, TypeError, ValueError, OverflowError):
+            raise DenseIndexError("dense_query_record_invalid") from None
+        try:
+            candidates: list[RetrievalCandidate] = []
+            for rank, (chunk_id, document, metadata, distance) in enumerate(
+                rows[:limit],
+                start=1,
+            ):
+                if not isinstance(chunk_id, str) or not isinstance(document, str):
+                    raise DenseIndexError("dense_query_record_invalid")
+                if not isinstance(metadata, dict):
+                    raise DenseIndexError("dense_query_record_invalid")
+                chunk = Chunk(
+                    chunk_id=str(chunk_id),
+                    source_id=_required_string(metadata, "source_id"),
+                    document_version=_required_int(metadata, "document_version", minimum=1),
+                    ordinal=_required_int(metadata, "ordinal", minimum=0),
+                    text=document,
+                    content_digest=_required_string(metadata, "content_digest"),
+                    locator=ChunkLocator.model_validate_json(_required_string(metadata, "locator")),
+                )
+                title = _required_string(metadata, "display_title")
+                record_digest = _required_string(metadata, "record_digest")
+                if (
+                    chunk_record_digest(chunk, title) != record_digest
+                    or inventory.get(chunk_id) != record_digest
+                ):
+                    raise DenseIndexError("dense_query_record_digest_mismatch")
+                candidates.append(
+                    RetrievalCandidate(
+                        chunk_id=chunk.chunk_id,
+                        source_id=chunk.source_id,
+                        display_title=title,
+                        document_version=chunk.document_version,
+                        locator=chunk.locator,
+                        text=chunk.text,
+                        revision_id=self.revision_id,
+                        ordinal=chunk.ordinal,
+                        content_digest=chunk.content_digest,
+                        record_digest=record_digest,
+                        dense_rank=rank,
+                        dense_score=1.0 - float(distance),
+                    )
+                )
+            return tuple(candidates)
+        except DenseIndexError:
+            raise
         except (KeyError, TypeError, ValueError, ValidationError):
             raise DenseIndexError("dense_query_record_invalid") from None
 

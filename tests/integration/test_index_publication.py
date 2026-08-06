@@ -296,7 +296,7 @@ async def assert_old_revision_queryable(
         revision_id=revision.revision_id,
         identity=revision.embedding_space,
     ) as dense:
-        dense_results = await dense.search(
+        dense_results = dense.query(
             old_vector,
             query_identity=revision.embedding_space,
             limit=2,

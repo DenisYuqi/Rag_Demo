@@ -54,6 +54,10 @@ class EmbeddingStage:
         self._cache = cache
         self._batch_size = batch_size
 
+    @property
+    def identity(self) -> EmbeddingSpaceIdentity:
+        return _provider_identity(self._provider)
+
     async def embed(
         self,
         chunks: Sequence[Chunk],

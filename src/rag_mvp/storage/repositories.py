@@ -750,15 +750,27 @@ class IndexRevisionRepository:
         with _read_connection(self._database, connection) as active:
             row = active.execute(
                 """
-                SELECT revision.payload_json
+                SELECT
+                    manifest.revision_id AS manifest_revision_id,
+                    revision.status AS stored_status,
+                    revision.payload_json
                 FROM active_index_manifest AS manifest
-                JOIN index_revisions AS revision
+                LEFT JOIN index_revisions AS revision
                     ON revision.revision_id = manifest.revision_id
-                WHERE manifest.singleton_id = 1 AND revision.status = ?
+                WHERE manifest.singleton_id = 1
                 """,
-                (IndexRevisionStatus.ACTIVE.value,),
             ).fetchone()
-        return None if row is None else _decode(IndexRevision, row)
+        if row is None:
+            return None
+        if row["stored_status"] != IndexRevisionStatus.ACTIVE.value or row["payload_json"] is None:
+            raise RepositoryError("active index manifest is invalid")
+        revision = _decode(IndexRevision, row)
+        if (
+            revision.status is not IndexRevisionStatus.ACTIVE
+            or revision.revision_id != row["manifest_revision_id"]
+        ):
+            raise RepositoryError("active index manifest is invalid")
+        return revision
 
     def get_active_revision_id(
         self,

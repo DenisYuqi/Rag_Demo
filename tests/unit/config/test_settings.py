@@ -13,6 +13,9 @@ def test_defaults_are_safe_and_offline_ready(tmp_path: object) -> None:
     assert settings.provider_readiness_errors() == ()
     assert settings.safe_dump()["openai_api_key"] is None
     assert len(settings.configuration_identity) == 16
+    assert not settings.allow_single_retriever_degradation
+    assert not settings.retrieval_cache_enabled
+    assert settings.reranking_model is None
 
 
 def test_secret_never_appears_in_repr_or_safe_dump(tmp_path: object) -> None:
@@ -48,6 +51,23 @@ def test_limit_invariants_are_validated(tmp_path: object) -> None:
             chunk_overlap_tokens=100,
             _env_file=None,
         )
+
+
+def test_hybrid_rerank_default_requires_configured_model(tmp_path: object) -> None:
+    with pytest.raises(ValidationError):
+        Settings(
+            data_root=tmp_path,
+            default_retrieval_mode="hybrid-rerank",
+            _env_file=None,
+        )
+
+    settings = Settings(
+        data_root=tmp_path,
+        default_retrieval_mode="hybrid-rerank",
+        reranking_model="reranker",
+        _env_file=None,
+    )
+    assert settings.reranking_model == "reranker"
 
 
 def test_proxy_credentials_never_appear_in_diagnostics(tmp_path: object) -> None:

@@ -200,6 +200,10 @@ async def test_reranking_fallback_can_succeed(
     assert not result.degraded
     assert len(result.attempts) == 2
     assert result.attempts[-1].is_fallback
+    assert result.route_id == "fallback"
+    assert result.identity == fallback.identity
+    assert result.prompt_version == request.prompt_version
+    assert result.usage is not None
 
 
 def test_optional_reranking_does_not_block_qa_readiness() -> None:

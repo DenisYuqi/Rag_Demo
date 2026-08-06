@@ -51,7 +51,10 @@ from rag_mvp.domain.qa import (
     ValidatedStreamEvent,
 )
 from rag_mvp.domain.retrieval import (
+    RETRIEVAL_EVIDENCE_SCHEMA_VERSION,
+    RETRIEVAL_RESULT_SCHEMA_VERSION,
     CacheOutcome,
+    CachePolicy,
     RankingEvidence,
     RetrievalCandidate,
     RetrievalDiagnostics,
@@ -61,8 +64,11 @@ from rag_mvp.domain.retrieval import (
 
 __all__ = [
     "PROCESSING_INGESTION_STAGES",
+    "RETRIEVAL_EVIDENCE_SCHEMA_VERSION",
+    "RETRIEVAL_RESULT_SCHEMA_VERSION",
     "AnswerClaim",
     "CacheOutcome",
+    "CachePolicy",
     "Chunk",
     "ChunkLocator",
     "Citation",

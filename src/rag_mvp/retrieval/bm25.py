@@ -45,7 +45,7 @@ class LexicalRecord:
 class PersistentBm25Index:
     """An immutable revision-specific lexical index backed by one JSON file."""
 
-    SNAPSHOT_SCHEMA = "bm25-snapshot-v2"
+    SNAPSHOT_SCHEMA = "bm25-snapshot-v3"
     ALGORITHM_VERSION = "bm25-okapi-v1"
     DEFAULT_REVISION_ID = "standalone"
     DEFAULT_K1 = 1.5
@@ -164,7 +164,7 @@ class PersistentBm25Index:
         return score
 
     async def search(self, query: str, limit: int) -> tuple[RetrievalCandidate, ...]:
-        if limit < 1:
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
             raise ValueError("limit must be positive")
         query_tokens = self.tokenizer.tokenize(query)
         ranked = [(self._score(query_tokens, record), record) for record in self.records]
@@ -178,6 +178,10 @@ class PersistentBm25Index:
                 document_version=record.chunk.document_version,
                 locator=record.chunk.locator,
                 text=record.chunk.text,
+                revision_id=self.revision_id,
+                ordinal=record.chunk.ordinal,
+                content_digest=record.chunk.content_digest,
+                record_digest=record.record_digest,
                 bm25_rank=rank,
                 bm25_score=score,
             )
@@ -240,9 +244,11 @@ class PersistentBm25Index:
         cls,
         path: Path,
         *,
-        expected_revision_id: str | None = None,
+        expected_revision_id: str,
     ) -> PersistentBm25Index:
         path = Path(path)
+        if not isinstance(expected_revision_id, str) or not expected_revision_id:
+            raise LexicalIndexError("expected_revision_id_invalid")
         if not path.is_file():
             raise LexicalIndexError("snapshot_missing")
         try:
@@ -255,7 +261,7 @@ class PersistentBm25Index:
             revision_id = payload.get("revision_id")
             if not isinstance(revision_id, str) or not revision_id:
                 raise LexicalIndexError("revision_id_invalid")
-            if expected_revision_id is not None and revision_id != expected_revision_id:
+            if revision_id != expected_revision_id:
                 raise LexicalIndexError("revision_id_mismatch")
             if payload.get("tokenizer_identity") != BILINGUAL_TOKENIZER_IDENTITY:
                 raise LexicalIndexError("unsupported_tokenizer_identity")

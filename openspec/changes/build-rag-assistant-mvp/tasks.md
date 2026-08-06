@@ -68,16 +68,16 @@ Implement and integrate in vertical gates. A gate is complete only when its end-
 
 ## 6. Retrieval and Ranking
 
-- [ ] 6.1 Implement query validation, Unicode canonicalization, mode selection, and active-revision snapshot binding; verify invalid and concurrent-publication cases with `uv run pytest tests/unit/retrieval/test_request_context.py -q`.
-- [ ] 6.2 Implement compatible query embedding and Chroma dense search with deterministic tie-breaking; verify with `uv run pytest tests/unit/retrieval/test_dense.py -q`.
-- [ ] 6.3 Implement persistent BM25 search using the versioned Chinese/English tokenizer; verify exact English terms and unspaced Chinese fixtures with `uv run pytest tests/unit/retrieval/test_bm25.py -q`.
-- [ ] 6.4 Implement parallel dense/BM25 collection and candidate merge by stable chunk ID; verify ranks and raw scores are preserved with `uv run pytest tests/unit/retrieval/test_hybrid_collection.py -q`.
-- [ ] 6.5 Implement weighted Reciprocal Rank Fusion and deterministic tie-breaking; verify formula examples with `uv run pytest tests/unit/retrieval/test_rrf.py -q`.
-- [ ] 6.6 Implement bounded reranking orchestration and RRF fallback on timeout or invalid output; verify with `uv run pytest tests/unit/retrieval/test_rerank_stage.py -q`.
-- [ ] 6.7 Implement `dense`, `hybrid`, and `hybrid-rerank` orchestration with configured one-retriever degradation; verify each mode with `uv run pytest tests/unit/retrieval/test_retrieval_service.py -q`.
-- [ ] 6.8 Implement ranked evidence assembly with source/version/locator and real stage scores only; verify PDF and text evidence with `uv run pytest tests/unit/retrieval/test_evidence.py -q`.
-- [ ] 6.9 Ensure retrieval works with caches disabled, then implement version-complete keys and TTL/size bounds for each cache actually enabled by the accepted configuration; verify corpus/config changes miss prior entries with `uv run pytest tests/unit/retrieval/test_cache.py -q`.
-- [ ] 6.10 Add a persistent-index retrieval integration suite covering bilingual semantic, exact-term, empty, degraded, and restart cases; verify with `uv run pytest tests/integration/test_retrieval_pipeline.py -q`.
+- [x] 6.1 Implement query validation, Unicode canonicalization, mode selection, and active-revision snapshot binding; verify invalid and concurrent-publication cases with `uv run pytest tests/unit/retrieval/test_request_context.py -q`.
+- [x] 6.2 Implement compatible query embedding and Chroma dense search with deterministic tie-breaking; verify with `uv run pytest tests/unit/retrieval/test_dense.py -q`.
+- [x] 6.3 Implement persistent BM25 search using the versioned Chinese/English tokenizer; verify exact English terms and unspaced Chinese fixtures with `uv run pytest tests/unit/retrieval/test_bm25.py -q`.
+- [x] 6.4 Implement parallel dense/BM25 collection and candidate merge by stable chunk ID; verify ranks and raw scores are preserved with `uv run pytest tests/unit/retrieval/test_hybrid_collection.py -q`.
+- [x] 6.5 Implement weighted Reciprocal Rank Fusion and deterministic tie-breaking; verify formula examples with `uv run pytest tests/unit/retrieval/test_rrf.py -q`.
+- [x] 6.6 Implement bounded reranking orchestration and RRF fallback on timeout or invalid output; verify with `uv run pytest tests/unit/retrieval/test_rerank_stage.py -q`.
+- [x] 6.7 Implement `dense`, `hybrid`, and `hybrid-rerank` orchestration with configured one-retriever degradation; verify each mode with `uv run pytest tests/unit/retrieval/test_retrieval_service.py -q`.
+- [x] 6.8 Implement ranked evidence assembly with source/version/locator and real stage scores only; verify PDF and text evidence with `uv run pytest tests/unit/retrieval/test_evidence.py -q`.
+- [x] 6.9 Ensure retrieval works with caches disabled, then implement version-complete keys and TTL/size bounds for each cache actually enabled by the accepted configuration; verify corpus/config changes miss prior entries with `uv run pytest tests/unit/retrieval/test_cache.py -q`.
+- [x] 6.10 Add a persistent-index retrieval integration suite covering bilingual semantic, exact-term, empty, degraded, and restart cases; verify with `uv run pytest tests/integration/test_retrieval_pipeline.py -q`.
 
 ## 7. Grounded QA Pipeline
 

@@ -254,6 +254,15 @@ class RerankResult:
         _require_text(self.prompt_version, "prompt_version")
         if not self.ordered_ids:
             raise ValueError("rerank result must not be empty")
+        if any(
+            not isinstance(candidate_id, str) or not candidate_id.strip()
+            for candidate_id in self.ordered_ids
+        ):
+            raise ValueError("rerank result IDs must be non-empty strings")
+        if not isinstance(self.identity, ModelIdentity):
+            raise TypeError("rerank identity must be a ModelIdentity")
+        if not isinstance(self.usage, TokenUsage):
+            raise TypeError("rerank usage must be TokenUsage")
 
 
 @dataclass(frozen=True, slots=True)
@@ -362,10 +371,25 @@ class RoutedRerankResult:
     applied: bool
     degraded: bool
     degradation_reason: ProviderErrorCategory | None = None
+    route_id: str | None = None
+    identity: ModelIdentity | None = None
+    prompt_version: str | None = None
+    usage: TokenUsage | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "ordered_ids", tuple(self.ordered_ids))
+        object.__setattr__(self, "attempts", tuple(self.attempts))
         if self.applied and self.degraded:
             raise ValueError("an applied rerank cannot be degraded")
         if self.degraded and self.degradation_reason is None:
             raise ValueError("degraded reranking requires a reason")
+        if any(not isinstance(attempt, ModelAttempt) for attempt in self.attempts):
+            raise TypeError("reranking attempts must be ModelAttempt values")
+        if self.route_id is not None:
+            _require_text(self.route_id, "route_id")
+        if self.identity is not None and not isinstance(self.identity, ModelIdentity):
+            raise TypeError("reranking identity must be a ModelIdentity")
+        if self.prompt_version is not None:
+            _require_text(self.prompt_version, "prompt_version")
+        if self.usage is not None and not isinstance(self.usage, TokenUsage):
+            raise TypeError("reranking usage must be TokenUsage")
