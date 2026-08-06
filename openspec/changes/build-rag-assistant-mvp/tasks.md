@@ -95,8 +95,8 @@ Implement and integrate in vertical gates. A gate is complete only when its end-
 
 ## 8. HTTP API and Gradio Workbench
 
-- [ ] 8.1 Implement document upload/list/job-status/delete/reindex API routes with shared schemas; verify status codes and atomic behavior with `uv run pytest tests/api/test_documents.py -q`.
-- [ ] 8.2 Implement the QA API route and validated streaming response contract; verify answer, refusal, error, cancellation, and malformed-event cases with `uv run pytest tests/api/test_qa.py -q`.
+- [x] 8.1 Implement document upload/list/job-status/delete/reindex API routes with shared schemas; verify status codes and atomic behavior with `uv run pytest tests/api/test_documents.py -q`.
+- [x] 8.2 Implement the QA API route and validated streaming response contract; verify answer, refusal, error, cancellation, and malformed-event cases with `uv run pytest tests/api/test_qa.py -q`.
 - [ ] 8.3 Implement evaluation start/status/report and safe request-diagnostics API routes; verify with `uv run pytest tests/api/test_evaluation_diagnostics.py -q`.
 - [ ] 8.4 Mount Gradio at the configured FastAPI path and add the four primary tabs; verify route coexistence and component labels with `uv run pytest tests/ui/test_mount.py -q`.
 - [ ] 8.5 Implement Chat controls, mode selection, validated updates, inline citations, source previews, reset, and cancel; verify callback behavior with `uv run pytest tests/ui/test_chat.py -q`.

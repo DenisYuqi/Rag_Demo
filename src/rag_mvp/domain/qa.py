@@ -166,15 +166,31 @@ class ValidatedStreamEvent(DomainModel):
     kind: StreamEventKind
     response_language: Identifier
     content: str | None = None
+    claims: tuple[AnswerClaim, ...] = ()
     citations: tuple[Citation, ...] = ()
+    reason: RefusalReason | None = None
+    error_code: QAErrorCode | None = None
+    retryable: bool | None = None
+    diagnostics: SafeQADiagnostics = Field(default_factory=SafeQADiagnostics)
     terminal: bool = False
 
     @model_validator(mode="after")
     def validate_event_shape(self) -> ValidatedStreamEvent:
-        if self.kind in {StreamEventKind.ANSWER, StreamEventKind.SENTENCE} and not self.content:
-            raise ValueError("an answer or sentence event requires content")
-        if self.kind is StreamEventKind.ANSWER and (not self.terminal or not self.citations):
-            raise ValueError("an answer event must be terminal and include citations")
+        if self.kind in {StreamEventKind.ANSWER, StreamEventKind.SENTENCE}:
+            if not self.content or not self.claims or not self.citations:
+                raise ValueError("an answer unit requires content, claims, and citations")
+            available = {citation.chunk_id for citation in self.citations}
+            referenced = {
+                chunk_id for claim in self.claims for chunk_id in claim.citation_chunk_ids
+            }
+            if not referenced.issubset(available):
+                raise ValueError("every event claim citation must exist in citations")
+        elif self.claims:
+            raise ValueError("only an answer unit can include claims")
+        if self.kind is StreamEventKind.ANSWER and not self.terminal:
+            raise ValueError("an answer event must be terminal")
+        if self.kind is StreamEventKind.SENTENCE and self.terminal:
+            raise ValueError("a sentence event cannot be terminal")
         if self.kind is StreamEventKind.DONE and self.content is not None:
             raise ValueError("a done event cannot contain dynamic content")
         if (
@@ -182,4 +198,14 @@ class ValidatedStreamEvent(DomainModel):
             and not self.terminal
         ):
             raise ValueError("refusal, error, and done events must be terminal")
+        if self.kind is StreamEventKind.REFUSAL:
+            if not self.content or self.reason is None:
+                raise ValueError("a refusal event requires content and a reason")
+        elif self.reason is not None:
+            raise ValueError("only a refusal event can include a refusal reason")
+        if self.kind is StreamEventKind.ERROR:
+            if not self.content or self.error_code is None or self.retryable is None:
+                raise ValueError("an error event requires content, a code, and retryability")
+        elif self.error_code is not None or self.retryable is not None:
+            raise ValueError("only an error event can include error details")
         return self

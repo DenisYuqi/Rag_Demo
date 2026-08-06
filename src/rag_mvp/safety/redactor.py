@@ -75,6 +75,14 @@ class Redactor:
         return bool(self._detectors)
 
     @property
+    def fully_configured(self) -> bool:
+        """Whether every detector class required by the MVP is installed."""
+
+        required = {detector.name for detector in DEFAULT_DETECTORS}
+        installed = {detector.name for detector in self._detectors}
+        return required.issubset(installed)
+
+    @property
     def detectors(self) -> tuple[Detector, ...]:
         """Installed detectors in deterministic execution order."""
 

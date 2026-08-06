@@ -37,6 +37,25 @@ def test_openai_backend_reports_safe_missing_credentials(tmp_path: object) -> No
     assert settings.provider_readiness_errors() == ("provider_credentials_missing",)
 
 
+def test_openai_compatible_request_dialect_is_explicitly_configurable(tmp_path: object) -> None:
+    settings = Settings(
+        data_root=tmp_path,
+        openai_send_dimensions=False,
+        openai_max_tokens_parameter="max_tokens",
+        _env_file=None,
+    )
+
+    assert not settings.openai_send_dimensions
+    assert settings.openai_max_tokens_parameter == "max_tokens"
+
+    with pytest.raises(ValidationError):
+        Settings(
+            data_root=tmp_path,
+            openai_max_tokens_parameter="unsupported",
+            _env_file=None,
+        )
+
+
 @pytest.mark.parametrize("path", ["/", "/api", "/api/v1", "/healthz", "/metrics"])
 def test_reserved_workbench_paths_are_rejected(tmp_path: object, path: str) -> None:
     with pytest.raises(ValidationError):

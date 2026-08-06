@@ -145,6 +145,7 @@ class EmbeddingCache:
             self.path,
             timeout=busy_timeout_ms / 1_000,
             isolation_level=None,
+            check_same_thread=False,
         )
         try:
             self._initialize()

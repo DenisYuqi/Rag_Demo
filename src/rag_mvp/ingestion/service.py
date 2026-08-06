@@ -233,6 +233,14 @@ class IngestionService:
     def repositories(self) -> KnowledgeRepositories:
         return self._repositories
 
+    @property
+    def data_root(self) -> Path:
+        return self._layout.root
+
+    @property
+    def upload_max_bytes(self) -> int:
+        return self._upload_max_bytes
+
     def close(self) -> None:
         if self._owned_embedding_cache is not None:
             self._owned_embedding_cache.close()
@@ -296,6 +304,27 @@ class IngestionService:
 
     def get_job(self, job_id: str) -> IngestionJob | None:
         return self._repositories.ingestion_jobs.get(job_id)
+
+    def list_active_documents(self) -> tuple[str | None, tuple[Document, ...]]:
+        """Read one manifest-consistent view of documents visible to retrieval."""
+
+        with self._database.transaction(immediate=False) as connection:
+            active = self._repositories.index_revisions.get_active(connection=connection)
+            if active is None:
+                if self._repositories.documents.list_active(connection=connection):
+                    raise IngestionRecoveryError("active_revision_missing")
+                return None, ()
+            documents: list[Document] = []
+            for source_id, version in sorted(active.active_sources.items()):
+                document = self._repositories.documents.get(source_id, connection=connection)
+                if (
+                    document is None
+                    or document.deleted_at is not None
+                    or document.active_version != version
+                ):
+                    raise IngestionRecoveryError("active_document_metadata_mismatch")
+                documents.append(document)
+            return active.revision_id, tuple(documents)
 
     async def run(self, job_id: str) -> IngestionJob:
         async with self._mutation_lock:

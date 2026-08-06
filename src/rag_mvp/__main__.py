@@ -11,7 +11,7 @@ def main() -> None:
     """Run the single-process ASGI server."""
     settings = get_settings()
     uvicorn.run(
-        "rag_mvp.api.app:create_app",
+        "rag_mvp.api.app:create_executable_app",
         factory=True,
         host=settings.host,
         port=settings.port,

@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     openai_api_key: SecretStr | None = Field(default=None, repr=False)
     openai_base_url: str = "https://api.openai.com/v1"
     openai_proxy_url: SecretStr | None = Field(default=None, repr=False)
+    openai_send_dimensions: bool = True
+    openai_max_tokens_parameter: Literal["max_tokens", "max_completion_tokens"] = (
+        "max_completion_tokens"
+    )
     embedding_model: str = "text-embedding-3-small"
     embedding_dimension: int = Field(default=1536, ge=1, le=65536)
     generation_model: str = "gpt-4.1-mini"

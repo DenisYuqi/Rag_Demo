@@ -2,15 +2,27 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from contextlib import asynccontextmanager, suppress
+from dataclasses import dataclass, field
 
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 
+from rag_mvp.api.documents import router as documents_router
+from rag_mvp.api.errors import install_error_handlers
+from rag_mvp.api.qa import (
+    QARuntimeReadinessCheck,
+    QARuntimeServices,
+    install_qa_openapi_contract,
+)
+from rag_mvp.api.qa import router as qa_router
 from rag_mvp.api.readiness import ReadinessRegistry, StaticReadinessCheck
 from rag_mvp.config.settings import Settings, get_settings
+from rag_mvp.domain.ingestion import IngestionJob
+from rag_mvp.ingestion.service import IngestionService
+from rag_mvp.safety.redactor import DEFAULT_REDACTOR, Redactor
 from rag_mvp.storage.layout import DataLayout
 
 
@@ -19,12 +31,61 @@ class RuntimeState:
     settings: Settings
     layout: DataLayout
     readiness: ReadinessRegistry
+    ingestion_service: IngestionService | None = None
+    owns_ingestion_service: bool = False
+    qa_services: QARuntimeServices | None = None
+    owns_qa_services: bool = False
+    redactor: Redactor | None = DEFAULT_REDACTOR
     accepting_traffic: bool = True
+    ingestion_tasks: set[asyncio.Task[IngestionJob]] = field(default_factory=set)
+
+    async def schedule_ingestion(self, job_id: str) -> None:
+        if not self.accepting_traffic or self.ingestion_service is None:
+            return
+        task = asyncio.create_task(
+            self.ingestion_service.run(job_id),
+            name=f"ingestion-{job_id}",
+        )
+        self.ingestion_tasks.add(task)
+        task.add_done_callback(self._ingestion_finished)
+
+    def _ingestion_finished(self, task: asyncio.Task[IngestionJob]) -> None:
+        self.ingestion_tasks.discard(task)
+        if not task.cancelled():
+            with suppress(Exception):
+                task.result()
+
+    async def stop_ingestion(self) -> None:
+        tasks = tuple(self.ingestion_tasks)
+        if not tasks:
+            return
+        _, pending = await asyncio.wait(
+            tasks,
+            timeout=self.settings.shutdown_grace_seconds,
+        )
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
 
 
-def _build_runtime(settings: Settings) -> RuntimeState:
+def _build_runtime(
+    settings: Settings,
+    *,
+    ingestion_service: IngestionService | None,
+    owns_ingestion_service: bool,
+    qa_services: QARuntimeServices | None,
+    owns_qa_services: bool,
+    redactor: Redactor | None,
+) -> RuntimeState:
     layout = DataLayout.from_root(settings.data_root)
+    if ingestion_service is not None and (
+        ingestion_service.data_root != layout.root
+        or ingestion_service.upload_max_bytes != settings.upload_max_bytes
+    ):
+        raise ValueError("ingestion_service_configuration_mismatch")
     provider_errors = settings.provider_readiness_errors()
+    safety_ready = redactor is not None and redactor.fully_configured
     registry = ReadinessRegistry(
         [
             StaticReadinessCheck("configuration"),
@@ -33,21 +94,60 @@ def _build_runtime(settings: Settings) -> RuntimeState:
                 ready=not provider_errors,
                 reason=provider_errors[0] if provider_errors else None,
             ),
-            StaticReadinessCheck("safety"),
+            StaticReadinessCheck(
+                "safety",
+                ready=safety_ready,
+                reason=None if safety_ready else "safety_unavailable",
+            ),
             StaticReadinessCheck("storage", ready=False, reason="storage_initializing"),
         ]
     )
-    return RuntimeState(settings=settings, layout=layout, readiness=registry)
+    if ingestion_service is not None:
+        registry.register(
+            StaticReadinessCheck("ingestion", ready=False, reason="ingestion_initializing")
+        )
+    if qa_services is not None:
+        registry.register(QARuntimeReadinessCheck(qa_services))
+    return RuntimeState(
+        settings=settings,
+        layout=layout,
+        readiness=registry,
+        ingestion_service=ingestion_service,
+        owns_ingestion_service=owns_ingestion_service,
+        qa_services=qa_services,
+        owns_qa_services=owns_qa_services,
+        redactor=redactor,
+    )
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    *,
+    ingestion_service: IngestionService | None = None,
+    owns_ingestion_service: bool = False,
+    qa_services: QARuntimeServices | None = None,
+    owns_qa_services: bool = False,
+    redactor: Redactor | None = DEFAULT_REDACTOR,
+) -> FastAPI:
     """Compose one single-process service from explicit or environment settings."""
+    if owns_ingestion_service and ingestion_service is None:
+        raise ValueError("owned_ingestion_service_missing")
+    if owns_qa_services and qa_services is None:
+        raise ValueError("owned_qa_services_missing")
     resolved_settings = settings or get_settings()
-    runtime = _build_runtime(resolved_settings)
+    runtime = _build_runtime(
+        resolved_settings,
+        ingestion_service=ingestion_service,
+        owns_ingestion_service=owns_ingestion_service,
+        qa_services=qa_services,
+        owns_qa_services=owns_qa_services,
+        redactor=redactor,
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         storage_check = runtime.readiness.get("storage")
+        runtime.accepting_traffic = True
         try:
             runtime.layout.initialize()
             if isinstance(storage_check, StaticReadinessCheck):
@@ -58,8 +158,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 storage_check.ready = False
                 storage_check.reason = "storage_not_writable"
         app.state.runtime = runtime
-        yield
-        runtime.accepting_traffic = False
+        try:
+            if runtime.ingestion_service is not None:
+                ingestion_check = runtime.readiness.get("ingestion")
+                try:
+                    await runtime.ingestion_service.recover_startup()
+                    if isinstance(ingestion_check, StaticReadinessCheck):
+                        ingestion_check.ready = True
+                        ingestion_check.reason = None
+                except Exception:
+                    if isinstance(ingestion_check, StaticReadinessCheck):
+                        ingestion_check.ready = False
+                        ingestion_check.reason = "ingestion_recovery_failed"
+            yield
+        finally:
+            runtime.accepting_traffic = False
+            try:
+                await runtime.stop_ingestion()
+            finally:
+                try:
+                    if runtime.owns_ingestion_service and runtime.ingestion_service is not None:
+                        runtime.ingestion_service.close()
+                finally:
+                    if runtime.owns_qa_services and runtime.qa_services is not None:
+                        await runtime.qa_services.close()
 
     app = FastAPI(
         title="RAG Assistant MVP",
@@ -67,6 +189,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.runtime = runtime
+    install_error_handlers(app)
+    app.include_router(documents_router)
+    app.include_router(qa_router)
+    install_qa_openapi_contract(app)
 
     @app.get("/healthz", tags=["operations"])
     async def healthz() -> dict[str, str]:
@@ -87,9 +213,34 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }
         return JSONResponse(
             payload,
-            status_code=status.HTTP_200_OK
-            if ready
-            else status.HTTP_503_SERVICE_UNAVAILABLE,
+            status_code=status.HTTP_200_OK if ready else status.HTTP_503_SERVICE_UNAVAILABLE,
         )
 
+    return app
+
+
+def create_executable_app(settings: Settings | None = None) -> FastAPI:
+    """Build configured production services or remain honestly unready."""
+
+    resolved_settings = settings or get_settings()
+    if (
+        resolved_settings.provider_backend == "openai"
+        and not resolved_settings.provider_readiness_errors()
+    ):
+        from rag_mvp.api.composition import compose_openai_services
+
+        composition = compose_openai_services(resolved_settings, DEFAULT_REDACTOR)
+        return create_app(
+            resolved_settings,
+            ingestion_service=composition.ingestion,
+            owns_ingestion_service=True,
+            qa_services=composition.qa,
+            owns_qa_services=True,
+            redactor=DEFAULT_REDACTOR,
+        )
+
+    app = create_app(resolved_settings)
+    runtime: RuntimeState = app.state.runtime
+    runtime.readiness.register(StaticReadinessCheck("index", False, "index_not_ready"))
+    runtime.readiness.register(StaticReadinessCheck("qa", False, "qa_not_composed"))
     return app

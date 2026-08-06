@@ -104,9 +104,7 @@ def test_complete_sensitive_values_are_redacted_before_emission_and_persistence(
 ) -> None:
     service, session_id = conversations
     private_key = (
-        "-----BEGIN PRIVATE KEY-----\n"
-        "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n"
-        "-----END PRIVATE KEY-----"
+        "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n-----END PRIVATE KEY-----"
     )
     answer = f"Contact person@example.com. Key: {private_key}"
     outcome = _answer_outcome(
@@ -127,6 +125,48 @@ def test_complete_sensitive_values_are_redacted_before_emission_and_persistence(
     assert "[REDACTED_EMAIL]" in rendered
     assert "[REDACTED_SECRET]" in rendered
     assert service.list_turns(session_id, "owner-1")[0].content == event.content
+
+
+def test_sensitive_value_split_across_claims_fails_closed(
+    conversations: tuple[ConversationService, str],
+) -> None:
+    service, session_id = conversations
+    citation = Citation(
+        source_title="Employee Handbook",
+        document_version=1,
+        chunk_id="chunk-1",
+        locator=ChunkLocator(section_path=("Leave",)),
+    )
+    claims = (
+        AnswerClaim(text="Contact person@", citation_chunk_ids=(citation.chunk_id,)),
+        AnswerClaim(text="example.com.", citation_chunk_ids=(citation.chunk_id,)),
+    )
+    answer = "Contact person@example.com."
+    grounded = ValidatedGroundedAnswer(
+        request_id="request-1",
+        revision_id="revision-current",
+        answer=answer,
+        claims=claims,
+        citations=(citation,),
+    )
+    response = QAAnswer(
+        request_id="request-1",
+        session_id=session_id,
+        response_language="en",
+        answer=answer,
+        claims=claims,
+        citations=(citation,),
+    )
+
+    events = CompleteResponseEmitter(service).emit(
+        OrchestratedResponse._create(response, grounded_answer=grounded),
+        owner_id="owner-1",
+    )
+
+    _assert_safe_failure(events, service, session_id)
+    rendered = events[0].model_dump_json()
+    assert "person@" not in rendered
+    assert "example.com" not in rendered
 
 
 @pytest.mark.parametrize(

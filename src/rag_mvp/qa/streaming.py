@@ -8,6 +8,7 @@ from rag_mvp.domain.qa import (
     ConversationRole,
     QAAnswer,
     QAError,
+    QAErrorCode,
     QARefusal,
     QAResponse,
     RefusalReason,
@@ -47,6 +48,10 @@ class CompleteResponseEmitter:
         self._injection_policy = injection_policy or InjectionPolicy()
         self._redactor = redactor
         self._maximum_buffer_characters = maximum_buffer_characters
+
+    @property
+    def ready(self) -> bool:
+        return self._redactor is not None and self._redactor.fully_configured
 
     def emit(
         self,
@@ -108,13 +113,22 @@ class CompleteResponseEmitter:
                 raise ResponseReleaseError("generated_output_injection")
 
     def _redacted_response(self, response: QAResponse) -> QAResponse:
-        if self._redactor is None or not self._redactor.initialized:
+        if self._redactor is None or not self._redactor.fully_configured:
             raise ResponseReleaseError("redactor_unavailable")
         payload = redact_output(response, redactor=self._redactor)
         if not isinstance(payload, dict):
             raise ResponseReleaseError("redacted_response_invalid")
         content_field = "answer" if isinstance(response, QAAnswer) else "message"
         payload[content_field] = self._safe_complete_text(_response_content(response))
+        if isinstance(response, QAAnswer):
+            raw_claims = payload.get("claims")
+            if not isinstance(raw_claims, (list, tuple)) or len(raw_claims) != len(response.claims):
+                raise ResponseReleaseError("redacted_claims_invalid")
+            safe_claim_texts = self._safe_claim_texts(response)
+            for raw_claim, safe_text in zip(raw_claims, safe_claim_texts, strict=True):
+                if not isinstance(raw_claim, dict):
+                    raise ResponseReleaseError("redacted_claims_invalid")
+                raw_claim["text"] = safe_text
         raw_citations = payload.get("citations")
         if not isinstance(raw_citations, (list, tuple)) or len(raw_citations) != len(
             response.citations
@@ -140,6 +154,13 @@ class CompleteResponseEmitter:
             raise ResponseReleaseError("redacted_response_invalid")
         return redacted
 
+    def _safe_claim_texts(self, response: QAAnswer) -> tuple[str, ...]:
+        safe_claims = tuple(self._safe_complete_text(claim.text) for claim in response.claims)
+        safe_combined = self._safe_complete_text("".join(claim.text for claim in response.claims))
+        if "".join(safe_claims) != safe_combined:
+            raise ResponseReleaseError("cross_claim_sensitive_value")
+        return safe_claims
+
     def _safe_complete_text(self, text: str) -> str:
         stream = SafeStream(
             redactor=self._redactor,
@@ -155,12 +176,24 @@ class CompleteResponseEmitter:
         if isinstance(response, QAAnswer):
             kind = StreamEventKind.ANSWER
             content = response.answer
+            claims = response.claims
+            reason = None
+            error_code = None
+            retryable = None
         elif isinstance(response, QARefusal):
             kind = StreamEventKind.REFUSAL
             content = response.message
+            claims = ()
+            reason = response.reason
+            error_code = None
+            retryable = None
         else:
             kind = StreamEventKind.ERROR
             content = response.message
+            claims = ()
+            reason = None
+            error_code = response.code
+            retryable = response.retryable
         return ValidatedStreamEvent(
             request_id=response.request_id,
             session_id=response.session_id,
@@ -168,7 +201,12 @@ class CompleteResponseEmitter:
             kind=kind,
             response_language=response.response_language,
             content=content,
+            claims=claims,
             citations=response.citations,
+            reason=reason,
+            error_code=error_code,
+            retryable=retryable,
+            diagnostics=response.diagnostics,
             terminal=True,
         )
 
@@ -201,6 +239,8 @@ class CompleteResponseEmitter:
             kind=StreamEventKind.ERROR,
             response_language=response.response_language,
             content=SAFE_UNAVAILABLE_MESSAGE,
+            error_code=QAErrorCode.SAFETY_UNAVAILABLE,
+            retryable=True,
             terminal=True,
         )
 

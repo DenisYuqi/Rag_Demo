@@ -114,6 +114,12 @@ def test_validated_stream_event_rejects_unsafe_shapes() -> None:
         kind=StreamEventKind.SENTENCE,
         response_language="en",
         content="A validated sentence.",
+        claims=(
+            AnswerClaim(
+                text="A validated sentence.",
+                citation_chunk_ids=("chunk-1",),
+            ),
+        ),
         citations=(_citation(),),
     )
     assert event.terminal is False
