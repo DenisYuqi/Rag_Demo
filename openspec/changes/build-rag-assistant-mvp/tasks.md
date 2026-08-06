@@ -106,16 +106,16 @@ Implement and integrate in vertical gates. A gate is complete only when its end-
 
 ## 9. Observability, Cost, and Performance Controls
 
-- [ ] 9.1 Configure Structlog JSON output, request/trace correlation middleware, and safe exception categories; verify event schema with `uv run pytest tests/unit/observability/test_logging.py -q`.
-- [ ] 9.2 Expose bounded-cardinality Prometheus counters, gauges, and histograms for QA outcomes, concurrency, caches, stages, tokens, cost, and degradation; verify with `uv run pytest tests/unit/observability/test_metrics.py -q`.
-- [ ] 9.3 Add OpenTelemetry root and stage spans with async context propagation and no content attributes; verify with an in-memory exporter using `uv run pytest tests/unit/observability/test_tracing.py -q`.
-- [ ] 9.4 Instrument ingestion, retrieval, provider, QA, safety, and evaluation stages with consistent request/run IDs and timings; verify span/log correlation with `uv run pytest tests/integration/test_observability.py -q`.
-- [ ] 9.5 Implement versioned model pricing lookup and per-attempt/request/run cost aggregation; verify unknown usage/pricing and per-1,000-call calculation with `uv run pytest tests/unit/observability/test_costs.py -q`.
-- [ ] 9.6 Implement a QA admission controller supporting at least five active pipelines and a bounded queue; verify five overlap while excess work is rejected with `uv run pytest tests/unit/performance/test_admission.py -q`.
-- [ ] 9.7 Move synchronous Chroma, BM25, OCR, and report work to bounded worker pools; verify the event loop remains responsive with `uv run pytest tests/unit/performance/test_worker_pools.py -q`.
-- [ ] 9.8 Implement the 9.5-second total deadline and configurable stage latency budgets with reranker degradation; verify fake-provider timing cases with `uv run pytest tests/unit/performance/test_deadlines.py -q`.
-- [ ] 9.9 Implement safe persisted request diagnostics and lookup by request ID; verify retention bounds and redaction with `uv run pytest tests/unit/observability/test_diagnostics.py -q`.
-- [ ] 9.10 Add a deterministic single-process concurrency integration test proving five QA pipelines make overlapping provider calls; verify with `uv run pytest tests/integration/test_five_concurrent_qa.py -q`.
+- [x] 9.1 Configure Structlog JSON output, request/trace correlation middleware, and safe exception categories; verify event schema with `uv run pytest tests/unit/observability/test_logging.py -q`.
+- [x] 9.2 Expose bounded-cardinality Prometheus counters, gauges, and histograms for QA outcomes, concurrency, caches, stages, tokens, cost, and degradation; verify with `uv run pytest tests/unit/observability/test_metrics.py -q`.
+- [x] 9.3 Add OpenTelemetry root and stage spans with async context propagation and no content attributes; verify with an in-memory exporter using `uv run pytest tests/unit/observability/test_tracing.py -q`.
+- [x] 9.4 Instrument ingestion, retrieval, provider, QA, safety, and evaluation stages with consistent request/run IDs and timings; verify span/log correlation with `uv run pytest tests/integration/test_observability.py -q`.
+- [x] 9.5 Implement versioned model pricing lookup and per-attempt/request/run cost aggregation; verify unknown usage/pricing and per-1,000-call calculation with `uv run pytest tests/unit/observability/test_costs.py -q`.
+- [x] 9.6 Implement a QA admission controller supporting at least five active pipelines and a bounded queue; verify five overlap while excess work is rejected with `uv run pytest tests/unit/performance/test_admission.py -q`.
+- [x] 9.7 Move synchronous Chroma, BM25, OCR, and report work to bounded worker pools; verify the event loop remains responsive with `uv run pytest tests/unit/performance/test_worker_pools.py -q`.
+- [x] 9.8 Implement the 9.5-second total deadline and configurable stage latency budgets with reranker degradation; verify fake-provider timing cases with `uv run pytest tests/unit/performance/test_deadlines.py -q`.
+- [x] 9.9 Implement safe persisted request diagnostics and lookup by request ID; verify retention bounds and redaction with `uv run pytest tests/unit/observability/test_diagnostics.py -q`.
+- [x] 9.10 Add a deterministic single-process concurrency integration test proving five QA pipelines make overlapping provider calls; verify with `uv run pytest tests/integration/test_five_concurrent_qa.py -q`.
 
 ## 10. RAG Evaluation and Issue Evidence
 

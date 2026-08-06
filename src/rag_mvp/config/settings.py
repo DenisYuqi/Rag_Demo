@@ -75,7 +75,20 @@ class Settings(BaseSettings):
     qa_max_active: int = Field(default=5, ge=5, le=100)
     qa_max_queue: int = Field(default=10, ge=0, le=1000)
     qa_deadline_seconds: float = Field(default=9.5, gt=0, le=60)
+    qa_queue_budget_seconds: float = Field(default=0.2, gt=0, le=60)
+    qa_validation_budget_seconds: float = Field(default=0.2, gt=0, le=60)
+    qa_retrieval_budget_seconds: float = Field(default=0.8, gt=0, le=60)
+    qa_embedding_budget_seconds: float = Field(default=0.8, gt=0, le=60)
+    qa_dense_retrieval_budget_seconds: float = Field(default=0.8, gt=0, le=60)
+    qa_bm25_budget_seconds: float = Field(default=0.8, gt=0, le=60)
+    qa_fusion_budget_seconds: float = Field(default=0.2, gt=0, le=60)
     rerank_deadline_seconds: float = Field(default=1.2, gt=0, le=10)
+    qa_evidence_assessment_budget_seconds: float = Field(default=0.3, gt=0, le=60)
+    qa_generation_budget_seconds: float = Field(default=5.3, gt=0, le=60)
+    qa_grounding_budget_seconds: float = Field(default=0.3, gt=0, le=60)
+    qa_redaction_budget_seconds: float = Field(default=0.2, gt=0, le=60)
+    qa_serialization_budget_seconds: float = Field(default=0.1, gt=0, le=60)
+    qa_finalization_budget_seconds: float = Field(default=0.6, gt=0, le=60)
     shutdown_grace_seconds: float = Field(default=15.0, gt=0, le=120)
 
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
@@ -125,8 +138,29 @@ class Settings(BaseSettings):
             raise ValueError("chunk overlap must be smaller than chunk target")
         if self.rerank_candidate_limit < self.context_chunk_limit:
             raise ValueError("rerank candidate limit cannot be below context chunk limit")
-        if self.rerank_deadline_seconds >= self.qa_deadline_seconds:
-            raise ValueError("rerank deadline must be below the total QA deadline")
+        stage_budgets = {
+            "queue": self.qa_queue_budget_seconds,
+            "validation": self.qa_validation_budget_seconds,
+            "retrieval": self.qa_retrieval_budget_seconds,
+            "embedding": self.qa_embedding_budget_seconds,
+            "dense retrieval": self.qa_dense_retrieval_budget_seconds,
+            "BM25": self.qa_bm25_budget_seconds,
+            "fusion": self.qa_fusion_budget_seconds,
+            "rerank": self.rerank_deadline_seconds,
+            "evidence assessment": self.qa_evidence_assessment_budget_seconds,
+            "generation": self.qa_generation_budget_seconds,
+            "grounding": self.qa_grounding_budget_seconds,
+            "redaction": self.qa_redaction_budget_seconds,
+            "serialization": self.qa_serialization_budget_seconds,
+            "finalization": self.qa_finalization_budget_seconds,
+        }
+        if any(value >= self.qa_deadline_seconds for value in stage_budgets.values()):
+            raise ValueError("each stage budget must be below the total QA deadline")
+        if (
+            self.qa_generation_budget_seconds + self.qa_finalization_budget_seconds
+            > self.qa_deadline_seconds
+        ):
+            raise ValueError("generation and finalization budgets exceed the total QA deadline")
         if self.default_retrieval_mode == "hybrid-rerank" and self.reranking_model is None:
             raise ValueError("hybrid-rerank default requires a configured reranking model")
         return self

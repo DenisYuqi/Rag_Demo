@@ -1,1 +1,81 @@
-"""Privacy-safe logs, metrics, traces, and cost accounting."""
+"""Privacy-safe logs, metrics, traces, diagnostics, and cost accounting."""
+
+from rag_mvp.observability.costs import (
+    AttemptCostEstimate,
+    CostAggregate,
+    PerThousandCallEstimate,
+    PricingCatalog,
+    RoleCost,
+    UnknownCostReason,
+    project_per_thousand_calls,
+)
+from rag_mvp.observability.diagnostics import (
+    DiagnosticRetention,
+    DiagnosticSafetyError,
+    SafeRequestDiagnosticStore,
+)
+from rag_mvp.observability.logging import (
+    CorrelationContext,
+    RequestTraceContextMiddleware,
+    SafeErrorCategory,
+    bind_correlation_context,
+    classify_exception,
+    configure_logging,
+    current_correlation_context,
+    get_logger,
+    is_safe_identifier,
+    safe_event,
+)
+from rag_mvp.observability.metrics import (
+    CacheName,
+    CacheOutcome,
+    DegradationReason,
+    MetricLabelError,
+    ModelRoleLabel,
+    PipelineStage,
+    QAOutcome,
+    RAGMetrics,
+    RetrievalCountKind,
+    TokenDirection,
+)
+from rag_mvp.observability.runtime import DiagnosticSink, PipelineTelemetry, RequestObservation
+from rag_mvp.observability.tracing import RAGTracer, SafeSpan, TraceReference
+
+__all__ = [
+    "AttemptCostEstimate",
+    "CacheName",
+    "CacheOutcome",
+    "CorrelationContext",
+    "CostAggregate",
+    "DegradationReason",
+    "DiagnosticRetention",
+    "DiagnosticSafetyError",
+    "DiagnosticSink",
+    "MetricLabelError",
+    "ModelRoleLabel",
+    "PerThousandCallEstimate",
+    "PipelineStage",
+    "PipelineTelemetry",
+    "PricingCatalog",
+    "QAOutcome",
+    "RAGMetrics",
+    "RAGTracer",
+    "RequestObservation",
+    "RequestTraceContextMiddleware",
+    "RetrievalCountKind",
+    "RoleCost",
+    "SafeErrorCategory",
+    "SafeRequestDiagnosticStore",
+    "SafeSpan",
+    "TokenDirection",
+    "TraceReference",
+    "UnknownCostReason",
+    "bind_correlation_context",
+    "classify_exception",
+    "configure_logging",
+    "current_correlation_context",
+    "get_logger",
+    "is_safe_identifier",
+    "project_per_thousand_calls",
+    "safe_event",
+]

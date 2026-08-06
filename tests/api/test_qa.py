@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, cast
@@ -24,12 +25,16 @@ from rag_mvp.domain.qa import (
     RefusalReason,
     SafeQADiagnostics,
 )
+from rag_mvp.observability.runtime import PipelineTelemetry
+from rag_mvp.performance.admission import QAAdmissionController
+from rag_mvp.performance.deadlines import QALatencyBudgets
 from rag_mvp.qa.grounding import ValidatedGroundedAnswer
 from rag_mvp.qa.orchestrator import OrchestratedResponse
 from rag_mvp.qa.sessions import ConversationService
 from rag_mvp.qa.streaming import CompleteResponseEmitter
+from rag_mvp.safety.models import RedactionResult
 from rag_mvp.safety.output import SAFE_UNAVAILABLE_MESSAGE
-from rag_mvp.safety.redactor import DEFAULT_REDACTOR
+from rag_mvp.safety.redactor import DEFAULT_REDACTOR, Redactor
 from rag_mvp.storage.database import Database
 from rag_mvp.storage.repositories import SessionRepository
 
@@ -122,6 +127,30 @@ class BlockingOrchestrator:
         raise AssertionError("blocking orchestrator unexpectedly returned")
 
 
+class DelayedEmitter:
+    def __init__(self, delegate: CompleteResponseEmitter, delay_seconds: float) -> None:
+        self._delegate = delegate
+        self._delay_seconds = delay_seconds
+
+    @property
+    def ready(self) -> bool:
+        return self._delegate.ready
+
+    def emit(self, outcome: OrchestratedResponse, *, owner_id: str) -> object:
+        time.sleep(self._delay_seconds)
+        return self._delegate.emit(outcome, owner_id=owner_id)
+
+
+class DelayedRedactor(Redactor):
+    def __init__(self, delay_seconds: float) -> None:
+        super().__init__()
+        self._delay_seconds = delay_seconds
+
+    def redact(self, text: str) -> RedactionResult:
+        time.sleep(self._delay_seconds)
+        return super().redact(text)
+
+
 class MalformedEmitter:
     ready = True
 
@@ -203,6 +232,37 @@ def _conversations(tmp_path: Path) -> ConversationService:
     database = Database(tmp_path / "metadata.sqlite3")
     database.initialize()
     return ConversationService(SessionRepository(database))
+
+
+def _latency_budgets(
+    *,
+    total_seconds: float = 0.2,
+    queue_seconds: float = 0.02,
+    redaction_seconds: float = 0.02,
+    serialization_seconds: float = 0.02,
+) -> QALatencyBudgets:
+    return QALatencyBudgets(
+        total_seconds=total_seconds,
+        queue_seconds=queue_seconds,
+        validation_seconds=0.02,
+        embedding_seconds=0.02,
+        dense_retrieval_seconds=0.02,
+        bm25_seconds=0.02,
+        fusion_seconds=0.02,
+        rerank_seconds=0.02,
+        evidence_assessment_seconds=0.02,
+        generation_seconds=0.02,
+        grounding_seconds=0.02,
+        redaction_seconds=redaction_seconds,
+        serialization_seconds=serialization_seconds,
+        finalization_seconds=0.02,
+    )
+
+
+async def _next_stream_event(stream: Any) -> dict[str, object]:
+    raw = await asyncio.wait_for(anext(stream), timeout=1)
+    await stream.aclose()
+    return cast(dict[str, object], json.loads(raw))
 
 
 def _app(
@@ -425,6 +485,126 @@ async def test_stream_cancellation_propagates_without_emitting_fallback(tmp_path
     assert orchestrator.cancelled.is_set()
     await stream.aclose()
     assert conversations.list_turns(session.session_id, "owner-1") == ()
+
+
+@pytest.mark.asyncio
+async def test_queue_budget_timeout_returns_retryable_capacity_event(tmp_path: Path) -> None:
+    conversations = _conversations(tmp_path)
+    session = conversations.create_session("owner-1")
+    admission = QAAdmissionController(max_active=1, max_queue=1)
+    occupied = await admission.acquire()
+    orchestrator = ScriptedOrchestrator("answer")
+    services = QARuntimeServices(
+        conversations=conversations,
+        orchestrator=orchestrator,
+        emitter=CompleteResponseEmitter(conversations),
+        admission=admission,
+        latency_budgets=_latency_budgets(queue_seconds=0.005),
+    )
+    stream = stream_qa_events(
+        services,
+        request_id="request-queue-timeout",
+        session_id=session.session_id,
+        owner_id="owner-1",
+        question="What is the policy?",
+        mode="hybrid",
+        requested_language="en",
+        response_language="en",
+        redactor=DEFAULT_REDACTOR,
+    )
+
+    try:
+        event = await _next_stream_event(stream)
+    finally:
+        await occupied.release()
+        await admission.close()
+
+    assert event["kind"] == "error"
+    assert event["error_code"] == "capacity"
+    assert event["retryable"] is True
+    assert event["content"] == SAFE_UNAVAILABLE_MESSAGE
+    assert orchestrator.calls == []
+    snapshot = await admission.snapshot()
+    assert snapshot.active == 0
+    assert snapshot.queued == 0
+
+
+@pytest.mark.asyncio
+async def test_total_deadline_cancels_orchestrator_and_returns_safe_error(tmp_path: Path) -> None:
+    conversations = _conversations(tmp_path)
+    session = conversations.create_session("owner-1")
+    orchestrator = BlockingOrchestrator()
+    services = QARuntimeServices(
+        conversations=conversations,
+        orchestrator=orchestrator,
+        emitter=CompleteResponseEmitter(conversations),
+        latency_budgets=_latency_budgets(total_seconds=0.03),
+    )
+    stream = stream_qa_events(
+        services,
+        request_id="request-hard-deadline",
+        session_id=session.session_id,
+        owner_id="owner-1",
+        question="What is the policy?",
+        mode="hybrid",
+        requested_language="en",
+        response_language="en",
+        redactor=DEFAULT_REDACTOR,
+    )
+
+    event = await _next_stream_event(stream)
+
+    assert orchestrator.cancelled.is_set()
+    assert event["kind"] == "error"
+    assert event["error_code"] == "deadline-expired"
+    assert event["retryable"] is True
+    assert event["content"] == SAFE_UNAVAILABLE_MESSAGE
+    assert conversations.list_turns(session.session_id, "owner-1") == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("slow_stage", ["redaction", "serialization"])
+async def test_synchronous_release_stage_overrun_fails_closed(
+    tmp_path: Path,
+    slow_stage: str,
+) -> None:
+    conversations = _conversations(tmp_path)
+    session = conversations.create_session("owner-1")
+    emitter: object = CompleteResponseEmitter(conversations)
+    redactor: Redactor = DEFAULT_REDACTOR
+    budgets = _latency_budgets()
+    if slow_stage == "redaction":
+        emitter = DelayedEmitter(cast(CompleteResponseEmitter, emitter), 0.02)
+        budgets = _latency_budgets(redaction_seconds=0.005)
+    else:
+        redactor = DelayedRedactor(0.01)
+        budgets = _latency_budgets(serialization_seconds=0.005)
+    services = QARuntimeServices(
+        conversations=conversations,
+        orchestrator=ScriptedOrchestrator("answer"),
+        emitter=cast(CompleteResponseEmitter, emitter),
+        telemetry=PipelineTelemetry(_settings(tmp_path)),
+        latency_budgets=budgets,
+    )
+    stream = stream_qa_events(
+        services,
+        request_id=f"request-{slow_stage}-timeout",
+        session_id=session.session_id,
+        owner_id="owner-1",
+        question="What is the policy?",
+        mode="hybrid",
+        requested_language="en",
+        response_language="en",
+        redactor=redactor,
+    )
+
+    event = await _next_stream_event(stream)
+
+    assert event["kind"] == "error"
+    assert event["error_code"] == "deadline-expired"
+    assert event["retryable"] is True
+    assert event["content"] == SAFE_UNAVAILABLE_MESSAGE
+    assert "person@example.com" not in json.dumps(event)
 
 
 @pytest.mark.asyncio

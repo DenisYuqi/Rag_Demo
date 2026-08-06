@@ -62,6 +62,7 @@ from rag_mvp.ingestion.versioning import (
     SourceVersioningService,
     derivation_config_digest,
 )
+from rag_mvp.performance.worker_pools import RagWorkerPools, default_worker_pools
 from rag_mvp.providers.models import Deadline, ProviderCallContext
 from rag_mvp.providers.protocols import EmbeddingProvider
 from rag_mvp.retrieval.tokenizer import BILINGUAL_TOKENIZER_IDENTITY
@@ -135,11 +136,14 @@ class IngestionService:
         job_id_factory: Callable[[], str] | None = None,
         revision_id_factory: Callable[[], str] | None = None,
         owned_embedding_cache: EmbeddingCache | None = None,
+        worker_pools: RagWorkerPools | None = None,
     ) -> None:
         if upload_max_bytes < 1:
             raise ValueError("upload_max_bytes_invalid")
         if operation_deadline_seconds <= 0:
             raise ValueError("operation_deadline_invalid")
+        if worker_pools is not None and not isinstance(worker_pools, RagWorkerPools):
+            raise TypeError("worker_pools must be RagWorkerPools")
         self._layout = layout
         self._database = database
         self._repositories = repositories
@@ -162,6 +166,9 @@ class IngestionService:
         self._job_id_factory = job_id_factory or (lambda: f"job_{uuid4().hex}")
         self._revision_id_factory = revision_id_factory or (lambda: f"rev_{uuid4().hex}")
         self._owned_embedding_cache = owned_embedding_cache
+        resolved_worker_pools = worker_pools or default_worker_pools()
+        self._chroma_worker_pool = resolved_worker_pools.chroma
+        self._ocr_worker_pool = resolved_worker_pools.ocr
 
     @classmethod
     def create(
@@ -176,6 +183,7 @@ class IngestionService:
         page_usability: PageUsabilityPolicy | None = None,
         derivation_config: Mapping[str, JsonValue] | None = None,
         embedding_batch_size: int = 128,
+        worker_pools: RagWorkerPools | None = None,
     ) -> IngestionService:
         """Compose the persistent implementation used by tests and the application."""
 
@@ -210,6 +218,7 @@ class IngestionService:
             embeddings,
             extraction_version=INDEX_EXTRACTION_VERSION,
             chunking_version=resolved_chunking.version,
+            worker_pools=worker_pools,
         )
         publisher = RevisionPublisher(layout, repositories.index_revisions)
         return cls(
@@ -227,6 +236,7 @@ class IngestionService:
             ocr_languages=ocr_languages,
             page_usability=resolved_usability,
             owned_embedding_cache=cache,
+            worker_pools=worker_pools,
         )
 
     @property
@@ -342,7 +352,7 @@ class IngestionService:
 
     async def recover_startup(self) -> RecoveryReport:
         async with self._mutation_lock:
-            active_id = self._validate_active_state()
+            active_id = await self._validate_active_state()
             try:
                 jobs = {job.job_id: job for job in self._repositories.ingestion_jobs.list()}
                 for command_job_id in self._artifacts.list_command_job_ids():
@@ -447,13 +457,13 @@ class IngestionService:
         ):
             raise IngestionSubmissionError("reindex_required")
         if isinstance(command, UploadCommand):
-            job, versions, duplicate = self._prepare_upload(job, command)
+            job, versions, duplicate = await self._prepare_upload(job, command)
             if duplicate:
                 if active_at_start is None:
                     raise IngestionRecoveryError("active_revision_missing")
                 return self._complete_duplicate(job, active_at_start.revision_id), None
         elif isinstance(command, ReindexCommand):
-            job, versions = self._prepare_reindex(job)
+            job, versions = await self._prepare_reindex(job)
         else:
             job, versions = self._prepare_delete(job, command)
 
@@ -504,9 +514,10 @@ class IngestionService:
         self._repositories.index_revisions.create(revision)
 
         job, publishing_started = self._enter_stage(job, IngestionStage.PUBLISHING)
-        self._publisher.validate(revision)
+        await self._chroma_worker_pool.run_cancel_safe(self._publisher.validate, revision)
         job = self._record_stage(job, IngestionStage.PUBLISHING, publishing_started)
-        published = self._publisher.publish(
+        published = await self._chroma_worker_pool.run_cancel_safe(
+            self._publisher.publish,
             revision_id,
             expected_active_revision_id=expected_active_id,
             ingestion_job_id=job.job_id,
@@ -518,7 +529,7 @@ class IngestionService:
             raise RepositoryNotFound("ingestion_job_not_found")
         return completed, published.revision_id
 
-    def _prepare_upload(
+    async def _prepare_upload(
         self,
         job: IngestionJob,
         command: UploadCommand,
@@ -564,7 +575,7 @@ class IngestionService:
             return job, self._desired_versions(version), duplicate
 
         job, started = self._enter_stage(job, IngestionStage.EXTRACTING)
-        extracted = self._extract(upload)
+        extracted = await self._extract(upload)
         job = self._record_stage(
             job,
             IngestionStage.EXTRACTING,
@@ -596,7 +607,7 @@ class IngestionService:
             registration.disposition is SourceVersionDisposition.DUPLICATE,
         )
 
-    def _prepare_reindex(
+    async def _prepare_reindex(
         self,
         job: IngestionJob,
     ) -> tuple[IngestionJob, dict[str, DocumentVersion]]:
@@ -632,7 +643,7 @@ class IngestionService:
                 declared_media_type=active_version.media_type,
                 max_bytes=max(self._upload_max_bytes, active_version.size_bytes),
             )
-            extracted = self._extract(upload)
+            extracted = await self._extract(upload)
             ocr_count += extracted.ocr_page_count
             normalized_documents.append((document, upload, normalize_document(extracted)))
 
@@ -814,7 +825,7 @@ class IngestionService:
         )
         return self._repositories.ingestion_jobs.transition(completed)
 
-    def _validate_active_state(self) -> str | None:
+    async def _validate_active_state(self) -> str | None:
         try:
             pointer_id = self._repositories.index_revisions.get_active_revision_id()
             active_status_ids = self._repositories.index_revisions.list_active_status_ids()
@@ -855,16 +866,20 @@ class IngestionService:
             for source_id, version_number in active.active_sources.items():
                 version = self._require_version(source_id, version_number)
                 self._load_canonical_for(payload_active_documents[source_id], version)
-            self._publisher.validate_artifacts(active)
+            await self._chroma_worker_pool.run_cancel_safe(
+                self._publisher.validate_artifacts,
+                active,
+            )
             return active.revision_id
         except IngestionRecoveryError:
             raise
         except Exception:
             raise IngestionRecoveryError("active_revision_invalid") from None
 
-    def _extract(self, upload: ValidatedUpload) -> ExtractedDocument:
+    async def _extract(self, upload: ValidatedUpload) -> ExtractedDocument:
         if upload.kind is DocumentKind.PDF:
-            return extract_pdf(
+            return await self._ocr_worker_pool.run(
+                extract_pdf,
                 upload.content,
                 ocr=self._ocr,
                 languages=self._ocr_languages,

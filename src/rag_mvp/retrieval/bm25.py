@@ -15,6 +15,7 @@ from pydantic import ValidationError
 
 from rag_mvp.domain.ingestion import Chunk
 from rag_mvp.domain.retrieval import RetrievalCandidate
+from rag_mvp.performance.worker_pools import BoundedWorkerPool, default_worker_pools
 from rag_mvp.retrieval.snapshot import (
     RECORD_DIGEST_ALGORITHM,
     chunk_record_digest,
@@ -32,6 +33,12 @@ class LexicalIndexError(ValueError):
     def __init__(self, code: str) -> None:
         self.code = code
         super().__init__(code)
+
+
+def default_bm25_worker_pool() -> BoundedWorkerPool:
+    """Return the bounded process-level fallback for direct snapshot searches."""
+
+    return default_worker_pools().bm25
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +67,7 @@ class PersistentBm25Index:
         k1: float = DEFAULT_K1,
         b: float = DEFAULT_B,
         algorithm_version: str = ALGORITHM_VERSION,
+        worker_pool: BoundedWorkerPool | None = None,
     ) -> None:
         if not isinstance(revision_id, str) or not revision_id:
             raise LexicalIndexError("revision_id_invalid")
@@ -78,6 +86,7 @@ class PersistentBm25Index:
         self.k1 = normalized_k1
         self.b = normalized_b
         self.algorithm_version = algorithm_version
+        self._worker_pool = worker_pool or default_bm25_worker_pool()
         self._record_digests = {record.chunk.chunk_id: record.record_digest for record in records}
         if any(
             chunk_record_digest(record.chunk, record.display_title) != record.record_digest
@@ -164,6 +173,22 @@ class PersistentBm25Index:
         return score
 
     async def search(self, query: str, limit: int) -> tuple[RetrievalCandidate, ...]:
+        return await self._worker_pool.run_cancel_safe(
+            self.search_sync,
+            query,
+            limit,
+        )
+
+    def configure_worker_pool(self, worker_pool: BoundedWorkerPool) -> None:
+        """Bind this request-scoped snapshot to its application-owned pool."""
+
+        if not isinstance(worker_pool, BoundedWorkerPool):
+            raise TypeError("worker_pool must be BoundedWorkerPool")
+        self._worker_pool = worker_pool
+
+    def search_sync(self, query: str, limit: int) -> tuple[RetrievalCandidate, ...]:
+        """Score one query synchronously; async callers must dispatch through a pool."""
+
         if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
             raise ValueError("limit must be positive")
         query_tokens = self.tokenizer.tokenize(query)

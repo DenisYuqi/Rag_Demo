@@ -14,6 +14,9 @@ from rag_mvp.config.settings import Settings
 from rag_mvp.ingestion.chunking import ChunkingConfig
 from rag_mvp.ingestion.extractors import OcrAdapter
 from rag_mvp.ingestion.service import IngestionService
+from rag_mvp.observability.diagnostics import SafeRequestDiagnosticStore
+from rag_mvp.performance.deadlines import QALatencyBudgets
+from rag_mvp.performance.worker_pools import RagWorkerPools
 from rag_mvp.providers.models import (
     EmbeddingRequest,
     EmbeddingResult,
@@ -60,6 +63,7 @@ _CLEANUP_TASKS: set[asyncio.Task[None]] = set()
 class ExecutableComposition:
     ingestion: IngestionService
     qa: QARuntimeServices
+    diagnostics: SafeRequestDiagnosticStore
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +103,7 @@ def compose_openai_services(settings: Settings, redactor: Redactor) -> Executabl
     database.initialize()
     runtime_repositories = RuntimeRepositories.from_database(database)
     recorder = PersistentAttemptRecorder(runtime_repositories.provider_usage)
+    diagnostics = SafeRequestDiagnosticStore(database, redactor=redactor)
 
     proxy_url = (
         settings.openai_proxy_url.get_secret_value()
@@ -117,6 +122,7 @@ def compose_openai_services(settings: Settings, redactor: Redactor) -> Executabl
             proxy_url=proxy_url,
         )
     )
+    worker_pools = RagWorkerPools()
     try:
         return _compose_with_client(
             settings,
@@ -124,10 +130,13 @@ def compose_openai_services(settings: Settings, redactor: Redactor) -> Executabl
             layout,
             runtime_repositories,
             recorder,
+            diagnostics,
             client,
+            worker_pools,
         )
     except Exception:
         _close_failed_client(client)
+        _close_failed_worker_pools(worker_pools)
         raise
 
 
@@ -137,7 +146,9 @@ def _compose_with_client(
     layout: DataLayout,
     runtime_repositories: RuntimeRepositories,
     recorder: PersistentAttemptRecorder,
+    diagnostics: SafeRequestDiagnosticStore,
     client: AsyncOpenAI,
+    worker_pools: RagWorkerPools,
 ) -> ExecutableComposition:
     provider_alias = _provider_alias(settings.openai_base_url)
     embedding_identity = EmbeddingSpaceIdentity(
@@ -200,6 +211,7 @@ def _compose_with_client(
         ),
         upload_max_bytes=settings.upload_max_bytes,
         ocr_languages=settings.ocr_languages,
+        worker_pools=worker_pools,
     )
     try:
         return _compose_qa(
@@ -212,6 +224,8 @@ def _compose_with_client(
             embedding_identity,
             reranking_routes,
             ingestion,
+            diagnostics,
+            worker_pools,
         )
     except Exception:
         ingestion.close()
@@ -228,6 +242,8 @@ def _compose_qa(
     embedding_identity: EmbeddingSpaceIdentity,
     reranking_routes: tuple[RerankingRoute, ...],
     ingestion: IngestionService,
+    diagnostics: SafeRequestDiagnosticStore,
+    worker_pools: RagWorkerPools,
 ) -> ExecutableComposition:
     conversations = ConversationService(runtime_repositories.sessions)
     snapshots = BoundRetrievalSnapshotFactory(layout, ingestion.repositories.index_revisions)
@@ -239,6 +255,7 @@ def _compose_qa(
             router,
             reranker=router if reranking_routes else None,
             settings=settings,
+            worker_pools=worker_pools,
         ),
         generation=router,
         fact_assessor=SemanticFactEvidenceAssessor(
@@ -267,6 +284,12 @@ def _compose_qa(
             return False, "index_unavailable"
         return True, None
 
+    async def close_runtime_resources() -> None:
+        try:
+            await client.close()
+        finally:
+            await worker_pools.aclose()
+
     qa = QARuntimeServices(
         conversations=conversations,
         orchestrator=orchestrator,
@@ -276,9 +299,9 @@ def _compose_qa(
             redactor=redactor,
         ),
         readiness_probe=readiness_probe,
-        close_callback=client.close,
+        close_callback=close_runtime_resources,
     )
-    return ExecutableComposition(ingestion=ingestion, qa=qa)
+    return ExecutableComposition(ingestion=ingestion, qa=qa, diagnostics=diagnostics)
 
 
 def _close_failed_client(client: AsyncOpenAI) -> None:
@@ -296,16 +319,35 @@ def _close_failed_client(client: AsyncOpenAI) -> None:
         task.add_done_callback(_CLEANUP_TASKS.discard)
 
 
+def _close_failed_worker_pools(worker_pools: RagWorkerPools) -> None:
+    async def close_safely() -> None:
+        with suppress(Exception):
+            await worker_pools.aclose()
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        asyncio.run(close_safely())
+    else:
+        task = loop.create_task(close_safely(), name="close-failed-worker-pools")
+        _CLEANUP_TASKS.add(task)
+        task.add_done_callback(_CLEANUP_TASKS.discard)
+
+
 def _qa_budgets(settings: Settings) -> QAStageBudgets:
-    scale = settings.qa_deadline_seconds / 9.5
+    resolved = QALatencyBudgets.from_settings(settings)
     return QAStageBudgets(
-        total_seconds=settings.qa_deadline_seconds,
-        validation_seconds=0.2 * scale,
-        retrieval_seconds=0.8 * scale,
-        rerank_seconds=settings.rerank_deadline_seconds,
-        evidence_assessment_seconds=0.3 * scale,
-        generation_seconds=5.3 * scale,
-        finalization_seconds=0.6 * scale,
+        total_seconds=resolved.total_seconds,
+        validation_seconds=resolved.validation_seconds,
+        retrieval_seconds=(
+            settings.qa_retrieval_budget_seconds
+            if "qa_retrieval_budget_seconds" in settings.model_fields_set
+            else 0.8 * (settings.qa_deadline_seconds / 9.5)
+        ),
+        rerank_seconds=resolved.rerank_seconds,
+        evidence_assessment_seconds=resolved.evidence_assessment_seconds,
+        generation_seconds=resolved.generation_seconds,
+        finalization_seconds=resolved.finalization_seconds,
     )
 
 

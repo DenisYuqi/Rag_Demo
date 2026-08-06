@@ -389,7 +389,7 @@ async def test_interrupted_registered_version_is_replayed_without_v3(tmp_path: P
     command = service._artifacts.load_command(interrupted.job_id)
     job = service.repositories.ingestion_jobs.get(interrupted.job_id)
     assert job is not None
-    prepared, _, duplicate = service._prepare_upload(job, command)
+    prepared, _, duplicate = await service._prepare_upload(job, command)
     assert duplicate is False and prepared.document_version == 2
     assert prepared.status is IngestionJobStatus.PROCESSING
     service.close()

@@ -72,6 +72,26 @@ def test_limit_invariants_are_validated(tmp_path: object) -> None:
         )
 
 
+def test_qa_stage_budgets_are_configurable_and_bounded_by_total(tmp_path: object) -> None:
+    settings = Settings(
+        data_root=tmp_path,
+        qa_generation_budget_seconds=4.5,
+        qa_finalization_budget_seconds=0.5,
+        _env_file=None,
+    )
+
+    assert settings.qa_generation_budget_seconds == 4.5
+    assert settings.qa_finalization_budget_seconds == 0.5
+
+    with pytest.raises(ValidationError):
+        Settings(
+            data_root=tmp_path,
+            qa_generation_budget_seconds=9.0,
+            qa_finalization_budget_seconds=1.0,
+            _env_file=None,
+        )
+
+
 def test_hybrid_rerank_default_requires_configured_model(tmp_path: object) -> None:
     with pytest.raises(ValidationError):
         Settings(

@@ -5,11 +5,12 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING, cast
 
 from fastapi import FastAPI, Request, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
+from prometheus_client import CONTENT_TYPE_LATEST
 
 from rag_mvp.api.documents import router as documents_router
 from rag_mvp.api.errors import install_error_handlers
@@ -28,6 +29,12 @@ from rag_mvp.api.readiness import ReadinessRegistry, StaticReadinessCheck
 from rag_mvp.config.settings import Settings, get_settings
 from rag_mvp.domain.ingestion import IngestionJob
 from rag_mvp.ingestion.service import IngestionService
+from rag_mvp.observability.logging import RequestTraceContextMiddleware, configure_logging
+from rag_mvp.observability.metrics import RAGMetrics
+from rag_mvp.observability.runtime import DiagnosticSink, PipelineTelemetry
+from rag_mvp.observability.tracing import RAGTracer
+from rag_mvp.performance.admission import QAAdmissionController
+from rag_mvp.performance.deadlines import QALatencyBudgets
 from rag_mvp.safety.redactor import DEFAULT_REDACTOR, Redactor
 from rag_mvp.storage.layout import DataLayout
 
@@ -47,15 +54,27 @@ class RuntimeState:
     evaluation_service: EvaluationOperations | None = None
     diagnostics_service: DiagnosticOperations | None = None
     workbench_services: WorkbenchServices | None = None
+    metrics: RAGMetrics = field(default_factory=RAGMetrics)
+    telemetry: PipelineTelemetry | None = None
+    owns_qa_admission: bool = False
     redactor: Redactor | None = DEFAULT_REDACTOR
     accepting_traffic: bool = True
     ingestion_tasks: set[asyncio.Task[IngestionJob]] = field(default_factory=set)
+
+    async def _run_ingestion(self, job_id: str) -> IngestionJob:
+        service = self.ingestion_service
+        if service is None:
+            raise RuntimeError("ingestion_service_unavailable")
+        if self.telemetry is None:
+            return await service.run(job_id)
+        async with self.telemetry.stage("ingestion"):
+            return await service.run(job_id)
 
     async def schedule_ingestion(self, job_id: str) -> None:
         if not self.accepting_traffic or self.ingestion_service is None:
             return
         task = asyncio.create_task(
-            self.ingestion_service.run(job_id),
+            self._run_ingestion(job_id),
             name=f"ingestion-{job_id}",
         )
         self.ingestion_tasks.add(task)
@@ -65,7 +84,9 @@ class RuntimeState:
         self.ingestion_tasks.discard(task)
         if not task.cancelled():
             with suppress(Exception):
-                task.result()
+                job = task.result()
+                if self.telemetry is not None:
+                    self.telemetry.record_ingestion(job)
 
     async def stop_ingestion(self) -> None:
         tasks = tuple(self.ingestion_tasks)
@@ -123,6 +144,39 @@ def _build_runtime(
         )
     if qa_services is not None:
         registry.register(QARuntimeReadinessCheck(qa_services))
+    metrics = RAGMetrics()
+    tracer = RAGTracer()
+    diagnostic_sink = (
+        cast(DiagnosticSink, diagnostics_service)
+        if callable(getattr(diagnostics_service, "save", None))
+        else None
+    )
+    telemetry = PipelineTelemetry(
+        settings,
+        metrics=metrics,
+        tracer=tracer,
+        diagnostics=diagnostic_sink,
+    )
+    owns_qa_admission = False
+    if qa_services is not None:
+        admission = qa_services.admission
+        if admission is None:
+            admission = QAAdmissionController(settings.qa_max_active, settings.qa_max_queue)
+            owns_qa_admission = True
+        effective_telemetry = qa_services.telemetry or telemetry
+        telemetry = effective_telemetry
+        metrics = effective_telemetry.metrics
+        qa_services = replace(
+            qa_services,
+            admission=admission,
+            telemetry=effective_telemetry,
+            latency_budgets=(
+                qa_services.latency_budgets or QALatencyBudgets.from_settings(settings)
+            ),
+        )
+        install_observer = getattr(qa_services.orchestrator, "set_stage_observer", None)
+        if callable(install_observer):
+            install_observer(effective_telemetry)
     return RuntimeState(
         settings=settings,
         layout=layout,
@@ -134,6 +188,9 @@ def _build_runtime(
         evaluation_service=evaluation_service,
         diagnostics_service=diagnostics_service,
         workbench_services=workbench_services,
+        metrics=metrics,
+        telemetry=telemetry,
+        owns_qa_admission=owns_qa_admission,
         redactor=redactor,
     )
 
@@ -156,6 +213,12 @@ def create_app(
     if owns_qa_services and qa_services is None:
         raise ValueError("owned_qa_services_missing")
     resolved_settings = settings or get_settings()
+    configure_logging(
+        service=resolved_settings.service_name,
+        service_version=resolved_settings.service_version,
+        config_version=resolved_settings.configuration_identity,
+        level=resolved_settings.log_level,
+    )
     runtime = _build_runtime(
         resolved_settings,
         ingestion_service=ingestion_service,
@@ -180,7 +243,7 @@ def create_app(
         )
         runtime.workbench_services = configured_workbench_services(
             settings=resolved_settings,
-            qa=qa_services,
+            qa=runtime.qa_services,
             ingestion=ingestion_service,
             diagnostics=diagnostics_gateway,
             redactor=redactor,
@@ -219,6 +282,12 @@ def create_app(
                 await runtime.stop_ingestion()
             finally:
                 try:
+                    if (
+                        runtime.owns_qa_admission
+                        and runtime.qa_services is not None
+                        and runtime.qa_services.admission is not None
+                    ):
+                        await runtime.qa_services.admission.close()
                     if runtime.owns_ingestion_service and runtime.ingestion_service is not None:
                         runtime.ingestion_service.close()
                 finally:
@@ -231,6 +300,7 @@ def create_app(
         lifespan=lifespan,
     )
     app.state.runtime = runtime
+    app.add_middleware(RequestTraceContextMiddleware)
     install_error_handlers(app)
     app.include_router(documents_router)
     app.include_router(qa_router)
@@ -258,6 +328,10 @@ def create_app(
             payload,
             status_code=status.HTTP_200_OK if ready else status.HTTP_503_SERVICE_UNAVAILABLE,
         )
+
+    @app.get("/metrics", tags=["operations"], include_in_schema=False)
+    async def metrics() -> Response:
+        return Response(runtime.metrics.render(), media_type=CONTENT_TYPE_LATEST)
 
     if resolved_settings.workbench_enabled:
         from rag_mvp.ui.workbench import mount_workbench
@@ -301,6 +375,7 @@ def create_executable_app(settings: Settings | None = None) -> FastAPI:
             owns_ingestion_service=True,
             qa_services=composition.qa,
             owns_qa_services=True,
+            diagnostics_service=composition.diagnostics,
             redactor=DEFAULT_REDACTOR,
         )
 

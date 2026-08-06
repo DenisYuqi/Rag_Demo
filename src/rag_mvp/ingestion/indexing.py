@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 from collections.abc import Callable, Mapping, Sequence
+from pathlib import Path
 
 from rag_mvp.domain.ingestion import (
     Chunk,
@@ -13,6 +14,7 @@ from rag_mvp.domain.ingestion import (
 )
 from rag_mvp.ingestion.chunking import CHUNKING_VERSION
 from rag_mvp.ingestion.embedding import EmbeddingStage
+from rag_mvp.performance.worker_pools import RagWorkerPools, default_worker_pools
 from rag_mvp.providers.models import ProviderCallContext
 from rag_mvp.retrieval.bm25 import PersistentBm25Index
 from rag_mvp.retrieval.dense import PersistentChromaIndex
@@ -54,6 +56,7 @@ class RevisionStager:
         chunking_version: str = CHUNKING_VERSION,
         tokenizer: BilingualTokenizer | None = None,
         failure_hook: FailureHook | None = None,
+        worker_pools: RagWorkerPools | None = None,
     ) -> None:
         if not extraction_version or not chunking_version:
             raise ValueError("index_version_invalid")
@@ -64,6 +67,9 @@ class RevisionStager:
         self._chunking_version = chunking_version
         self._tokenizer = tokenizer or BilingualTokenizer()
         self._failure_hook = failure_hook
+        resolved_worker_pools = worker_pools or default_worker_pools()
+        self._chroma_worker_pool = resolved_worker_pools.chroma
+        self._bm25_worker_pool = resolved_worker_pools.bm25
 
     def is_compatible(self, revision: IndexRevision) -> bool:
         return (
@@ -110,48 +116,42 @@ class RevisionStager:
         if _embedding_identity(self._embedding_stage) != self._embedding_space:
             raise IndexingError("embedding_identity_changed")
         created_revision_path = False
-        dense: PersistentChromaIndex | None = None
         try:
             self._layout.index_revisions.mkdir(mode=0o700, parents=True, exist_ok=True)
             revision_path.mkdir(mode=0o700, exist_ok=False)
             created_revision_path = True
 
-            dense = PersistentChromaIndex.create_new(
+            await self._chroma_worker_pool.run_cancel_safe(
+                _write_dense_snapshot,
                 dense_path,
-                revision_id=revision_id,
-                identity=self._embedding_space,
+                revision_id,
+                self._embedding_space,
+                ordered_chunks,
+                embedding_result.vectors,
+                normalized_titles,
             )
-            dense.add(ordered_chunks, embedding_result.vectors, normalized_titles)
-            dense.seal()
-            dense.close()
-            dense = None
             self._run_hook("after_dense")
 
-            lexical = PersistentBm25Index.build(
+            lexical = await self._bm25_worker_pool.run_cancel_safe(
+                _write_lexical_snapshot,
+                lexical_path,
+                revision_id,
                 ordered_chunks,
                 normalized_titles,
-                revision_id=revision_id,
-                tokenizer=self._tokenizer,
+                self._tokenizer,
             )
-            lexical.save_new(lexical_path)
             self._run_hook("after_bm25")
 
-            with PersistentChromaIndex.open_existing(
+            await self._chroma_worker_pool.run_cancel_safe(
+                _validate_written_snapshot,
                 dense_path,
-                revision_id=revision_id,
-                identity=self._embedding_space,
-            ) as reopened_dense:
-                reopened_lexical = PersistentBm25Index.load(
-                    lexical_path,
-                    expected_revision_id=revision_id,
-                )
-                _validate_parity(
-                    expected_ids=expected_ids,
-                    expected_digests=expected_digests,
-                    expected_chunk_set_digest=expected_set_digest,
-                    dense=reopened_dense,
-                    lexical=reopened_lexical,
-                )
+                lexical_path,
+                revision_id,
+                self._embedding_space,
+                expected_ids,
+                expected_digests,
+                expected_set_digest,
+            )
             self._run_hook("after_parity")
 
             return IndexRevision(
@@ -176,10 +176,12 @@ class RevisionStager:
                 ingestion_job_id=ingestion_job_id,
             )
         except BaseException:
-            if dense is not None:
-                dense.close()
             if created_revision_path:
-                shutil.rmtree(revision_path, ignore_errors=True)
+                await self._chroma_worker_pool.run(
+                    shutil.rmtree,
+                    revision_path,
+                    ignore_errors=True,
+                )
             raise
 
     def _run_hook(self, phase: str) -> None:
@@ -304,6 +306,72 @@ class RevisionPublisher:
     def _run_hook(self, phase: str) -> None:
         if self._failure_hook is not None:
             self._failure_hook(phase)
+
+
+def _write_dense_snapshot(
+    dense_path: Path,
+    revision_id: str,
+    identity: EmbeddingSpaceIdentity,
+    chunks: tuple[Chunk, ...],
+    vectors: Sequence[Sequence[float]],
+    titles: Mapping[str, str],
+) -> None:
+    dense: PersistentChromaIndex | None = None
+    try:
+        dense = PersistentChromaIndex.create_new(
+            dense_path,
+            revision_id=revision_id,
+            identity=identity,
+        )
+        dense.add(chunks, vectors, titles)
+        dense.seal()
+    finally:
+        if dense is not None:
+            dense.close()
+
+
+def _write_lexical_snapshot(
+    lexical_path: Path,
+    revision_id: str,
+    chunks: tuple[Chunk, ...],
+    titles: Mapping[str, str],
+    tokenizer: BilingualTokenizer,
+) -> PersistentBm25Index:
+    lexical = PersistentBm25Index.build(
+        chunks,
+        titles,
+        revision_id=revision_id,
+        tokenizer=tokenizer,
+    )
+    lexical.save_new(lexical_path)
+    return lexical
+
+
+def _validate_written_snapshot(
+    dense_path: Path,
+    lexical_path: Path,
+    revision_id: str,
+    identity: EmbeddingSpaceIdentity,
+    expected_ids: frozenset[str],
+    expected_digests: Mapping[str, str],
+    expected_chunk_set_digest: str,
+) -> None:
+    with PersistentChromaIndex.open_existing(
+        dense_path,
+        revision_id=revision_id,
+        identity=identity,
+    ) as reopened_dense:
+        reopened_lexical = PersistentBm25Index.load(
+            lexical_path,
+            expected_revision_id=revision_id,
+        )
+        _validate_parity(
+            expected_ids=expected_ids,
+            expected_digests=expected_digests,
+            expected_chunk_set_digest=expected_chunk_set_digest,
+            dense=reopened_dense,
+            lexical=reopened_lexical,
+        )
 
 
 def _validate_snapshot_inputs(

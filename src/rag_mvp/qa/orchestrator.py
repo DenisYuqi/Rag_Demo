@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import re
 import time
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -28,6 +29,7 @@ from rag_mvp.domain.retrieval import (
     RetrievalMode,
     RetrievalResult,
 )
+from rag_mvp.performance.worker_pools import RagWorkerPools
 from rag_mvp.providers.errors import ProviderError, ProviderOperationError
 from rag_mvp.providers.models import (
     Deadline,
@@ -149,6 +151,18 @@ class FactEvidenceAssessor(Protocol):
     ) -> tuple[FactEvidence, ...]: ...
 
 
+class _TokenUsageLike(Protocol):
+    @property
+    def input_tokens(self) -> int | None: ...
+
+    @property
+    def output_tokens(self) -> int | None: ...
+
+
+class QAStageObserver(Protocol):
+    def stage(self, stage: str) -> AbstractAsyncContextManager[None]: ...
+
+
 @dataclass(frozen=True, slots=True)
 class OrchestratedResponse:
     """Internal complete outcome plus the proof required by the release gate."""
@@ -188,11 +202,15 @@ class SnapshotRetrievalGateway:
         *,
         reranker: RerankingProvider | ModelProviderRouter | None = None,
         settings: Settings | None = None,
+        worker_pools: RagWorkerPools | None = None,
     ) -> None:
+        if worker_pools is not None and not isinstance(worker_pools, RagWorkerPools):
+            raise TypeError("worker_pools must be RagWorkerPools")
         self._snapshots = snapshots
         self._embedding = embedding
         self._reranker = reranker
         self._settings = settings
+        self._worker_pools = worker_pools
 
     async def retrieve(
         self,
@@ -203,7 +221,9 @@ class SnapshotRetrievalGateway:
         cache_policy: CachePolicy,
         deadline: Deadline,
     ) -> RetrievalResult:
-        with self._snapshots.bind() as snapshot:
+        async with self._snapshots.bind_async(
+            self._worker_pools.chroma if self._worker_pools is not None else None
+        ) as snapshot:
             request = RetrievalRequestContext.from_snapshot(
                 request_id=request_id,
                 query=query,
@@ -217,6 +237,7 @@ class SnapshotRetrievalGateway:
                 ProviderCallContext(request_id, "qa-retrieval", deadline),
                 reranker=self._reranker,
                 settings=self._settings,
+                worker_pools=self._worker_pools,
             )
             try:
                 return await service.retrieve(request)
@@ -244,6 +265,7 @@ class QAOrchestrator:
         budgets: QAStageBudgets | None = None,
         deadline_runner: DeadlineRunner | None = None,
         maximum_provider_attempts: int = 2,
+        stage_observer: QAStageObserver | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         if type(maximum_provider_attempts) is not int or maximum_provider_attempts < 1:
@@ -264,7 +286,13 @@ class QAOrchestrator:
         self._budgets = budgets or QAStageBudgets()
         self._deadline_runner = deadline_runner or DeadlineRunner()
         self._maximum_provider_attempts = maximum_provider_attempts
+        self._stage_observer = stage_observer
         self._clock = clock
+
+    def set_stage_observer(self, observer: QAStageObserver | None) -> None:
+        """Attach the process telemetry observer before request traffic starts."""
+
+        self._stage_observer = observer
 
     async def answer(
         self,
@@ -324,47 +352,50 @@ class QAOrchestrator:
             )
             validation_started = self._clock()
             try:
-                try:
-                    session = self._conversations.get_session(session_id, owner_id)
-                except RepositoryError:
-                    raise QARequestError("session_unavailable") from None
-                if session.status is not SessionStatus.ACTIVE:
-                    raise QARequestError("session_unavailable")
-                injection = self._injection_policy.assess_user_input(normalized_question)
-                if injection.requires_refusal:
-                    self._ensure_deadline(validation_deadline)
-                    timings["validation"] = self._elapsed_ms(validation_started)
-                    return OrchestratedResponse._create(
-                        self._refusal(
-                            request_id,
-                            session_id,
-                            language,
-                            RefusalReason.UNSAFE_REQUEST,
-                            (),
-                            timings,
-                            started,
-                            metadata={"input_policy": injection.reason_code or "unsafe_request"},
+                async with self._observe_stage("validation"):
+                    try:
+                        session = self._conversations.get_session(session_id, owner_id)
+                    except RepositoryError:
+                        raise QARequestError("session_unavailable") from None
+                    if session.status is not SessionStatus.ACTIVE:
+                        raise QARequestError("session_unavailable")
+                    injection = self._injection_policy.assess_user_input(normalized_question)
+                    if injection.requires_refusal:
+                        self._ensure_deadline(validation_deadline)
+                        timings["validation"] = self._elapsed_ms(validation_started)
+                        return OrchestratedResponse._create(
+                            self._refusal(
+                                request_id,
+                                session_id,
+                                language,
+                                RefusalReason.UNSAFE_REQUEST,
+                                (),
+                                timings,
+                                started,
+                                metadata={
+                                    "input_policy": injection.reason_code or "unsafe_request"
+                                },
+                            )
                         )
+                    try:
+                        current_turn = self._conversations.append_turn(
+                            session_id,
+                            owner_id,
+                            ConversationRole.USER,
+                            normalized_question,
+                        )
+                        history = tuple(
+                            turn
+                            for turn in self._conversations.list_turns(session_id, owner_id)
+                            if turn.ordinal <= current_turn.ordinal
+                        )
+                    except RepositoryError:
+                        raise QARequestError("session_unavailable") from None
+                    rewrite = self._query_rewriter.prepare(
+                        history,
+                        requested_language=language,
                     )
-                try:
-                    current_turn = self._conversations.append_turn(
-                        session_id,
-                        owner_id,
-                        ConversationRole.USER,
-                        normalized_question,
-                    )
-                    history = tuple(
-                        turn
-                        for turn in self._conversations.list_turns(session_id, owner_id)
-                        if turn.ordinal <= current_turn.ordinal
-                    )
-                except RepositoryError:
-                    raise QARequestError("session_unavailable") from None
-                rewrite = self._query_rewriter.prepare(
-                    history,
-                    requested_language=language,
-                )
-                self._ensure_deadline(validation_deadline)
+                    self._ensure_deadline(validation_deadline)
             finally:
                 timings["validation"] = self._elapsed_ms(validation_started)
 
@@ -500,6 +531,7 @@ class QAOrchestrator:
                         ProviderCallContext(request_id, "qa-generation", deadline),
                     ),
                     reserve_seconds=self._budgets.finalization_seconds,
+                    require_full_budget=True,
                 )
             except ProviderOperationError as error:
                 raise _PipelineFailure(
@@ -523,23 +555,24 @@ class QAOrchestrator:
             )
             finalization_started = self._clock()
             try:
-                parsed = self._answer_parser.parse(
-                    generated.content,
-                    context=context,
-                    expected_revision_id=retrieval_result.diagnostics.index_revision,
-                )
-                grounded = self._grounding_validator.validate(
-                    parsed,
-                    request_id=request_id,
-                    revision_id=retrieval_result.diagnostics.index_revision,
-                    candidates=retrieval_result.evidence,
-                )
-                answer_text = grounded.answer
-                application_suffix = None
-                if decision.kind is EvidenceDecisionKind.PARTIAL:
-                    application_suffix = _PARTIAL_MESSAGES[language]
-                    answer_text = f"{answer_text.rstrip()}\n\n{application_suffix}"
-                self._ensure_deadline(finalization_deadline)
+                async with self._observe_stage("finalization"):
+                    parsed = self._answer_parser.parse(
+                        generated.content,
+                        context=context,
+                        expected_revision_id=retrieval_result.diagnostics.index_revision,
+                    )
+                    grounded = self._grounding_validator.validate(
+                        parsed,
+                        request_id=request_id,
+                        revision_id=retrieval_result.diagnostics.index_revision,
+                        candidates=retrieval_result.evidence,
+                    )
+                    answer_text = grounded.answer
+                    application_suffix = None
+                    if decision.kind is EvidenceDecisionKind.PARTIAL:
+                        application_suffix = _PARTIAL_MESSAGES[language]
+                        answer_text = f"{answer_text.rstrip()}\n\n{application_suffix}"
+                    self._ensure_deadline(finalization_deadline)
             except (StructuredAnswerError, GroundingValidationError):
                 raise _PipelineFailure(QAErrorCode.DEPENDENCY_FAILURE) from None
             finally:
@@ -670,26 +703,45 @@ class QAOrchestrator:
         operation: Callable[[Deadline], Awaitable[T]],
         *,
         reserve_seconds: float = 0,
+        require_full_budget: bool = False,
     ) -> T:
-        deadline = self._child_deadline(root_deadline, budget_seconds, reserve_seconds)
+        deadline = self._child_deadline(
+            root_deadline,
+            budget_seconds,
+            reserve_seconds,
+            require_full_budget=require_full_budget,
+        )
         started = self._clock()
         try:
-            return await self._deadline_runner.run(
-                lambda: operation(deadline),
-                deadline=deadline,
-            )
+            async with self._observe_stage(name):
+                return await self._deadline_runner.run(
+                    lambda: operation(deadline),
+                    deadline=deadline,
+                )
         except TimeoutError:
             raise _DeadlineExpired from None
         finally:
             timings[name] = self._elapsed_ms(started)
+
+    @asynccontextmanager
+    async def _observe_stage(self, name: str) -> AsyncIterator[None]:
+        if self._stage_observer is None:
+            yield
+            return
+        async with self._stage_observer.stage(name):
+            yield
 
     def _child_deadline(
         self,
         root: Deadline,
         budget_seconds: float,
         reserve_seconds: float = 0,
+        *,
+        require_full_budget: bool = False,
     ) -> Deadline:
         current = self._clock()
+        if require_full_budget and root.expires_at - current < budget_seconds + reserve_seconds:
+            raise _DeadlineExpired
         expires_at = min(current + budget_seconds, root.expires_at - reserve_seconds)
         if expires_at <= current:
             raise _DeadlineExpired
@@ -862,20 +914,33 @@ class QAOrchestrator:
         stage_timings = {**timings, "total": self._elapsed_ms(started)}
         cache_status: dict[str, str] = {}
         model_identities: dict[str, str] = {}
+        token_counts: dict[str, int] = {}
         degradation: list[str] = []
         metadata: dict[str, str | int | float | bool | None] = dict(extra_metadata or {})
         if retrieval is not None:
             diagnostics = retrieval.diagnostics
+            for stage, duration_ms in diagnostics.stage_timings_ms.items():
+                if stage != "total":
+                    stage_timings.setdefault(stage, duration_ms)
             cache_status = {
                 name: outcome.value for name, outcome in diagnostics.cache_status.items()
             }
             model_identities.update(diagnostics.provider_identities)
+            for role, usage in diagnostics.provider_usage.items():
+                _merge_token_counts(token_counts, role, usage)
             degradation.extend(diagnostics.degradation_reasons)
             metadata.update(
                 {
                     "index_revision": diagnostics.index_revision,
                     "requested_mode": diagnostics.requested_mode.value,
                     "effective_mode": diagnostics.effective_mode.value,
+                    "dense_candidate_count": diagnostics.candidate_counts.get("dense", 0),
+                    "lexical_candidate_count": diagnostics.candidate_counts.get("bm25", 0),
+                    "fused_candidate_count": diagnostics.candidate_counts.get("fused", 0),
+                    "reranked_candidate_count": diagnostics.candidate_counts.get("reranked", 0),
+                    "candidate_count": diagnostics.candidate_counts.get(
+                        "final", len(retrieval.evidence)
+                    ),
                 }
             )
         if generation is not None and isinstance(generation.value, GenerationResult):
@@ -885,14 +950,21 @@ class QAOrchestrator:
             )
             metadata["generation_attempts"] = len(generation.attempts)
             metadata["generation_fallback"] = generation.used_fallback
+            if generation.attempts:
+                for attempt in generation.attempts:
+                    _merge_token_counts(token_counts, "generation", attempt.usage)
+            else:
+                _merge_token_counts(token_counts, "generation", generation.value.usage)
         if decision is not None:
             metadata["decision_code"] = decision.code.value
             metadata["refusal_policy_version"] = decision.policy_version
+            metadata["context_count"] = len(decision.citation_chunk_ids)
         degradation.extend(extra_degradation)
         return SafeQADiagnostics(
             stage_timings_ms=stage_timings,
             cache_status=cache_status,
             model_identities=model_identities,
+            token_counts=token_counts,
             degradation_reasons=tuple(dict.fromkeys(degradation)),
             metadata=metadata,
         )
@@ -907,3 +979,19 @@ class _PipelineFailure(RuntimeError):
         self.code = code
         self.retryable = retryable
         super().__init__(code.value)
+
+
+def _merge_token_counts(
+    target: dict[str, int],
+    role: str,
+    usage: _TokenUsageLike,
+) -> None:
+    normalized_role = "reranking" if role == "reranker" else role
+    if usage.input_tokens is not None:
+        target[f"{normalized_role}-input"] = (
+            target.get(f"{normalized_role}-input", 0) + usage.input_tokens
+        )
+    if usage.output_tokens is not None:
+        target[f"{normalized_role}-output"] = (
+            target.get(f"{normalized_role}-output", 0) + usage.output_tokens
+        )

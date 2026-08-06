@@ -75,6 +75,7 @@ class SafeQADiagnostics(DomainModel):
     stage_timings_ms: dict[str, NonNegativeFiniteFloat] = Field(default_factory=dict)
     cache_status: dict[str, str] = Field(default_factory=dict)
     model_identities: dict[str, str] = Field(default_factory=dict)
+    token_counts: dict[str, Annotated[int, Field(ge=0)]] = Field(default_factory=dict)
     degradation_reasons: tuple[str, ...] = ()
     metadata: dict[str, SafeScalar] = Field(default_factory=dict)
 

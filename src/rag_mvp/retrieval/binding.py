@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from types import MappingProxyType, TracebackType
 from typing import Self
 
 from rag_mvp.domain.ingestion import DocumentKind, IndexRevision, IndexRevisionStatus
+from rag_mvp.performance.worker_pools import BoundedWorkerPool, default_worker_pools
 from rag_mvp.retrieval.bm25 import LexicalIndexError, PersistentBm25Index
 from rag_mvp.retrieval.dense import DenseIndexError, PersistentChromaIndex
 from rag_mvp.retrieval.request import RetrievalRequestError
@@ -16,6 +18,12 @@ from rag_mvp.storage.layout import DataLayout, UnsafeDataPathError
 from rag_mvp.storage.repositories import DocumentRepository, IndexRevisionRepository
 
 _BOUND_PROOF = object()
+
+
+def default_chroma_worker_pool() -> BoundedWorkerPool:
+    """Return the process-level bounded fallback used before runtime composition."""
+
+    return default_worker_pools().chroma
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,6 +200,24 @@ class BoundRetrievalSnapshotFactory:
 
     def bind(self) -> BoundRetrievalSnapshot:
         return BoundRetrievalSnapshot.bind_active(self.layout, self.revisions)
+
+    @asynccontextmanager
+    async def bind_async(
+        self,
+        worker_pool: BoundedWorkerPool | None = None,
+    ) -> AsyncIterator[BoundRetrievalSnapshot]:
+        """Open synchronous index handles without blocking the event loop.
+
+        Injected pools remain owned by application composition. The fallback is a
+        bounded process-level pool and is never created per request.
+        """
+
+        pool = worker_pool or default_chroma_worker_pool()
+        snapshot = await pool.run(self.bind)
+        try:
+            yield snapshot
+        finally:
+            await pool.run(snapshot.close)
 
     def open_committed(self, revision_id: str) -> BoundRetrievalSnapshot:
         return BoundRetrievalSnapshot.open_committed(

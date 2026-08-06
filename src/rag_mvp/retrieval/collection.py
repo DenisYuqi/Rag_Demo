@@ -9,9 +9,13 @@ from dataclasses import dataclass
 from typing import Protocol, cast
 
 from rag_mvp.domain.retrieval import RetrievalCandidate
+from rag_mvp.performance.worker_pools import BoundedWorkerPool
 from rag_mvp.providers.errors import ProviderError, ProviderOperationError
 from rag_mvp.providers.models import ModelAttempt, TokenUsage
-from rag_mvp.retrieval.bm25 import LexicalIndexError
+from rag_mvp.retrieval.bm25 import (
+    LexicalIndexError,
+    default_bm25_worker_pool,
+)
 from rag_mvp.retrieval.dense import DenseIndexError
 from rag_mvp.retrieval.fusion import merge_ranked_candidates, validate_ranked_channel
 from rag_mvp.retrieval.query_dense import DenseSearchResult
@@ -56,12 +60,19 @@ class _TimedChannelError(Exception):
 class BoundBm25Retriever:
     """Expose the captured BM25 snapshot through the revision-bound protocol."""
 
-    def __init__(self, snapshot: object) -> None:
+    def __init__(
+        self,
+        snapshot: object,
+        *,
+        worker_pool: BoundedWorkerPool | None = None,
+    ) -> None:
         from rag_mvp.retrieval.binding import BoundRetrievalSnapshot
 
         if not isinstance(snapshot, BoundRetrievalSnapshot) or snapshot.is_closed:
             raise ValueError("invalid_snapshot_binding")
         self._snapshot = snapshot
+        self._worker_pool = worker_pool or default_bm25_worker_pool()
+        self._snapshot.bm25.configure_worker_pool(self._worker_pool)
 
     @property
     def revision_id(self) -> str:

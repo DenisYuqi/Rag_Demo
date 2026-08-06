@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Annotated, Any, Protocol, cast
 from uuid import uuid4
@@ -24,6 +25,20 @@ from rag_mvp.domain.qa import (
     ValidatedStreamEvent,
 )
 from rag_mvp.domain.retrieval import CachePolicy, RetrievalMode
+from rag_mvp.observability.logging import current_correlation_context
+from rag_mvp.observability.runtime import PipelineTelemetry, RequestObservation
+from rag_mvp.performance.admission import (
+    AdmissionClosedError,
+    AdmissionLease,
+    AdmissionRejectedError,
+    QAAdmissionController,
+)
+from rag_mvp.performance.deadlines import (
+    DeadlineController,
+    DeadlineExceededError,
+    QALatencyBudgets,
+    StageDeadlineExceededError,
+)
 from rag_mvp.qa.orchestrator import OrchestratedResponse
 from rag_mvp.qa.query_rewrite import select_response_language
 from rag_mvp.qa.sessions import ConversationService
@@ -65,6 +80,9 @@ class QARuntimeServices:
     emitter: QAEventEmitter
     readiness_probe: Callable[[], tuple[bool, str | None]] | None = None
     close_callback: Callable[[], Awaitable[None]] | None = None
+    admission: QAAdmissionController | None = None
+    telemetry: PipelineTelemetry | None = None
+    latency_budgets: QALatencyBudgets | None = None
 
     def check_readiness(self) -> tuple[bool, str | None]:
         try:
@@ -251,41 +269,178 @@ async def stream_qa_events(
     requested_language: str | None,
     response_language: str,
     redactor: Redactor,
+    cache_policy: CachePolicy | str = CachePolicy.USE,
+    deadline_controller: DeadlineController | None = None,
 ) -> AsyncIterator[bytes]:
-    events: tuple[ValidatedStreamEvent, ...]
-    try:
-        outcome = await services.orchestrator.run(
-            request_id=request_id,
-            session_id=session_id,
-            owner_id=owner_id,
-            question=question,
-            mode=mode,
-            requested_language=requested_language,
-            cache_policy=CachePolicy.USE,
-        )
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        events = (
-            _safe_failure_event(
-                request_id,
-                session_id,
-                response_language,
-                error_code=QAErrorCode.INTERNAL,
-                retryable=False,
-            ),
-        )
-    else:
+    resolved_cache_policy = CachePolicy(cache_policy)
+    deadline = deadline_controller
+    if deadline is None and services.latency_budgets is not None:
+        deadline = DeadlineController(services.latency_budgets)
+    async with _observation(services.telemetry, request_id) as observation:
         try:
-            raw_events = services.emitter.emit(outcome, owner_id=owner_id)
-            events = _validated_events(
-                raw_events,
+
+            async def operation() -> tuple[tuple[ValidatedStreamEvent, ...], float]:
+                return await _produce_validated_events(
+                    services,
+                    request_id=request_id,
+                    session_id=session_id,
+                    owner_id=owner_id,
+                    question=question,
+                    mode=mode,
+                    requested_language=requested_language,
+                    response_language=response_language,
+                    redactor=redactor,
+                    cache_policy=resolved_cache_policy,
+                    deadline=deadline,
+                )
+
+            if deadline is None:
+                events, queue_duration_ms = await operation()
+            else:
+                events, queue_duration_ms = await deadline.run_remaining(operation)
+        except DeadlineExceededError:
+            events = (
+                _safe_failure_event(
+                    request_id,
+                    session_id,
+                    response_language,
+                    error_code=QAErrorCode.DEADLINE_EXPIRED,
+                    retryable=True,
+                ),
+            )
+            queue_duration_ms = 0.0
+        if queue_duration_ms > 0:
+            events = tuple(_with_queue_timing(event, queue_duration_ms) for event in events)
+        if observation is not None:
+            observation.complete(events[0])
+
+    for event in events:
+        yield f"{event.model_dump_json(exclude_none=True)}\n".encode()
+
+
+async def _produce_validated_events(
+    services: QARuntimeServices,
+    *,
+    request_id: str,
+    session_id: str,
+    owner_id: str,
+    question: str,
+    mode: RetrievalMode | str,
+    requested_language: str | None,
+    response_language: str,
+    redactor: Redactor,
+    cache_policy: CachePolicy,
+    deadline: DeadlineController | None,
+) -> tuple[tuple[ValidatedStreamEvent, ...], float]:
+    admission = services.admission
+    lease = None
+    active_recorded = False
+    queue_started = asyncio.get_running_loop().time()
+    try:
+        if admission is not None:
+            try:
+
+                async def acquire() -> AdmissionLease:
+                    return await admission.acquire()
+
+                if services.telemetry is not None:
+                    services.telemetry.metrics.set_queue_depth(admission.queued_count)
+                    async with services.telemetry.stage("queue"):
+                        lease = (
+                            await deadline.run_required("queue", acquire)
+                            if deadline is not None
+                            else await admission.acquire()
+                        )
+                else:
+                    lease = (
+                        await deadline.run_required("queue", acquire)
+                        if deadline is not None
+                        else await admission.acquire()
+                    )
+            except StageDeadlineExceededError:
+                if services.telemetry is not None:
+                    services.telemetry.metrics.record_queue_rejection("capacity")
+                return (
+                    (
+                        _safe_failure_event(
+                            request_id,
+                            session_id,
+                            response_language,
+                            error_code=QAErrorCode.CAPACITY,
+                            retryable=True,
+                        ),
+                    ),
+                    max(
+                        0.0,
+                        (asyncio.get_running_loop().time() - queue_started) * 1_000,
+                    ),
+                )
+        queue_duration_ms = max(
+            0.0,
+            (asyncio.get_running_loop().time() - queue_started) * 1_000,
+        )
+        if services.telemetry is not None:
+            services.telemetry.metrics.pipeline_started()
+            active_recorded = True
+
+        async def run_orchestrator() -> OrchestratedResponse:
+            return await services.orchestrator.run(
                 request_id=request_id,
                 session_id=session_id,
-                response_language=response_language,
-                redactor=redactor,
+                owner_id=owner_id,
+                question=question,
+                mode=mode,
+                requested_language=requested_language,
+                cache_policy=cache_policy,
             )
+
+        outcome = (
+            await deadline.run_remaining(run_orchestrator)
+            if deadline is not None
+            else await run_orchestrator()
+        )
+        try:
+            if services.telemetry is None:
+                raw_events = services.emitter.emit(outcome, owner_id=owner_id)
+                events = _validated_events(
+                    raw_events,
+                    request_id=request_id,
+                    session_id=session_id,
+                    response_language=response_language,
+                    redactor=redactor,
+                )
+            else:
+                async with (
+                    services.telemetry.stage("safety"),
+                    services.telemetry.stage("redaction"),
+                ):
+                    raw_events = (
+                        deadline.run_sync_required(
+                            "redaction",
+                            lambda: services.emitter.emit(outcome, owner_id=owner_id),
+                        )
+                        if deadline is not None
+                        else services.emitter.emit(outcome, owner_id=owner_id)
+                    )
+                async with services.telemetry.stage("serialization"):
+
+                    def serialize() -> tuple[ValidatedStreamEvent, ...]:
+                        return _validated_events(
+                            raw_events,
+                            request_id=request_id,
+                            session_id=session_id,
+                            response_language=response_language,
+                            redactor=redactor,
+                        )
+
+                    events = (
+                        deadline.run_sync_required("serialization", serialize)
+                        if deadline is not None
+                        else serialize()
+                    )
         except asyncio.CancelledError:
+            raise
+        except DeadlineExceededError:
             raise
         except Exception:
             events = (
@@ -297,9 +452,77 @@ async def stream_qa_events(
                     retryable=True,
                 ),
             )
+        return events, queue_duration_ms
+    except asyncio.CancelledError:
+        raise
+    except (AdmissionRejectedError, AdmissionClosedError):
+        if services.telemetry is not None:
+            services.telemetry.metrics.record_queue_rejection(
+                "shutdown"
+                if isinstance(admission, QAAdmissionController) and admission.closed
+                else "capacity"
+            )
+        return (
+            (
+                _safe_failure_event(
+                    request_id,
+                    session_id,
+                    response_language,
+                    error_code=QAErrorCode.CAPACITY,
+                    retryable=True,
+                ),
+            ),
+            max(0.0, (asyncio.get_running_loop().time() - queue_started) * 1_000),
+        )
+    except DeadlineExceededError:
+        raise
+    except Exception:
+        return (
+            (
+                _safe_failure_event(
+                    request_id,
+                    session_id,
+                    response_language,
+                    error_code=QAErrorCode.INTERNAL,
+                    retryable=False,
+                ),
+            ),
+            max(0.0, (asyncio.get_running_loop().time() - queue_started) * 1_000),
+        )
+    finally:
+        if active_recorded and services.telemetry is not None:
+            services.telemetry.metrics.pipeline_finished()
+        if lease is not None:
+            await lease.release()
+        if admission is not None and services.telemetry is not None:
+            services.telemetry.metrics.set_queue_depth(admission.queued_count)
 
-    for event in events:
-        yield f"{event.model_dump_json(exclude_none=True)}\n".encode()
+
+@asynccontextmanager
+async def _observation(
+    telemetry: PipelineTelemetry | None,
+    request_id: str,
+) -> AsyncIterator[RequestObservation | None]:
+    if telemetry is None:
+        yield None
+        return
+    async with telemetry.request(request_id) as observation:
+        yield observation
+
+
+def _with_queue_timing(
+    event: ValidatedStreamEvent,
+    duration_ms: float,
+) -> ValidatedStreamEvent:
+    diagnostics = event.diagnostics.model_copy(
+        update={
+            "stage_timings_ms": {
+                **event.diagnostics.stage_timings_ms,
+                "queue": duration_ms,
+            }
+        }
+    )
+    return event.model_copy(update={"diagnostics": diagnostics})
 
 
 @router.post(
@@ -314,6 +537,11 @@ async def answer_question(
     services: Annotated[QARuntimeServices, Depends(_require_qa)],
 ) -> _NDJSONStreamingResponse:
     runtime = _runtime(request)
+    deadline = (
+        DeadlineController(services.latency_budgets)
+        if services.latency_budgets is not None
+        else None
+    )
     session_id = payload.session_id
     if session_id is None:
         try:
@@ -322,8 +550,14 @@ async def answer_question(
             raise ApiError(status.HTTP_503_SERVICE_UNAVAILABLE, "qa_unavailable") from None
     if re.fullmatch(SESSION_ID_PATTERN, session_id) is None:
         raise ApiError(status.HTTP_503_SERVICE_UNAVAILABLE, "qa_unavailable")
-    request_id = f"request_{uuid4().hex}"
+    correlation = current_correlation_context()
+    request_id = correlation.request_id if correlation is not None else f"request_{uuid4().hex}"
     mode = payload.mode or runtime.settings.default_retrieval_mode
+    cache_policy_header = request.headers.get("x-rag-cache-policy", CachePolicy.USE.value)
+    try:
+        cache_policy = CachePolicy(cache_policy_header)
+    except ValueError:
+        raise ApiError(status.HTTP_422_UNPROCESSABLE_CONTENT, "cache_policy_invalid") from None
     try:
         response_language = select_response_language(
             payload.question,
@@ -341,6 +575,8 @@ async def answer_question(
         requested_language=payload.requested_language,
         response_language=response_language,
         redactor=cast(Redactor, runtime.redactor),
+        cache_policy=cache_policy,
+        deadline_controller=deadline,
     )
     return _NDJSONStreamingResponse(
         stream,

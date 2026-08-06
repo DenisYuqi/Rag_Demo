@@ -22,7 +22,8 @@ from rag_mvp.domain.retrieval import (
     RetrievalMode,
     RetrievalResult,
 )
-from rag_mvp.providers.models import ProviderCallContext, TokenUsage
+from rag_mvp.performance.worker_pools import RagWorkerPools
+from rag_mvp.providers.models import ModelAttempt, ProviderCallContext, TokenUsage
 from rag_mvp.providers.protocols import EmbeddingProvider, RerankingProvider
 from rag_mvp.providers.routing import ModelProviderRouter
 from rag_mvp.retrieval.binding import BoundRetrievalSnapshot
@@ -101,7 +102,7 @@ class _RetrievalStages:
     effective_mode: RetrievalMode
     timings: dict[str, float]
     embedding_usage: TokenUsage | None = None
-    embedding_attempt_count: int = 0
+    embedding_attempts: tuple[ModelAttempt, ...] = ()
 
 
 class RetrievalService:
@@ -166,6 +167,7 @@ class RetrievalService:
         rerank_deadline_seconds: float | None = None,
         allow_single_retriever_degradation: bool | None = None,
         owns_snapshot: bool = False,
+        worker_pools: RagWorkerPools | None = None,
     ) -> RetrievalService:
         """Compose the production service around one validated immutable snapshot."""
 
@@ -177,6 +179,8 @@ class RetrievalService:
             raise ValueError("owns_snapshot_invalid")
         if settings is not None and not isinstance(settings, Settings):
             raise TypeError("settings must be Settings")
+        if worker_pools is not None and not isinstance(worker_pools, RagWorkerPools):
+            raise TypeError("worker_pools must be RagWorkerPools")
         if settings is not None and settings.retrieval_cache_enabled:
             raise ValueError("retrieval_cache_not_implemented")
         if settings is not None and reranker is not None and settings.reranking_model is None:
@@ -227,8 +231,16 @@ class RetrievalService:
             else False
         )
         service = cls(
-            dense=BoundDenseRetriever(snapshot, embedding, provider_context),
-            lexical=BoundBm25Retriever(snapshot),
+            dense=BoundDenseRetriever(
+                snapshot,
+                embedding,
+                provider_context,
+                worker_pool=worker_pools.chroma if worker_pools is not None else None,
+            ),
+            lexical=BoundBm25Retriever(
+                snapshot,
+                worker_pool=worker_pools.bm25 if worker_pools is not None else None,
+            ),
             limits=resolved_limits,
             rrf=resolved_rrf,
             rerank_deadline_seconds=resolved_budget,
@@ -310,13 +322,17 @@ class RetrievalService:
         }
         identities = self._provider_identities(mode, stages.rerank)
         usage: dict[str, DiagnosticTokenUsage] = {}
-        if stages.embedding_usage is not None:
+        if stages.embedding_attempts:
+            usage["embedding"] = _aggregate_attempt_usage(stages.embedding_attempts)
+        elif stages.embedding_usage is not None:
             usage["embedding"] = _diagnostic_usage(stages.embedding_usage)
-        if stages.rerank is not None and stages.rerank.usage is not None:
+        if stages.rerank is not None and stages.rerank.attempts:
+            usage["reranker"] = _aggregate_attempt_usage(stages.rerank.attempts)
+        elif stages.rerank is not None and stages.rerank.usage is not None:
             usage["reranker"] = _diagnostic_usage(stages.rerank.usage)
         attempt_counts: dict[str, int] = {}
-        if stages.embedding_attempt_count:
-            attempt_counts["embedding"] = stages.embedding_attempt_count
+        if stages.embedding_attempts:
+            attempt_counts["embedding"] = len(stages.embedding_attempts)
         if stages.rerank is not None:
             attempt_counts["reranker"] = len(stages.rerank.attempts)
         diagnostics = RetrievalDiagnostics(
@@ -375,7 +391,7 @@ class RetrievalService:
                     "retrieval": max(0.0, (time.monotonic() - started) * 1000),
                 },
                 embedding_usage=detailed.usage,
-                embedding_attempt_count=len(detailed.attempts),
+                embedding_attempts=detailed.attempts,
             )
 
         try:
@@ -458,7 +474,7 @@ class RetrievalService:
                 "rerank": rerank_ms,
             },
             embedding_usage=collection.embedding_usage,
-            embedding_attempt_count=len(collection.embedding_attempts),
+            embedding_attempts=collection.embedding_attempts,
         )
 
     async def _retrieve_legacy(self, context: RetrievalRequestContext) -> _RetrievalStages:
@@ -767,6 +783,19 @@ def _diagnostic_usage(usage: TokenUsage) -> DiagnosticTokenUsage:
         input_tokens=usage.input_tokens,
         output_tokens=usage.output_tokens,
         total_tokens_reported=usage.total_tokens,
+    )
+
+
+def _aggregate_attempt_usage(
+    attempts: tuple[ModelAttempt, ...],
+) -> DiagnosticTokenUsage:
+    input_values = [attempt.usage.input_tokens for attempt in attempts]
+    output_values = [attempt.usage.output_tokens for attempt in attempts]
+    input_tokens = sum(value for value in input_values if value is not None)
+    output_tokens = sum(value for value in output_values if value is not None)
+    return DiagnosticTokenUsage(
+        input_tokens=input_tokens if any(value is not None for value in input_values) else None,
+        output_tokens=output_tokens if any(value is not None for value in output_values) else None,
     )
 
 

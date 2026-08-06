@@ -10,6 +10,11 @@ from numbers import Real
 from typing import Protocol, cast
 
 from rag_mvp.domain.retrieval import RetrievalCandidate
+from rag_mvp.performance.worker_pools import (
+    BoundedWorkerPool,
+    WorkerPoolClosedError,
+    WorkerPoolSaturatedError,
+)
 from rag_mvp.providers.errors import ProviderOperationError
 from rag_mvp.providers.models import (
     EmbeddingRequest,
@@ -22,7 +27,10 @@ from rag_mvp.providers.models import (
 )
 from rag_mvp.providers.protocols import EmbeddingProvider
 from rag_mvp.providers.routing import ModelProviderRouter
-from rag_mvp.retrieval.binding import BoundRetrievalSnapshot
+from rag_mvp.retrieval.binding import (
+    BoundRetrievalSnapshot,
+    default_chroma_worker_pool,
+)
 from rag_mvp.retrieval.dense import DenseIndexError
 from rag_mvp.retrieval.identity import (
     EmbeddingIdentityError,
@@ -49,6 +57,8 @@ class BoundDenseRetriever:
         snapshot: BoundRetrievalSnapshot,
         embedding: EmbeddingProvider | ModelProviderRouter,
         context: ProviderCallContext,
+        *,
+        worker_pool: BoundedWorkerPool | None = None,
     ) -> None:
         if not isinstance(snapshot, BoundRetrievalSnapshot) or snapshot.is_closed:
             raise DenseIndexError("invalid_snapshot_binding")
@@ -57,6 +67,7 @@ class BoundDenseRetriever:
         self._snapshot = snapshot
         self._embedding = embedding
         self._context = context
+        self._worker_pool = worker_pool or default_chroma_worker_pool()
         try:
             self._required_provider_identity = provider_embedding_identity(
                 snapshot.revision.embedding_space
@@ -139,11 +150,19 @@ class BoundDenseRetriever:
             (self._context.deadline.clock() - embedding_started) * 1000,
         )
         index_started = self._context.deadline.clock()
-        candidates = self._snapshot.dense.query(
-            vector,
-            query_identity=self._snapshot.revision.embedding_space,
-            limit=limit,
-        )
+        try:
+            candidates = await self._worker_pool.run_cancel_safe(
+                self._snapshot.dense.query,
+                vector,
+                query_identity=self._snapshot.revision.embedding_space,
+                limit=limit,
+            )
+        except asyncio.CancelledError:
+            raise
+        except DenseIndexError:
+            raise
+        except (WorkerPoolClosedError, WorkerPoolSaturatedError):
+            raise DenseIndexError("dense_query_unavailable") from None
         return DenseSearchResult(
             candidates=candidates,
             embedding_elapsed_ms=embedding_elapsed_ms,
