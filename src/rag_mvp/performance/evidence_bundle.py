@@ -358,7 +358,7 @@ def build_performance_evidence_bundle(
     if _model_identity_mismatch(report.attempts, identity.model_identities):
         extra_invalid_reasons.append("model-identity-mismatch")
     invalid_reasons = tuple(dict.fromkeys((*report.invalid_reasons, *extra_invalid_reasons)))
-    failure_reasons = tuple(dict.fromkeys((*report.failure_reasons, *extra_invalid_reasons)))
+    failure_reasons = tuple(dict.fromkeys((*invalid_reasons, *report.failure_reasons)))
     valid = not invalid_reasons
     passed = valid and report.passed
 

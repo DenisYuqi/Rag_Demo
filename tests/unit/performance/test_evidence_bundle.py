@@ -991,6 +991,36 @@ def test_unverifiable_http_attempt_forces_token_and_cost_incompleteness() -> Non
     validate_performance_evidence_bundle(bundle)
 
 
+def test_threshold_failure_with_incomplete_cost_evidence_builds_bundle() -> None:
+    report = _accepted_report()
+    failed_attempts = tuple(
+        _attempt(index, status=LoadAttemptStatus.TERMINAL_ERROR).model_copy(
+            update={"provider_evidence_complete": False}
+        )
+        for index in range(501, 510)
+    )
+    report = _with_attempts(report, (*report.attempts, *failed_attempts))
+
+    bundle = build_performance_evidence_bundle(
+        report,
+        identity=_identity(),
+        references=_references(),
+        cost=_cost(report),
+        generated_at=_START,
+    )
+
+    decision = bundle["decision"]
+    assert isinstance(decision, dict)
+    assert report.success_count == 500
+    assert report.error_count == 9
+    assert decision["invalid_reasons"] == ["cost-evidence-incomplete"]
+    assert decision["failure_reasons"] == [
+        "cost-evidence-incomplete",
+        "error-rate-threshold-not-met",
+    ]
+    validate_performance_evidence_bundle(bundle)
+
+
 def test_provider_free_success_keeps_complete_evidence_when_other_calls_are_priced() -> None:
     report = _accepted_report()
     values = report.attempts[0].model_dump()

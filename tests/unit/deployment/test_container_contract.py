@@ -109,6 +109,18 @@ def test_compose_has_one_hardened_loopback_application_service() -> None:
     assert "target: /var/lib/rag-mvp" in compose
     assert "RAG_MVP_OPENAI_API_KEY_FILE: /run/secrets/openai_api_key" in compose
     assert "RAG_MVP_OPENAI_API_KEY:" not in compose
+    for setting in (
+        "RAG_MVP_PROVIDER_TIMEOUT_SECONDS",
+        "RAG_MVP_PROVIDER_RETRY_LIMIT",
+        "RAG_MVP_QA_DEADLINE_SECONDS",
+        "RAG_MVP_QA_RETRIEVAL_BUDGET_SECONDS",
+        "RAG_MVP_QA_EMBEDDING_BUDGET_SECONDS",
+        "RAG_MVP_QA_EVIDENCE_ASSESSMENT_BUDGET_SECONDS",
+        "RAG_MVP_QA_GENERATION_BUDGET_SECONDS",
+        "RAG_MVP_QA_FINALIZATION_BUDGET_SECONDS",
+    ):
+        assert setting in compose
+        assert setting in _read_repository_file(".env.example")
     assert "RAG_MVP_TELEMETRY_EXPORTER:" in compose
     assert "RAG_MVP_TELEMETRY_OTLP_TRACES_ENDPOINT:" in compose
     assert "RAG_MVP_SERVER_SHUTDOWN_GRACE_SECONDS:" in compose
