@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.sdk.trace.id_generator import RandomIdGenerator
 
 from rag_mvp.api.app import RuntimeState, create_app
 from rag_mvp.api.qa import QARuntimeServices
@@ -46,6 +47,11 @@ RAW_EMAIL = "person@example.com"
 RAW_SECRET = "password=correct-horse-battery-staple"
 RAW_QUESTION = f"Private observability question for {RAW_EMAIL}; {RAW_SECRET}"
 RAW_ANSWER = f"Unredacted policy answer for {RAW_EMAIL}."
+
+
+class _FixedTraceIdGenerator(RandomIdGenerator):
+    def generate_trace_id(self) -> int:
+        return int(TRACE_ID, 16)
 
 
 class ObservableOrchestrator:
@@ -92,7 +98,10 @@ class ObservableOrchestrator:
                 "generation": 6.0,
             },
             cache_status={"retrieval": "bypass"},
-            model_identities={"generation": f"chat-model {RAW_EMAIL}"},
+            model_identities={
+                "generation": f"chat-model {RAW_EMAIL}",
+                "embedding": "openai/text-embedding-3-small/adapter-v1",
+            },
             token_counts={"generation-input": 12, "generation-output": 4},
             metadata={
                 "index_revision": "revision-observability",
@@ -155,7 +164,7 @@ def _harness(tmp_path: Path) -> tuple[FastAPI, ObservabilityHarness]:
     assert runtime.telemetry is not None
 
     exporter = InMemorySpanExporter()
-    provider = TracerProvider()
+    provider = TracerProvider(id_generator=_FixedTraceIdGenerator())
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     runtime.telemetry.tracer = RAGTracer(provider.get_tracer("observability-integration"))
     return app, ObservabilityHarness(settings, runtime, diagnostics, logs, exporter)
@@ -205,8 +214,14 @@ def test_qa_telemetry_is_correlated_across_all_surfaces_and_content_free(
     }.issubset(spans_by_name)
     root = spans_by_name["rag.request"]
     assert f"{root.context.trace_id:032x}" == TRACE_ID
+    assert root.parent is None
     assert root.attributes["rag.request.id"] == REQUEST_ID
     assert root.attributes["rag.outcome"] == "answer"
+    assert root.attributes["rag.token.input"] == 12
+    assert root.attributes["rag.token.output"] == 4
+    assert root.attributes["rag.cache.outcome"] == "bypass"
+    assert root.attributes["rag.provider.alias"] == "openai"
+    assert root.attributes["rag.model.alias"] == "text-embedding-3-small"
     for name in expected_names - {"rag.request"}:
         span = spans_by_name[name]
         assert f"{span.context.trace_id:032x}" == TRACE_ID
@@ -260,7 +275,10 @@ def test_qa_telemetry_is_correlated_across_all_surfaces_and_content_free(
         "redaction",
         "serialization",
     }
-    assert diagnostic.model_identities == {"generation": "chat-model [REDACTED_EMAIL]"}
+    assert diagnostic.model_identities == {
+        "embedding": "openai/text-embedding-3-small/adapter-v1",
+        "generation": "chat-model [REDACTED_EMAIL]",
+    }
     assert diagnostic.token_counts == {"generation-input": 12, "generation-output": 4}
 
     span_evidence = repr(

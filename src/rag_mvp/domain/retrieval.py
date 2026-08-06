@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Annotated
+from typing import Annotated, Self
 
-from pydantic import Field, StringConstraints, field_validator
+from pydantic import Field, StringConstraints, field_validator, model_validator
 
 from rag_mvp.domain._base import (
     Digest,
@@ -14,7 +14,7 @@ from rag_mvp.domain._base import (
     Identifier,
     NonNegativeFiniteFloat,
 )
-from rag_mvp.domain.evaluation import TokenUsage
+from rag_mvp.domain.evaluation import ProviderAttemptEvidence, TokenUsage
 from rag_mvp.domain.ingestion import ChunkLocator
 
 RETRIEVAL_EVIDENCE_SCHEMA_VERSION = "ranking-evidence-v1"
@@ -89,8 +89,29 @@ class RetrievalDiagnostics(DomainModel):
     provider_identities: dict[str, str] = Field(default_factory=dict)
     provider_usage: dict[str, TokenUsage] = Field(default_factory=dict)
     provider_attempt_counts: dict[str, Annotated[int, Field(ge=0)]] = Field(default_factory=dict)
+    provider_failed_attempt_counts: dict[str, Annotated[int, Field(ge=0)]] = Field(
+        default_factory=dict
+    )
+    provider_unknown_usage_attempt_counts: dict[str, Annotated[int, Field(ge=0)]] = Field(
+        default_factory=dict
+    )
+    provider_attempts: tuple[ProviderAttemptEvidence, ...] = ()
     degradation_reasons: Annotated[tuple[SafeDiagnosticCode, ...], Field(max_length=16)] = ()
     failed_stages: Annotated[tuple[SafeDiagnosticCode, ...], Field(max_length=8)] = ()
+
+    @model_validator(mode="after")
+    def validate_provider_attempt_counts(self) -> Self:
+        for label, counts in (
+            ("failed", self.provider_failed_attempt_counts),
+            ("unknown usage", self.provider_unknown_usage_attempt_counts),
+        ):
+            if any(
+                role not in self.provider_attempt_counts
+                or count > self.provider_attempt_counts[role]
+                for role, count in counts.items()
+            ):
+                raise ValueError(f"{label} provider attempts exceed the attempt ledger")
+        return self
 
 
 class RetrievalResult(DomainModel):

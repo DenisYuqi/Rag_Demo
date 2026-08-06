@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import sys
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -13,7 +15,13 @@ from structlog.typing import FilteringBoundLogger
 
 from rag_mvp.config.settings import Settings
 from rag_mvp.domain.ingestion import IngestionJob, IngestionJobStatus
-from rag_mvp.domain.qa import QAErrorCode, RequestDiagnostic, StreamEventKind, ValidatedStreamEvent
+from rag_mvp.domain.qa import (
+    QAErrorCode,
+    RequestDiagnostic,
+    SafeQADiagnostics,
+    StreamEventKind,
+    ValidatedStreamEvent,
+)
 from rag_mvp.observability.logging import (
     SafeErrorCategory,
     bind_correlation_context,
@@ -232,6 +240,27 @@ class PipelineTelemetry:
             safe_error_category=job.safe_error_code,
         )
 
+    async def flush(self, timeout_seconds: float) -> bool:
+        """Bound exporter and logging flushes during graceful shutdown."""
+
+        if isinstance(timeout_seconds, bool) or timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be positive")
+        timeout_millis = max(1, int(timeout_seconds * 1_000))
+
+        def flush_sync() -> bool:
+            flushed = self.tracer.force_flush(timeout_millis)
+            for handler in tuple(logging.getLogger().handlers):
+                handler.flush()
+            sys.stdout.flush()
+            sys.stderr.flush()
+            return flushed
+
+        try:
+            async with asyncio.timeout(timeout_seconds):
+                return await asyncio.to_thread(flush_sync)
+        except TimeoutError:
+            return False
+
     def _record_terminal(
         self,
         observation: RequestObservation,
@@ -287,6 +316,7 @@ class PipelineTelemetry:
         observation.root_span.set_outcome(outcome)
         if error_category is not None:
             observation.root_span.set_error(error_category)
+        _enrich_root_span(observation.root_span, diagnostics)
 
         metadata = _diagnostic_metadata(event, self.settings)
         diagnostic = RequestDiagnostic(
@@ -409,3 +439,73 @@ def _degradation(reason: str) -> DegradationReason:
     if "deadline" in normalized:
         return DegradationReason.DEADLINE_MARGIN
     return DegradationReason.OTHER
+
+
+def _enrich_root_span(span: SafeSpan, diagnostics: SafeQADiagnostics) -> None:
+    """Attach bounded aggregate diagnostics to the correlated QA root span."""
+
+    token_counts = diagnostics.token_counts
+    if isinstance(token_counts, dict):
+        input_tokens = 0
+        output_tokens = 0
+        has_input = False
+        has_output = False
+        for name, count in token_counts.items():
+            if not isinstance(name, str) or type(count) is not int or count < 0:
+                continue
+            normalized = name.strip().casefold().replace("_", "-")
+            if normalized == "input" or normalized.endswith("-input"):
+                input_tokens += count
+                has_input = True
+            elif normalized == "output" or normalized.endswith("-output"):
+                output_tokens += count
+                has_output = True
+        span.set_token_usage(
+            input_tokens=input_tokens if has_input else None,
+            output_tokens=output_tokens if has_output else None,
+        )
+
+    cache_status = diagnostics.cache_status
+    if isinstance(cache_status, dict):
+        outcomes: list[CacheOutcome] = []
+        for raw_outcome in cache_status.values():
+            try:
+                outcomes.append(CacheOutcome(raw_outcome))
+            except (TypeError, ValueError):
+                continue
+        selected_cache = (
+            CacheOutcome.BYPASS
+            if CacheOutcome.BYPASS in outcomes
+            else outcomes[0]
+            if outcomes and len(set(outcomes)) == 1
+            else None
+        )
+        if selected_cache is not None:
+            span.set_cache_outcome(selected_cache)
+
+    degradation_reasons = diagnostics.degradation_reasons
+    if isinstance(degradation_reasons, tuple) and degradation_reasons:
+        span.set_degradation(_degradation(degradation_reasons[0]))
+
+    identities = diagnostics.model_identities
+    if isinstance(identities, dict):
+        for role in ("generation", "reranker", "reranking", "embedding"):
+            identity = identities.get(role)
+            if not isinstance(identity, str):
+                continue
+            parts = identity.split("/")
+            provider_alias = parts[0]
+            model_alias = parts[1] if len(parts) > 1 else identity
+            attached = False
+            try:
+                span.set_provider_alias(provider_alias)
+                attached = True
+            except ValueError:
+                pass
+            try:
+                span.set_model_alias(model_alias)
+                attached = True
+            except ValueError:
+                pass
+            if attached:
+                break

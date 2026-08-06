@@ -11,6 +11,7 @@ from rag_mvp.domain.retrieval import RetrievalCandidate, RetrievalMode
 from rag_mvp.providers.errors import ProviderError
 from rag_mvp.providers.fakes import DeterministicRerankingProvider
 from rag_mvp.providers.models import (
+    AttemptStatus,
     Deadline,
     ModelIdentity,
     ProviderCallContext,
@@ -19,7 +20,7 @@ from rag_mvp.providers.models import (
     RerankResult,
     TokenUsage,
 )
-from rag_mvp.providers.resilience import RetryPolicy
+from rag_mvp.providers.resilience import RetryPolicy, capture_provider_attempts
 from rag_mvp.providers.routing import ModelProviderRouter, ProviderRoute
 from rag_mvp.retrieval.request import RetrievalRequestContext
 from rag_mvp.retrieval.rerank import (
@@ -208,6 +209,29 @@ async def test_router_success_preserves_route_identity_attempts_and_usage() -> N
     assert result.identity == provider.identity
     assert result.usage is not None
     assert len(result.attempts) == 1
+
+
+async def test_router_stage_timeout_preserves_one_real_attempt_in_both_ledgers() -> None:
+    provider = BlockingReranker()
+    router = ModelProviderRouter(
+        reranking_routes=(ProviderRoute("primary-rerank", provider, RetryPolicy(1)),)
+    )
+    base = (candidate("a", dense_rank=1),)
+
+    with capture_provider_attempts() as request_ledger:
+        result = await RerankStage(router, budget_seconds=0.01).run(
+            "query",
+            base,
+            _context(),
+        )
+
+    assert result.reason == "rerank_provider_deadline_exceeded"
+    assert result.ordered_candidates == base
+    assert provider.cancelled
+    assert len(result.attempts) == 1
+    assert result.attempts == request_ledger.attempts
+    assert result.attempts[0].status is AttemptStatus.FAILED
+    assert result.attempts[0].error_category is ProviderErrorCategory.DEADLINE_EXCEEDED
 
 
 async def test_stage_timeout_cancels_provider_and_falls_back() -> None:

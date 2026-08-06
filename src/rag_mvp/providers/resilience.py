@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import math
 import threading
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 
 from rag_mvp.providers.errors import (
@@ -74,6 +76,36 @@ class InMemoryAttemptRecorder:
             return tuple(self._attempts)
 
 
+_REQUEST_ATTEMPT_RECORDER: ContextVar[InMemoryAttemptRecorder | None] = ContextVar(
+    "rag_mvp_request_provider_attempt_recorder",
+    default=None,
+)
+
+
+@contextmanager
+def capture_provider_attempts() -> Iterator[InMemoryAttemptRecorder]:
+    """Capture every resilient provider attempt in the current async context."""
+
+    recorder = InMemoryAttemptRecorder()
+    token = _REQUEST_ATTEMPT_RECORDER.set(recorder)
+    try:
+        yield recorder
+    finally:
+        _REQUEST_ATTEMPT_RECORDER.reset(token)
+
+
+def current_provider_attempts() -> tuple[ModelAttempt, ...]:
+    recorder = _REQUEST_ATTEMPT_RECORDER.get()
+    return () if recorder is None else recorder.attempts
+
+
+def _record_attempt(recorder: AttemptRecorder, attempt: ModelAttempt) -> None:
+    recorder.record(attempt)
+    request_recorder = _REQUEST_ATTEMPT_RECORDER.get()
+    if request_recorder is not None and request_recorder is not recorder:
+        request_recorder.record(attempt)
+
+
 def _result_usage(value: object) -> TokenUsage:
     usage = getattr(value, "usage", None)
     return usage if isinstance(usage, TokenUsage) else TokenUsage()
@@ -126,7 +158,7 @@ async def execute_with_resilience[T](
                 is_fallback=is_fallback,
                 error_category=ProviderErrorCategory.CANCELLED,
             )
-            resolved_recorder.record(attempt)
+            _record_attempt(resolved_recorder, attempt)
             raise
         except Exception as raw_error:
             error = classify_provider_exception(raw_error)
@@ -149,10 +181,11 @@ async def execute_with_resilience[T](
                 latency_ms=max(0.0, (context.deadline.clock() - started_at) * 1000),
                 status=AttemptStatus.FAILED,
                 is_fallback=is_fallback,
+                usage=error.usage,
                 error_category=error.category,
             )
             attempts.append(attempt)
-            resolved_recorder.record(attempt)
+            _record_attempt(resolved_recorder, attempt)
             if not error.retryable or attempt_number > policy.max_retries:
                 raise ProviderOperationError(
                     error.category,
@@ -198,7 +231,7 @@ async def execute_with_resilience[T](
             usage=_result_usage(value),
         )
         attempts.append(attempt)
-        resolved_recorder.record(attempt)
+        _record_attempt(resolved_recorder, attempt)
         return AttemptedResult(value=value, attempts=tuple(attempts))
 
     raise AssertionError("retry loop exhausted without returning")

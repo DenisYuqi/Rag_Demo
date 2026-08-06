@@ -10,11 +10,13 @@ from rag_mvp.observability.costs import PricingCatalog
 OPENAI_STANDARD_PRICING_VERSION = "openai-standard-2026-08-07"
 OPENAI_PRICING_SOURCES = (
     "https://openai.com/index/introducing-gpt-5-4/",
+    "https://developers.openai.com/api/docs/models/gpt-4.1-mini",
     "https://developers.openai.com/api/docs/models/text-embedding-3-small",
 )
 
 _STANDARD_USD_PER_MILLION: dict[str, tuple[Decimal, Decimal | None]] = {
     "gpt-5.4": (Decimal("2.50"), Decimal("15.00")),
+    "gpt-4.1-mini": (Decimal("0.40"), Decimal("1.60")),
     "text-embedding-3-small": (Decimal("0.02"), None),
 }
 

@@ -107,6 +107,28 @@ async def test_cross_language_semantic_support_uses_dedicated_embeddings() -> No
     assert provider.requests[0].texts == (chinese_fact, english_evidence, unrelated)
 
 
+async def test_successful_fact_assessment_reports_direct_provider_usage_state() -> None:
+    fact = "What is the leave allowance"
+    evidence = "Employees receive ten days of annual leave."
+    assessor = SemanticFactEvidenceAssessor(
+        MappingEmbeddingProvider({fact: (1.0, 0.0), evidence: (1.0, 0.0)})
+    )
+
+    result = await assessor.assess_with_diagnostics(
+        f"{fact}?",
+        (_candidate("chunk-leave", 1, evidence),),
+        request_id="request-1",
+        revision_id="revision-current",
+        deadline=_deadline(),
+    )
+
+    assert result.facts[0].supporting_chunk_ids == ("chunk-leave",)
+    assert result.provider_attempt_count == 1
+    assert result.provider_failed_attempt_count == 0
+    assert result.provider_unknown_usage_attempt_count == 1
+    assert result.direct_provider_identity is not None
+
+
 async def test_multi_fact_query_can_produce_partial_support() -> None:
     leave_fact = "What is the leave allowance"
     stipend_fact = "what is the remote stipend"

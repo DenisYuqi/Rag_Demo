@@ -11,6 +11,7 @@ from rag_mvp.providers.fakes import (
     DeterministicRerankingProvider,
 )
 from rag_mvp.providers.models import (
+    AttemptStatus,
     ChatMessage,
     ChatRole,
     EmbeddingRequest,
@@ -25,6 +26,7 @@ from rag_mvp.providers.models import (
     RerankCandidate,
     RerankRequest,
     RerankResult,
+    TokenUsage,
 )
 from rag_mvp.providers.resilience import InMemoryAttemptRecorder, RetryPolicy
 from rag_mvp.providers.routing import ModelProviderRouter, ProviderRoute
@@ -48,6 +50,48 @@ class FailingGenerationProvider:
         del request, context
         self.call_count += 1
         raise ProviderError(self.category)
+
+
+@dataclass
+class EmbeddingResultLookalike:
+    identity: EmbeddingSpaceIdentity
+    vectors: tuple[tuple[float, ...], ...]
+    usage: TokenUsage
+
+
+class LookalikeEmbeddingProvider:
+    def __init__(self, identity: EmbeddingSpaceIdentity) -> None:
+        self.identity = identity
+
+    async def embed(
+        self,
+        request: EmbeddingRequest,
+        context: ProviderCallContext,
+    ) -> object:
+        del context
+        return EmbeddingResultLookalike(
+            self.identity,
+            tuple((0.0,) * self.identity.dimension for _ in request.texts),
+            TokenUsage(3, None),
+        )
+
+
+@dataclass
+class GenerationResultLookalike:
+    identity: ModelIdentity
+    usage: TokenUsage
+
+
+class LookalikeGenerationProvider:
+    identity = ModelIdentity("fake", "lookalike", "v1")
+
+    async def generate(
+        self,
+        request: GenerationRequest,
+        context: ProviderCallContext,
+    ) -> object:
+        del request, context
+        return GenerationResultLookalike(self.identity, TokenUsage(3, 2))
 
 
 @dataclass
@@ -91,6 +135,24 @@ async def test_generation_primary_failure_uses_ordered_fallback(
     assert [attempt.route_id for attempt in result.attempts] == ["primary", "fallback"]
     assert result.attempts[-1].usage == result.value.usage
     assert recorder.attempts == result.attempts
+
+
+async def test_generation_lookalike_is_recorded_as_incompatible_failure(
+    provider_context: ProviderCallContext,
+) -> None:
+    router = ModelProviderRouter(
+        generation_routes=(ProviderRoute("lookalike", LookalikeGenerationProvider(), POLICY),)
+    )
+
+    with pytest.raises(ProviderOperationError) as caught:
+        await router.generate(
+            GenerationRequest((ChatMessage(ChatRole.USER, "question"),)),
+            provider_context,
+        )
+
+    assert caught.value.category is ProviderErrorCategory.INCOMPATIBLE_RESPONSE
+    assert len(caught.value.attempts) == 1
+    assert caught.value.attempts[0].status is AttemptStatus.FAILED
 
 
 async def test_invalid_generation_request_does_not_fallback(
@@ -137,6 +199,32 @@ async def test_embedding_fallback_must_match_exact_active_space(
     assert incompatible.call_count == 0
     assert compatible.call_count == 1
     assert result.value.identity == required
+
+
+async def test_embedding_lookalike_is_recorded_as_incompatible_failure(
+    provider_context: ProviderCallContext,
+) -> None:
+    required = EmbeddingSpaceIdentity(
+        "fake",
+        "active",
+        4,
+        NormalizationPolicy.NONE,
+        "v1",
+    )
+    router = ModelProviderRouter(
+        embedding_routes=(ProviderRoute("lookalike", LookalikeEmbeddingProvider(required), POLICY),)
+    )
+
+    with pytest.raises(ProviderOperationError) as caught:
+        await router.embed(
+            EmbeddingRequest(("query",)),
+            provider_context,
+            required_space=required,
+        )
+
+    assert caught.value.category is ProviderErrorCategory.INCOMPATIBLE_RESPONSE
+    assert len(caught.value.attempts) == 1
+    assert caught.value.attempts[0].status is AttemptStatus.FAILED
 
 
 async def test_no_compatible_embedding_route_makes_no_provider_call(

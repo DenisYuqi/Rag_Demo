@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Coroutine
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
+from uuid import uuid4
 
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse, Response
@@ -19,6 +20,7 @@ from rag_mvp.api.evaluation_diagnostics import (
     EvaluationOperations,
 )
 from rag_mvp.api.evaluation_diagnostics import router as evaluation_diagnostics_router
+from rag_mvp.api.lifecycle import TrafficLifecycleMiddleware
 from rag_mvp.api.qa import (
     QARuntimeReadinessCheck,
     QARuntimeServices,
@@ -29,14 +31,25 @@ from rag_mvp.api.readiness import ReadinessRegistry, StaticReadinessCheck
 from rag_mvp.config.settings import Settings, get_settings
 from rag_mvp.domain.ingestion import IngestionJob
 from rag_mvp.ingestion.service import IngestionService
-from rag_mvp.observability.logging import RequestTraceContextMiddleware, configure_logging
+from rag_mvp.observability.logging import (
+    RequestTraceContextMiddleware,
+    configure_logging,
+    get_logger,
+    is_safe_identifier,
+)
 from rag_mvp.observability.metrics import RAGMetrics
 from rag_mvp.observability.runtime import DiagnosticSink, PipelineTelemetry
-from rag_mvp.observability.tracing import RAGTracer
+from rag_mvp.observability.tracing import (
+    TelemetryConfigurationError,
+    create_rag_tracer,
+    tracing_readiness_errors,
+)
 from rag_mvp.performance.admission import QAAdmissionController
 from rag_mvp.performance.deadlines import QALatencyBudgets
+from rag_mvp.performance.load_report import INSTANCE_ID_HEADER
 from rag_mvp.safety.redactor import DEFAULT_REDACTOR, Redactor
 from rag_mvp.storage.layout import DataLayout
+from rag_mvp.storage.writer_lock import DataRootWriterLock
 
 if TYPE_CHECKING:
     from rag_mvp.ui.services import WorkbenchServices
@@ -46,7 +59,9 @@ if TYPE_CHECKING:
 class RuntimeState:
     settings: Settings
     layout: DataLayout
+    writer_lock: DataRootWriterLock
     readiness: ReadinessRegistry
+    instance_identity: str = field(default_factory=lambda: f"instance-{uuid4().hex}")
     ingestion_service: IngestionService | None = None
     owns_ingestion_service: bool = False
     qa_services: QARuntimeServices | None = None
@@ -58,8 +73,20 @@ class RuntimeState:
     telemetry: PipelineTelemetry | None = None
     owns_qa_admission: bool = False
     redactor: Redactor | None = DEFAULT_REDACTOR
-    accepting_traffic: bool = True
+    accepting_traffic: bool = False
     ingestion_tasks: set[asyncio.Task[IngestionJob]] = field(default_factory=set)
+    request_tasks: set[asyncio.Task[Any]] = field(default_factory=set)
+    shutdown_started: bool = False
+    shutdown_sequence_complete: bool = False
+    shutdown_background_tasks: set[asyncio.Task[Any]] = field(default_factory=set)
+    shutdown_failed_tasks: set[str] = field(default_factory=set)
+    writer_lock_release_task: asyncio.Task[None] | None = None
+
+    def request_started(self, task: asyncio.Task[Any]) -> None:
+        self.request_tasks.add(task)
+
+    def request_finished(self, task: asyncio.Task[Any]) -> None:
+        self.request_tasks.discard(task)
 
     async def _run_ingestion(self, job_id: str) -> IngestionJob:
         service = self.ingestion_service
@@ -88,18 +115,222 @@ class RuntimeState:
                 if self.telemetry is not None:
                     self.telemetry.record_ingestion(job)
 
-    async def stop_ingestion(self) -> None:
-        tasks = tuple(self.ingestion_tasks)
-        if not tasks:
+    async def shutdown(self) -> None:
+        """Stop admission, drain or cancel work, then flush and close resources."""
+
+        if self.shutdown_started:
             return
-        _, pending = await asyncio.wait(
-            tasks,
-            timeout=self.settings.shutdown_grace_seconds,
+        self.shutdown_started = True
+        self.shutdown_sequence_complete = False
+        self.shutdown_failed_tasks.clear()
+        self.accepting_traffic = False
+        grace = self.settings.app_shutdown_grace_seconds
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        hard_deadline = started + grace
+
+        admission = self.qa_services.admission if self.qa_services is not None else None
+        if admission is not None:
+            await self._attempt_async(
+                admission.close(),
+                deadline=min(hard_deadline, started + (grace * 0.1)),
+                task_name="shutdown-admission-close",
+            )
+
+        await self._drain_or_cancel(
+            drain_deadline=min(hard_deadline, started + (grace * 0.45)),
+            cancel_deadline=min(hard_deadline, started + (grace * 0.55)),
         )
+
+        # Start every resource cleanup before waiting for any one of them. A
+        # blocking synchronous close therefore cannot prevent the async QA
+        # close from being attempted. The small margin keeps shutdown itself
+        # inside the configured hard deadline despite scheduler overhead.
+        cleanup_deadline = min(hard_deadline, started + (grace * 0.75))
+        cleanup_tasks: set[asyncio.Task[Any]] = set()
+        cleanup_budget = max(0.001, cleanup_deadline - loop.time())
+        if self.telemetry is not None:
+            cleanup_tasks.add(
+                asyncio.create_task(
+                    self._close_telemetry(cleanup_budget),
+                    name="shutdown-telemetry-flush",
+                )
+            )
+
+        if self.owns_ingestion_service and self.ingestion_service is not None:
+            cleanup_tasks.add(
+                asyncio.create_task(
+                    asyncio.to_thread(self.ingestion_service.close),
+                    name="shutdown-ingestion-close",
+                )
+            )
+
+        if self.owns_qa_services and self.qa_services is not None:
+            cleanup_tasks.add(
+                asyncio.create_task(
+                    self.qa_services.close(),
+                    name="shutdown-qa-close",
+                )
+            )
+
+        await self._wait_until(
+            cleanup_tasks,
+            deadline=cleanup_deadline,
+            cancel_pending=False,
+        )
+        self.shutdown_sequence_complete = True
+        pending_count = len(self._shutdown_pending_tasks())
+        failed_count = len(self.shutdown_failed_tasks)
+        outcome = "failed" if failed_count else ("deferred" if pending_count else "succeeded")
+        get_logger("lifecycle").info(
+            "runtime.shutdown.sequence.completed",
+            outcome=outcome,
+            counts={"pending_tasks": pending_count, "failed_tasks": failed_count},
+        )
+
+    def release_writer_lock_when_safe(self) -> None:
+        """Release ownership now or after every shutdown operation really ends."""
+
+        if not self.writer_lock.acquired or not self.shutdown_sequence_complete:
+            return
+        if self.shutdown_failed_tasks:
+            return
+        pending = self._shutdown_pending_tasks()
+        if not pending:
+            self.writer_lock.release()
+            return
+        release_task = self.writer_lock_release_task
+        if release_task is not None and not release_task.done():
+            return
+        release_task = asyncio.create_task(
+            self._release_writer_lock_after(pending),
+            name="shutdown-writer-lock-release",
+        )
+        release_task.add_done_callback(self._consume_background_result)
+        self.writer_lock_release_task = release_task
+
+    async def _release_writer_lock_after(self, pending: set[asyncio.Task[Any]]) -> None:
+        # asyncio.wait does not propagate cancellation to the operations whose
+        # completion protects the data root. If the loop exits first, this
+        # waiter is cancelled and the process-held OS lock remains authoritative.
+        await asyncio.wait(pending)
+        for task in pending:
+            self._consume_background_result(task)
+        if not self._shutdown_pending_tasks() and not self.shutdown_failed_tasks:
+            self.writer_lock.release()
+
+    async def _close_telemetry(self, timeout_seconds: float) -> None:
+        telemetry = self.telemetry
+        if telemetry is None:
+            return
+        try:
+            if not await telemetry.flush(timeout_seconds):
+                raise RuntimeError("telemetry_flush_failed")
+        finally:
+            # Exporter shutdown is isolated from the event loop and remains
+            # bounded by the RuntimeState cleanup deadline that owns this task.
+            await asyncio.to_thread(telemetry.tracer.shutdown)
+
+    async def _drain_or_cancel(
+        self,
+        *,
+        drain_deadline: float,
+        cancel_deadline: float,
+    ) -> None:
+        loop = asyncio.get_running_loop()
+        current = asyncio.current_task()
+
+        while True:
+            tasks = self._unfinished_tasks(current)
+            if not tasks:
+                return
+            remaining = drain_deadline - loop.time()
+            if remaining <= 0:
+                break
+            _, pending = await asyncio.wait(tasks, timeout=remaining)
+            if pending:
+                break
+
+        pending = self._unfinished_tasks(current)
         for task in pending:
             task.cancel()
         if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
+            _, stubborn = await asyncio.wait(
+                pending, timeout=max(0.0, cancel_deadline - loop.time())
+            )
+            for task in stubborn:
+                task.cancel()
+                self._track_shutdown_task(task)
+
+    async def _attempt_async(
+        self,
+        operation: Coroutine[Any, Any, Any],
+        *,
+        deadline: float,
+        task_name: str,
+    ) -> None:
+        task: asyncio.Task[Any] = asyncio.create_task(operation, name=task_name)
+        await self._wait_until({task}, deadline=deadline)
+
+    async def _wait_until(
+        self,
+        tasks: set[asyncio.Task[Any]],
+        *,
+        deadline: float,
+        cancel_pending: bool = True,
+    ) -> None:
+        if not tasks:
+            return
+        remaining = max(0.0, deadline - asyncio.get_running_loop().time())
+        done, pending = await asyncio.wait(tasks, timeout=remaining)
+        for task in done:
+            self._consume_background_result(task)
+        for task in pending:
+            if cancel_pending:
+                task.cancel()
+                self._record_shutdown_failure(task)
+            self._track_shutdown_task(task)
+
+    def _track_shutdown_task(self, task: asyncio.Task[Any]) -> None:
+        self.shutdown_background_tasks.add(task)
+        task.add_done_callback(self._consume_background_result)
+
+    def _consume_background_result(self, task: asyncio.Task[Any]) -> None:
+        if not task.done():
+            return
+        if task.cancelled():
+            self._record_shutdown_failure(task)
+            return
+        try:
+            task.result()
+        except Exception:
+            self._record_shutdown_failure(task)
+
+    def _record_shutdown_failure(self, task: asyncio.Task[Any]) -> None:
+        task_name = task.get_name()
+        if task_name.startswith("shutdown-") and task_name != "shutdown-writer-lock-release":
+            self.shutdown_failed_tasks.add(task_name)
+
+    def _unfinished_tasks(
+        self,
+        current: asyncio.Task[Any] | None,
+    ) -> set[asyncio.Task[Any]]:
+        return {
+            task
+            for task in (*self.request_tasks, *self.ingestion_tasks)
+            if task is not current and not task.done()
+        }
+
+    def _shutdown_pending_tasks(self) -> set[asyncio.Task[Any]]:
+        return {
+            task
+            for task in (
+                *self.request_tasks,
+                *self.ingestion_tasks,
+                *self.shutdown_background_tasks,
+            )
+            if not task.done()
+        }
 
 
 def _build_runtime(
@@ -113,6 +344,7 @@ def _build_runtime(
     diagnostics_service: DiagnosticOperations | None,
     workbench_services: WorkbenchServices | None,
     redactor: Redactor | None,
+    writer_lock: DataRootWriterLock | None,
 ) -> RuntimeState:
     layout = DataLayout.from_root(settings.data_root)
     if ingestion_service is not None and (
@@ -121,10 +353,29 @@ def _build_runtime(
     ):
         raise ValueError("ingestion_service_configuration_mismatch")
     provider_errors = settings.provider_readiness_errors()
+    identity_error = _runtime_identity_error(settings)
+    telemetry_errors = list(tracing_readiness_errors(settings))
+    try:
+        tracer = create_rag_tracer(settings)
+    except TelemetryConfigurationError as error:
+        if error.reason not in telemetry_errors:
+            telemetry_errors.append(error.reason)
+        tracer = create_rag_tracer(
+            settings.model_copy(
+                update={
+                    "telemetry_exporter": "none",
+                    "telemetry_otlp_traces_endpoint": None,
+                }
+            )
+        )
     safety_ready = redactor is not None and redactor.fully_configured
     registry = ReadinessRegistry(
         [
-            StaticReadinessCheck("configuration"),
+            StaticReadinessCheck(
+                "configuration",
+                ready=identity_error is None,
+                reason=identity_error,
+            ),
             StaticReadinessCheck(
                 "providers",
                 ready=not provider_errors,
@@ -134,6 +385,11 @@ def _build_runtime(
                 "safety",
                 ready=safety_ready,
                 reason=None if safety_ready else "safety_unavailable",
+            ),
+            StaticReadinessCheck(
+                "telemetry",
+                ready=not telemetry_errors,
+                reason=telemetry_errors[0] if telemetry_errors else None,
             ),
             StaticReadinessCheck("storage", ready=False, reason="storage_initializing"),
         ]
@@ -145,7 +401,6 @@ def _build_runtime(
     if qa_services is not None:
         registry.register(QARuntimeReadinessCheck(qa_services))
     metrics = RAGMetrics()
-    tracer = RAGTracer()
     diagnostic_sink = (
         cast(DiagnosticSink, diagnostics_service)
         if callable(getattr(diagnostics_service, "save", None))
@@ -180,6 +435,7 @@ def _build_runtime(
     return RuntimeState(
         settings=settings,
         layout=layout,
+        writer_lock=writer_lock or DataRootWriterLock(layout.writer_lock),
         readiness=registry,
         ingestion_service=ingestion_service,
         owns_ingestion_service=owns_ingestion_service,
@@ -206,6 +462,7 @@ def create_app(
     diagnostics_service: DiagnosticOperations | None = None,
     workbench_services: WorkbenchServices | None = None,
     redactor: Redactor | None = DEFAULT_REDACTOR,
+    writer_lock: DataRootWriterLock | None = None,
 ) -> FastAPI:
     """Compose one single-process service from explicit or environment settings."""
     if owns_ingestion_service and ingestion_service is None:
@@ -213,9 +470,12 @@ def create_app(
     if owns_qa_services and qa_services is None:
         raise ValueError("owned_qa_services_missing")
     resolved_settings = settings or get_settings()
+    identity_error = _runtime_identity_error(resolved_settings)
     configure_logging(
-        service=resolved_settings.service_name,
-        service_version=resolved_settings.service_version,
+        service=(resolved_settings.service_name if identity_error is None else "rag-mvp"),
+        service_version=(
+            resolved_settings.service_version if identity_error is None else "invalid"
+        ),
         config_version=resolved_settings.configuration_identity,
         level=resolved_settings.log_level,
     )
@@ -229,6 +489,7 @@ def create_app(
         diagnostics_service=diagnostics_service,
         workbench_services=workbench_services,
         redactor=redactor,
+        writer_lock=writer_lock,
     )
     if resolved_settings.workbench_enabled and runtime.workbench_services is None:
         from rag_mvp.ui.services import (
@@ -252,9 +513,14 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         storage_check = runtime.readiness.get("storage")
-        runtime.accepting_traffic = True
+        runtime.accepting_traffic = False
+        runtime.shutdown_started = False
+        runtime.shutdown_sequence_complete = False
+        runtime.shutdown_failed_tasks.clear()
+        storage_writable = False
         try:
             runtime.layout.initialize()
+            storage_writable = True
             if isinstance(storage_check, StaticReadinessCheck):
                 storage_check.ready = True
                 storage_check.reason = None
@@ -262,8 +528,12 @@ def create_app(
             if isinstance(storage_check, StaticReadinessCheck):
                 storage_check.ready = False
                 storage_check.reason = "storage_not_writable"
-        app.state.runtime = runtime
+        lifecycle_started = False
         try:
+            if storage_writable:
+                runtime.writer_lock.acquire()
+            lifecycle_started = True
+            app.state.runtime = runtime
             if runtime.ingestion_service is not None:
                 ingestion_check = runtime.readiness.get("ingestion")
                 try:
@@ -275,24 +545,14 @@ def create_app(
                     if isinstance(ingestion_check, StaticReadinessCheck):
                         ingestion_check.ready = False
                         ingestion_check.reason = "ingestion_recovery_failed"
+            runtime.accepting_traffic = storage_writable
             yield
         finally:
-            runtime.accepting_traffic = False
-            try:
-                await runtime.stop_ingestion()
-            finally:
+            if lifecycle_started:
                 try:
-                    if (
-                        runtime.owns_qa_admission
-                        and runtime.qa_services is not None
-                        and runtime.qa_services.admission is not None
-                    ):
-                        await runtime.qa_services.admission.close()
-                    if runtime.owns_ingestion_service and runtime.ingestion_service is not None:
-                        runtime.ingestion_service.close()
+                    await runtime.shutdown()
                 finally:
-                    if runtime.owns_qa_services and runtime.qa_services is not None:
-                        await runtime.qa_services.close()
+                    runtime.release_writer_lock_when_safe()
 
     app = FastAPI(
         title="RAG Assistant MVP",
@@ -301,6 +561,7 @@ def create_app(
     )
     app.state.runtime = runtime
     app.add_middleware(RequestTraceContextMiddleware)
+    app.add_middleware(TrafficLifecycleMiddleware)
     install_error_handlers(app)
     app.include_router(documents_router)
     app.include_router(qa_router)
@@ -319,6 +580,7 @@ def create_app(
         payload = {
             "status": "ready" if ready else "not_ready",
             "configuration_id": state.settings.configuration_identity,
+            "instance_identity": state.instance_identity,
             "components": [
                 {"name": item.name, "ready": item.ready, "reason": item.reason}
                 for item in components
@@ -327,6 +589,7 @@ def create_app(
         return JSONResponse(
             payload,
             status_code=status.HTTP_200_OK if ready else status.HTTP_503_SERVICE_UNAVAILABLE,
+            headers={INSTANCE_ID_HEADER: state.instance_identity},
         )
 
     @app.get("/metrics", tags=["operations"], include_in_schema=False)
@@ -358,6 +621,14 @@ def create_app(
     return app
 
 
+def _runtime_identity_error(settings: Settings) -> str | None:
+    if not is_safe_identifier(settings.service_name) or not is_safe_identifier(
+        settings.service_version
+    ):
+        return "configuration_identity_invalid"
+    return None
+
+
 def create_executable_app(settings: Settings | None = None) -> FastAPI:
     """Build configured production services or remain honestly unready."""
 
@@ -368,18 +639,34 @@ def create_executable_app(settings: Settings | None = None) -> FastAPI:
     ):
         from rag_mvp.api.composition import compose_openai_services
 
-        composition = compose_openai_services(resolved_settings, DEFAULT_REDACTOR)
-        return create_app(
-            resolved_settings,
-            ingestion_service=composition.ingestion,
-            owns_ingestion_service=True,
-            qa_services=composition.qa,
-            owns_qa_services=True,
-            diagnostics_service=composition.diagnostics,
-            redactor=DEFAULT_REDACTOR,
-        )
+        layout = DataLayout.from_root(resolved_settings.data_root)
+        try:
+            layout.initialize()
+        except OSError:
+            return _create_uncomposed_executable_app(resolved_settings)
+        writer_lock = DataRootWriterLock(layout.writer_lock)
+        writer_lock.acquire()
+        try:
+            composition = compose_openai_services(resolved_settings, DEFAULT_REDACTOR)
+            return create_app(
+                resolved_settings,
+                ingestion_service=composition.ingestion,
+                owns_ingestion_service=True,
+                qa_services=composition.qa,
+                owns_qa_services=True,
+                diagnostics_service=composition.diagnostics,
+                redactor=DEFAULT_REDACTOR,
+                writer_lock=writer_lock,
+            )
+        except BaseException:
+            writer_lock.release()
+            raise
 
-    app = create_app(resolved_settings)
+    return _create_uncomposed_executable_app(resolved_settings)
+
+
+def _create_uncomposed_executable_app(settings: Settings) -> FastAPI:
+    app = create_app(settings)
     runtime: RuntimeState = app.state.runtime
     runtime.readiness.register(StaticReadinessCheck("index", False, "index_not_ready"))
     runtime.readiness.register(StaticReadinessCheck("qa", False, "qa_not_composed"))

@@ -121,8 +121,7 @@ class QualityGateResult:
         if tuple(decision.metric for decision in resolved_decisions) != tuple(QUALITY_THRESHOLDS):
             raise ValueError("quality_gate_decision_order_invalid")
         if self.valid != (
-            self.case_executions_complete
-            and all(decision.valid for decision in resolved_decisions)
+            self.case_executions_complete and all(decision.valid for decision in resolved_decisions)
         ):
             raise ValueError("quality_gate_validity_mismatch")
         if self.passed != (self.valid and all(decision.passed for decision in resolved_decisions)):

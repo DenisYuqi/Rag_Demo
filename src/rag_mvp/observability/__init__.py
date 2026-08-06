@@ -39,7 +39,14 @@ from rag_mvp.observability.metrics import (
     TokenDirection,
 )
 from rag_mvp.observability.runtime import DiagnosticSink, PipelineTelemetry, RequestObservation
-from rag_mvp.observability.tracing import RAGTracer, SafeSpan, TraceReference
+from rag_mvp.observability.tracing import (
+    RAGTracer,
+    SafeSpan,
+    TelemetryConfigurationError,
+    TraceReference,
+    create_rag_tracer,
+    tracing_readiness_errors,
+)
 
 __all__ = [
     "AttemptCostEstimate",
@@ -67,15 +74,18 @@ __all__ = [
     "SafeErrorCategory",
     "SafeRequestDiagnosticStore",
     "SafeSpan",
+    "TelemetryConfigurationError",
     "TokenDirection",
     "TraceReference",
     "UnknownCostReason",
     "bind_correlation_context",
     "classify_exception",
     "configure_logging",
+    "create_rag_tracer",
     "current_correlation_context",
     "get_logger",
     "is_safe_identifier",
     "project_per_thousand_calls",
     "safe_event",
+    "tracing_readiness_errors",
 ]

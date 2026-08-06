@@ -309,6 +309,7 @@ def test_answer_stream_is_atomic_redacted_and_correlated(qa_harness: QAHarness) 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith(NDJSON_MEDIA_TYPE)
     assert response.headers["cache-control"] == "no-store"
+    assert response.headers["x-rag-instance-id"]
     event = _event(response)
     assert event["kind"] == "answer"
     assert event["terminal"] is True

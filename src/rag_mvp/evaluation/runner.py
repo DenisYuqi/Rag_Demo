@@ -372,9 +372,7 @@ class EvaluationRunner:
         current = self._updated(current, status=EvaluationRunStatus.RUNNING)
         self.repository.update(current)
         for case in plan.cases:
-            owner_digest = hashlib.sha256(
-                f"{plan.run_id}\0{case.case_id}".encode()
-            ).hexdigest()
+            owner_digest = hashlib.sha256(f"{plan.run_id}\0{case.case_id}".encode()).hexdigest()
             try:
                 execution = await self.executor.execute(
                     case,

@@ -126,9 +126,7 @@ async def run_real_evaluation(
             attempt
             for result in results
             if result.execution is not None
-            for attempt in repositories.provider_usage.list_for_request(
-                result.execution.request_id
-            )
+            for attempt in repositories.provider_usage.list_for_request(result.execution.request_id)
         )
         provider = plan.identity.provider_identities["generation"]
         models = tuple(
@@ -165,13 +163,9 @@ async def run_real_evaluation(
                         "case_id": result.case_id,
                         "request_id": result.execution.request_id,
                         "trace_id": result.execution.event.diagnostics.trace_id,
-                        "stage_timings_ms": (
-                            result.execution.event.diagnostics.stage_timings_ms
-                        ),
+                        "stage_timings_ms": (result.execution.event.diagnostics.stage_timings_ms),
                         "cache_status": result.execution.event.diagnostics.cache_status,
-                        "model_identities": (
-                            result.execution.event.diagnostics.model_identities
-                        ),
+                        "model_identities": (result.execution.event.diagnostics.model_identities),
                         "token_counts": result.execution.event.diagnostics.token_counts,
                         "safe_error_code": result.safe_error_code,
                     }

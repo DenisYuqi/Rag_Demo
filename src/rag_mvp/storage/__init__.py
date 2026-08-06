@@ -32,6 +32,7 @@ from rag_mvp.storage.repositories import (
     SessionOwnershipError,
     SessionRepository,
 )
+from rag_mvp.storage.writer_lock import DataRootWriterLock, DataRootWriterLockError
 
 __all__ = [
     "SCHEMA_VERSION",
@@ -41,6 +42,8 @@ __all__ = [
     "ArtifactStore",
     "ArtifactStoreError",
     "DataLayout",
+    "DataRootWriterLock",
+    "DataRootWriterLockError",
     "Database",
     "DatabaseVersionError",
     "DocumentRepository",

@@ -19,6 +19,7 @@ from rag_mvp.qa.evidence_assessor import (
     FACT_EVIDENCE_ASSESSOR_VERSION,
     EvidenceAssessmentError,
     FactAssessmentConfig,
+    FactAssessmentResult,
     SemanticFactEvidenceAssessor,
 )
 from rag_mvp.qa.grounding import (
@@ -96,6 +97,7 @@ __all__ = [
     "EvidenceDecisionCode",
     "EvidenceDecisionKind",
     "FactAssessmentConfig",
+    "FactAssessmentResult",
     "FactEvidence",
     "FactEvidenceAssessor",
     "GeneratorPromptBuilder",

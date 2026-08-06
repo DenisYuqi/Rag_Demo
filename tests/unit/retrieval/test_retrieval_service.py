@@ -7,19 +7,25 @@ from pathlib import Path
 import pytest
 from retrieval_test_helpers import build_bound_snapshot, candidate
 
+from rag_mvp.domain.evaluation import ModelAttemptStatus
 from rag_mvp.domain.retrieval import CacheOutcome, RetrievalCandidate, RetrievalMode
 from rag_mvp.providers.errors import ProviderError
 from rag_mvp.providers.fakes import DeterministicEmbeddingProvider
 from rag_mvp.providers.models import (
+    AttemptStatus,
     Deadline,
     EmbeddingRequest,
     EmbeddingResult,
+    ModelAttempt,
     ModelIdentity,
     ProviderCallContext,
     ProviderErrorCategory,
+    ProviderRole,
     RerankRequest,
     RerankResult,
 )
+from rag_mvp.providers.resilience import RetryPolicy
+from rag_mvp.providers.routing import ModelProviderRouter, ProviderRoute
 from rag_mvp.retrieval.bm25 import LexicalIndexError
 from rag_mvp.retrieval.identity import provider_embedding_identity
 from rag_mvp.retrieval.request import RetrievalRequestContext, RetrievalRequestError
@@ -27,6 +33,7 @@ from rag_mvp.retrieval.service import (
     RetrievalLimits,
     RetrievalService,
     RetrievalUnavailableError,
+    _provider_attempt_evidence,
 )
 
 
@@ -56,6 +63,24 @@ class ReverseLegacyReranker:
     ) -> tuple[str, ...]:
         del query
         return tuple(candidate.chunk_id for candidate in reversed(candidates))
+
+
+def test_provider_timeout_attempt_uses_timed_out_evidence_status() -> None:
+    attempt = ModelAttempt(
+        request_id="request-timeout",
+        operation_id="qa-retrieval",
+        attempt_number=1,
+        route_id="embedding-primary",
+        role=ProviderRole.EMBEDDING,
+        provider="test",
+        model="embedding-model",
+        latency_ms=1,
+        status=AttemptStatus.FAILED,
+        is_fallback=False,
+        error_category=ProviderErrorCategory.TIMEOUT,
+    )
+
+    assert _provider_attempt_evidence(attempt).status is ModelAttemptStatus.TIMED_OUT
 
 
 class ReverseProviderReranker:
@@ -234,6 +259,34 @@ async def test_production_hybrid_runs_both_channels_and_reports_complete_diagnos
     snapshot.close()
 
 
+async def test_retrieval_diagnostics_count_failed_provider_fallback_attempts(
+    tmp_path: Path,
+) -> None:
+    snapshot, source_kinds = await build_bound_snapshot(tmp_path)
+    identity = provider_embedding_identity(snapshot.revision.embedding_space)
+    primary = FailingEmbeddingProvider(identity)
+    fallback = DeterministicEmbeddingProvider(identity)
+    router = ModelProviderRouter(
+        embedding_routes=(
+            ProviderRoute("embedding-primary", primary, RetryPolicy(1, max_retries=0)),
+            ProviderRoute("embedding-fallback", fallback, RetryPolicy(1, max_retries=0)),
+        )
+    )
+    service = RetrievalService.from_snapshot(
+        snapshot,
+        router,
+        _provider_context(),
+        source_kinds=source_kinds,
+        limits=RetrievalLimits(dense=2, lexical=2, rerank=2, final=2),
+    )
+
+    result = await service.retrieve(_request(snapshot, RetrievalMode.HYBRID))
+
+    assert result.diagnostics.provider_attempt_counts == {"embedding": 2}
+    assert result.diagnostics.provider_failed_attempt_counts == {"embedding": 1}
+    snapshot.close()
+
+
 async def test_hybrid_rerank_requires_configuration_and_applies_when_present(
     tmp_path: Path,
 ) -> None:
@@ -274,6 +327,32 @@ async def test_hybrid_rerank_requires_configuration_and_applies_when_present(
     snapshot.close()
 
 
+async def test_router_without_rerank_routes_does_not_invent_provider_attempt(
+    tmp_path: Path,
+) -> None:
+    snapshot, source_kinds = await build_bound_snapshot(tmp_path)
+    embedding = DeterministicEmbeddingProvider(
+        provider_embedding_identity(snapshot.revision.embedding_space)
+    )
+    service = RetrievalService.from_snapshot(
+        snapshot,
+        embedding,
+        _provider_context(),
+        source_kinds=source_kinds,
+        reranker=ModelProviderRouter(),
+        limits=RetrievalLimits(dense=2, lexical=2, rerank=2, final=2),
+    )
+
+    result = await service.retrieve(_request(snapshot, RetrievalMode.HYBRID_RERANK))
+
+    assert result.diagnostics.degradation_reasons == ("rerank_provider_unavailable",)
+    assert "reranker" not in result.diagnostics.provider_attempt_counts
+    assert all(
+        attempt.role.value != "reranking" for attempt in result.diagnostics.provider_attempts
+    )
+    snapshot.close()
+
+
 async def test_single_normalized_failure_requires_explicit_degradation(
     tmp_path: Path,
 ) -> None:
@@ -293,6 +372,9 @@ async def test_single_normalized_failure_requires_explicit_degradation(
         await strict.retrieve(_request(snapshot, RetrievalMode.HYBRID))
     assert caught.value.code == "retrieval_unavailable"
     assert caught.value.failed_stages == ("dense",)
+    assert caught.value.provider_attempt_count == 1
+    assert caught.value.provider_failed_attempt_count == 1
+    assert caught.value.provider_unknown_usage_attempt_count == 1
 
     degraded = RetrievalService.from_snapshot(
         snapshot,
@@ -307,6 +389,10 @@ async def test_single_normalized_failure_requires_explicit_degradation(
     assert result.evidence
     assert result.diagnostics.failed_stages == ("dense",)
     assert result.diagnostics.degradation_reasons == ("dense_unavailable",)
+    assert result.diagnostics.provider_attempt_counts == {"embedding": 1}
+    assert result.diagnostics.provider_failed_attempt_counts == {"embedding": 1}
+    assert result.diagnostics.provider_unknown_usage_attempt_counts == {"embedding": 1}
+    assert len(result.diagnostics.provider_attempts) == 1
     assert all(item.dense_rank is None for item in result.evidence)
     snapshot.close()
 
@@ -336,6 +422,8 @@ async def test_both_retrievers_failing_never_degrades(
     with pytest.raises(RetrievalUnavailableError) as caught:
         await service.retrieve(_request(snapshot, RetrievalMode.HYBRID))
     assert caught.value.failed_stages == ("dense", "bm25")
+    assert caught.value.provider_attempt_count == 1
+    assert caught.value.provider_failed_attempt_count == 1
     snapshot.close()
 
 

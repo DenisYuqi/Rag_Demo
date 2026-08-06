@@ -130,13 +130,29 @@ class BoundDenseRetriever:
         except DenseIndexError:
             raise
         except TimeoutError:
-            raise DenseIndexError("embedding_deadline_exceeded") from None
+            raise DenseIndexError(
+                "embedding_deadline_exceeded",
+                unrecorded_provider_attempt_count=int(
+                    not isinstance(self._embedding, ModelProviderRouter)
+                ),
+            ) from None
         except ProviderOperationError as error:
             if error.category is ProviderErrorCategory.INCOMPATIBLE_RESPONSE:
-                raise DenseIndexError("embedding_identity_mismatch") from None
-            raise DenseIndexError("query_embedding_failed") from None
+                raise DenseIndexError(
+                    "embedding_identity_mismatch",
+                    provider_attempts=error.attempts,
+                ) from None
+            raise DenseIndexError(
+                "query_embedding_failed",
+                provider_attempts=error.attempts,
+            ) from None
         except Exception:
-            raise DenseIndexError("query_embedding_failed") from None
+            raise DenseIndexError(
+                "query_embedding_failed",
+                unrecorded_provider_attempt_count=int(
+                    not isinstance(self._embedding, ModelProviderRouter)
+                ),
+            ) from None
 
         vector = _validated_query_vector(
             result,

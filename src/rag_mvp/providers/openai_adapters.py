@@ -11,6 +11,7 @@ from typing import Any, Protocol, cast
 
 from rag_mvp.providers.errors import ProviderError, classify_provider_exception
 from rag_mvp.providers.models import (
+    UNKNOWN_USAGE,
     ChatMessage,
     ChatRole,
     EmbeddingRequest,
@@ -114,6 +115,15 @@ def _optional_non_negative_int(value: object) -> int | None:
     return value
 
 
+def _provider_error_with_usage(error: ProviderError, usage: TokenUsage) -> ProviderError:
+    return ProviderError(
+        error.category,
+        retryable=error.retryable,
+        fallback_eligible=error.fallback_eligible,
+        usage=usage,
+    )
+
+
 def _finish_reason(value: object) -> FinishReason:
     if not isinstance(value, str):
         return FinishReason.UNKNOWN
@@ -172,48 +182,61 @@ class OpenAIEmbeddingProvider:
             )
         except asyncio.CancelledError:
             raise
-        except ProviderError:
-            raise
+        except ProviderError as error:
+            raise _provider_error_with_usage(
+                error,
+                _combine_usage((*usages, error.usage)),
+            ) from None
         except Exception as error:
-            raise classify_provider_exception(error) from None
+            classified = classify_provider_exception(error)
+            raise _provider_error_with_usage(
+                classified,
+                _combine_usage((*usages, classified.usage)),
+            ) from None
 
     def _normalize(self, response: object, *, expected_count: int) -> EmbeddingResult:
-        items = _sequence(_field(response, "data"))
-        if len(items) != expected_count:
-            raise ProviderError(ProviderErrorCategory.INCOMPATIBLE_RESPONSE)
-
-        ordered: list[tuple[float, ...] | None] = [None] * expected_count
-        for position, item in enumerate(items):
-            raw_index = _field(item, "index", position)
-            if (
-                isinstance(raw_index, bool)
-                or not isinstance(raw_index, int)
-                or not 0 <= raw_index < expected_count
-                or ordered[raw_index] is not None
-            ):
+        usage = _usage(response)
+        try:
+            items = _sequence(_field(response, "data"))
+            if len(items) != expected_count:
                 raise ProviderError(ProviderErrorCategory.INCOMPATIBLE_RESPONSE)
-            raw_vector = _sequence(_field(item, "embedding"))
-            if len(raw_vector) != self.identity.dimension:
-                raise ProviderError(ProviderErrorCategory.INCOMPATIBLE_RESPONSE)
-            vector: list[float] = []
-            for raw_value in raw_vector:
-                if isinstance(raw_value, bool) or not isinstance(raw_value, Real):
-                    raise ProviderError(ProviderErrorCategory.INCOMPATIBLE_RESPONSE)
-                value = float(raw_value)
-                if not math.isfinite(value):
-                    raise ProviderError(ProviderErrorCategory.INCOMPATIBLE_RESPONSE)
-                vector.append(value)
-            if self.identity.normalization is NormalizationPolicy.L2:
-                norm = math.sqrt(sum(value * value for value in vector))
-                if not math.isfinite(norm) or norm == 0:
-                    raise ProviderError(ProviderErrorCategory.INCOMPATIBLE_RESPONSE)
-                vector = [value / norm for value in vector]
-            ordered[raw_index] = tuple(vector)
 
-        if any(vector is None for vector in ordered):
-            raise ProviderError(ProviderErrorCategory.INCOMPATIBLE_RESPONSE)
-        vectors = tuple(cast(tuple[float, ...], vector) for vector in ordered)
-        return EmbeddingResult(vectors=vectors, identity=self.identity, usage=_usage(response))
+            ordered: list[tuple[float, ...] | None] = [None] * expected_count
+            for position, item in enumerate(items):
+                raw_index = _field(item, "index", position)
+                if (
+                    isinstance(raw_index, bool)
+                    or not isinstance(raw_index, int)
+                    or not 0 <= raw_index < expected_count
+                    or ordered[raw_index] is not None
+                ):
+                    raise ProviderError(ProviderErrorCategory.INCOMPATIBLE_RESPONSE)
+                raw_vector = _sequence(_field(item, "embedding"))
+                if len(raw_vector) != self.identity.dimension:
+                    raise ProviderError(ProviderErrorCategory.INCOMPATIBLE_RESPONSE)
+                vector: list[float] = []
+                for raw_value in raw_vector:
+                    if isinstance(raw_value, bool) or not isinstance(raw_value, Real):
+                        raise ProviderError(ProviderErrorCategory.INCOMPATIBLE_RESPONSE)
+                    value = float(raw_value)
+                    if not math.isfinite(value):
+                        raise ProviderError(ProviderErrorCategory.INCOMPATIBLE_RESPONSE)
+                    vector.append(value)
+                if self.identity.normalization is NormalizationPolicy.L2:
+                    norm = math.sqrt(sum(value * value for value in vector))
+                    if not math.isfinite(norm) or norm == 0:
+                        raise ProviderError(ProviderErrorCategory.INCOMPATIBLE_RESPONSE)
+                    vector = [value / norm for value in vector]
+                ordered[raw_index] = tuple(vector)
+
+            if any(vector is None for vector in ordered):
+                raise ProviderError(ProviderErrorCategory.INCOMPATIBLE_RESPONSE)
+            vectors = tuple(cast(tuple[float, ...], vector) for vector in ordered)
+            return EmbeddingResult(vectors=vectors, identity=self.identity, usage=usage)
+        except ProviderError as error:
+            if error.usage == UNKNOWN_USAGE:
+                raise _provider_error_with_usage(error, usage) from None
+            raise
 
 
 def _combine_usage(usages: Sequence[TokenUsage]) -> TokenUsage:
@@ -267,20 +290,24 @@ class OpenAIChatGenerationProvider:
             arguments["response_format"] = {"type": "json_object"}
         try:
             response = await self._client.chat.completions.create(**arguments)
-            choices = _sequence(_field(response, "choices"))
-            if len(choices) != 1:
-                raise ProviderError(ProviderErrorCategory.INCOMPATIBLE_RESPONSE)
-            choice = choices[0]
-            message = _field(choice, "message")
-            content = _field(message, "content")
-            if not isinstance(content, str) or not content.strip():
-                raise ProviderError(ProviderErrorCategory.INCOMPATIBLE_RESPONSE)
-            return GenerationResult(
-                content=content,
-                identity=self.identity,
-                finish_reason=_finish_reason(_field(choice, "finish_reason", None)),
-                usage=_usage(response),
-            )
+            usage = _usage(response)
+            try:
+                choices = _sequence(_field(response, "choices"))
+                if len(choices) != 1:
+                    raise ProviderError(ProviderErrorCategory.INCOMPATIBLE_RESPONSE)
+                choice = choices[0]
+                message = _field(choice, "message")
+                content = _field(message, "content")
+                if not isinstance(content, str) or not content.strip():
+                    raise ProviderError(ProviderErrorCategory.INCOMPATIBLE_RESPONSE)
+                return GenerationResult(
+                    content=content,
+                    identity=self.identity,
+                    finish_reason=_finish_reason(_field(choice, "finish_reason", None)),
+                    usage=usage,
+                )
+            except ProviderError as error:
+                raise _provider_error_with_usage(error, usage) from None
         except asyncio.CancelledError:
             raise
         except ProviderError:
@@ -350,7 +377,10 @@ class OpenAIListwiseRerankingProvider:
             prompt_version=request.prompt_version,
         )
         result = await self._generation_provider.generate(generation_request, context)
-        ordered_ids = validate_listwise_json(result.content, request.candidate_ids)
+        try:
+            ordered_ids = validate_listwise_json(result.content, request.candidate_ids)
+        except ProviderError as error:
+            raise _provider_error_with_usage(error, result.usage) from None
         return RerankResult(
             ordered_ids=ordered_ids,
             identity=self.identity,

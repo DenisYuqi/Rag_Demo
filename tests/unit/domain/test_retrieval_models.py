@@ -55,6 +55,8 @@ def test_ranked_result_and_diagnostics_round_trip() -> None:
         stage_timings_ms={"dense": 12.5},
         cache_status={"retrieval": CacheOutcome.MISS},
         provider_identities={"embedding": "primary/embed-v1"},
+        provider_attempt_counts={"embedding": 2},
+        provider_failed_attempt_counts={"embedding": 1},
         degradation_reasons=("reranker-timeout",),
     )
     result = RetrievalResult(evidence=(evidence,), diagnostics=diagnostics)
@@ -64,3 +66,16 @@ def test_ranked_result_and_diagnostics_round_trip() -> None:
     assert decoded == result
     assert decoded.evidence[0].locator.pages == (3,)
     assert decoded.diagnostics.degradation_reasons == ("reranker-timeout",)
+    assert decoded.diagnostics.provider_failed_attempt_counts == {"embedding": 1}
+
+
+def test_retrieval_diagnostics_reject_failed_attempts_outside_ledger() -> None:
+    with pytest.raises(ValidationError):
+        RetrievalDiagnostics(
+            request_id="request-1",
+            requested_mode=RetrievalMode.HYBRID,
+            effective_mode=RetrievalMode.HYBRID,
+            index_revision="revision-1",
+            provider_attempt_counts={"embedding": 1},
+            provider_failed_attempt_counts={"embedding": 2},
+        )

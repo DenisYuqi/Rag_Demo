@@ -416,12 +416,8 @@ def _pipeline(
     recorder = InMemoryAttemptRecorder()
     retry_policy = RetryPolicy(attempt_timeout_seconds=10, max_retries=0)
     router = ModelProviderRouter(
-        embedding_routes=(
-            ProviderRoute("qa-embedding", corpus.embedding, retry_policy),
-        ),
-        generation_routes=(
-            ProviderRoute("qa-generation", generation, retry_policy),
-        ),
+        embedding_routes=(ProviderRoute("qa-embedding", corpus.embedding, retry_policy),),
+        generation_routes=(ProviderRoute("qa-generation", generation, retry_policy),),
         recorder=recorder,
     )
     injection_policy = InjectionPolicy()
@@ -559,8 +555,7 @@ async def test_bilingual_answers_use_persistent_retrieval_and_exact_citations(
     assert evidence_fragment in cited_context["text"]
     assert cited_context["trust"] == UNTRUSTED_CONTEXT_LABEL
     turn_roles = [
-        turn.role
-        for turn in qa_corpus.conversations.list_turns(session.session_id, "owner-1")
+        turn.role for turn in qa_corpus.conversations.list_turns(session.session_id, "owner-1")
     ]
     assert turn_roles == [
         ConversationRole.USER,
@@ -668,8 +663,7 @@ async def test_unsupported_fact_refuses_without_generation(
     assert event.content == response.message
     assert pipeline.generation.requests == []
     turn_roles = [
-        turn.role
-        for turn in qa_corpus.conversations.list_turns(session.session_id, "owner-1")
+        turn.role for turn in qa_corpus.conversations.list_turns(session.session_id, "owner-1")
     ]
     assert turn_roles == [
         ConversationRole.USER,
@@ -839,9 +833,7 @@ async def test_generation_provider_failure_is_normalized_without_assistant_outpu
     assert event.kind is StreamEventKind.ERROR
     assert event.content == response.message
     generation_attempts = [
-        attempt
-        for attempt in pipeline.recorder.attempts
-        if attempt.role is ProviderRole.GENERATION
+        attempt for attempt in pipeline.recorder.attempts if attempt.role is ProviderRole.GENERATION
     ]
     assert len(generation_attempts) == 1
     assert generation_attempts[0].status is AttemptStatus.FAILED

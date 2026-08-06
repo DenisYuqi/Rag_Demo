@@ -11,6 +11,10 @@ from openai import AsyncOpenAI
 
 from rag_mvp.api.qa import QARuntimeServices
 from rag_mvp.config.settings import Settings
+from rag_mvp.evaluation.pricing import (
+    OPENAI_STANDARD_PRICING_VERSION,
+    openai_standard_pricing_catalog,
+)
 from rag_mvp.ingestion.chunking import ChunkingConfig
 from rag_mvp.ingestion.extractors import OcrAdapter
 from rag_mvp.ingestion.service import IngestionService
@@ -270,6 +274,22 @@ def _compose_qa(
         ),
         budgets=_qa_budgets(settings),
         maximum_provider_attempts=settings.provider_retry_limit + 1,
+        pricing_catalog=(
+            openai_standard_pricing_catalog(
+                provider=embedding_identity.provider,
+                models=tuple(
+                    model
+                    for model in (
+                        settings.embedding_model,
+                        settings.generation_model,
+                        settings.reranking_model,
+                    )
+                    if model is not None
+                ),
+            )
+            if settings.pricing_version == OPENAI_STANDARD_PRICING_VERSION
+            else None
+        ),
     )
 
     def readiness_probe() -> tuple[bool, str | None]:

@@ -13,6 +13,7 @@ from rag_mvp.providers.models import (
     ProviderErrorCategory,
     RerankCandidate,
     RerankRequest,
+    TokenUsage,
 )
 from rag_mvp.providers.openai_adapters import (
     OpenAIChatGenerationProvider,
@@ -91,6 +92,22 @@ def test_unknown_duplicate_missing_or_non_strict_output_is_invalid(content: str)
         validate_listwise_json(content, ("c1", "c2"))
 
     assert caught.value.category is ProviderErrorCategory.INCOMPATIBLE_RESPONSE
+
+
+async def test_invalid_listwise_output_preserves_generation_usage(
+    provider_context: ProviderCallContext,
+) -> None:
+    reranker, _ = reranker_for("not-json")
+    request = RerankRequest(
+        "query",
+        (RerankCandidate("c1", "one"), RerankCandidate("c2", "two")),
+    )
+
+    with pytest.raises(ProviderError) as caught:
+        await reranker.rerank(request, provider_context)
+
+    assert caught.value.category is ProviderErrorCategory.INCOMPATIBLE_RESPONSE
+    assert caught.value.usage == TokenUsage(10, 3)
 
 
 async def test_candidate_count_is_bounded_before_provider_call(

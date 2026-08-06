@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from rag_mvp.domain.evaluation import ModelAttemptStatus
 from rag_mvp.domain.ingestion import ChunkLocator
 from rag_mvp.domain.qa import ConversationRole, QAAnswer, QAError, QAErrorCode, QARefusal
 from rag_mvp.domain.retrieval import (
@@ -16,6 +17,7 @@ from rag_mvp.domain.retrieval import (
     RetrievalMode,
     RetrievalResult,
 )
+from rag_mvp.providers.errors import ProviderOperationError
 from rag_mvp.providers.models import (
     AttemptStatus,
     Deadline,
@@ -25,11 +27,12 @@ from rag_mvp.providers.models import (
     ModelAttempt,
     ModelIdentity,
     ProviderCallContext,
+    ProviderErrorCategory,
     ProviderRole,
     RoutedResult,
 )
 from rag_mvp.qa.deadlines import DeadlineRunner, QAStageBudgets
-from rag_mvp.qa.orchestrator import QAOrchestrator
+from rag_mvp.qa.orchestrator import QAOrchestrator, _provider_attempt_evidence
 from rag_mvp.qa.refusal import FactEvidence
 from rag_mvp.qa.sessions import ConversationService
 from rag_mvp.storage.database import Database
@@ -74,12 +77,14 @@ class ScriptedRetrieval:
         advance_seconds: float = 0,
         degraded_rerank: bool = False,
         provider_attempt_count: int = 1,
+        provider_failed_attempt_count: int = 0,
     ) -> None:
         self.evidence = evidence
         self.clock = clock
         self.advance_seconds = advance_seconds
         self.degraded_rerank = degraded_rerank
         self.provider_attempt_count = provider_attempt_count
+        self.provider_failed_attempt_count = provider_failed_attempt_count
         self.calls = 0
         self.queries: list[str] = []
         self.deadlines: list[Deadline] = []
@@ -113,6 +118,7 @@ class ScriptedRetrieval:
                 candidate_counts={"final": len(self.evidence)},
                 cache_status={"retrieval": CacheOutcome.BYPASS},
                 provider_attempt_counts={"embedding": self.provider_attempt_count},
+                provider_failed_attempt_counts={"embedding": self.provider_failed_attempt_count},
                 degradation_reasons=("rerank_timeout",) if self.degraded_rerank else (),
             ),
         )
@@ -160,12 +166,14 @@ class ScriptedGeneration:
         *,
         advance_seconds: float = 0,
         attempts: tuple[ModelAttempt, ...] = (),
+        error: ProviderOperationError | None = None,
         block: bool = False,
     ) -> None:
         self.clock = clock
         self.content = content
         self.advance_seconds = advance_seconds
         self.attempts = attempts
+        self.error = error
         self.block = block
         self.calls = 0
         self.requests: list[GenerationRequest] = []
@@ -189,6 +197,8 @@ class ScriptedGeneration:
                 self.cancelled = True
                 raise
         self.clock.advance(self.advance_seconds)
+        if self.error is not None:
+            raise self.error
         return RoutedResult(
             value=GenerationResult(
                 content=self.content,
@@ -214,7 +224,10 @@ def _generated(
     )
 
 
-def _attempt(number: int) -> ModelAttempt:
+def _attempt(
+    number: int,
+    status: AttemptStatus = AttemptStatus.SUCCEEDED,
+) -> ModelAttempt:
     return ModelAttempt(
         request_id="request-1",
         operation_id="qa-generation",
@@ -224,9 +237,36 @@ def _attempt(number: int) -> ModelAttempt:
         provider="test",
         model="grounded-generator",
         latency_ms=1,
-        status=AttemptStatus.SUCCEEDED,
-        is_fallback=False,
+        status=status,
+        is_fallback=number > 1,
+        error_category=(
+            None if status is AttemptStatus.SUCCEEDED else ProviderErrorCategory.SERVER
+        ),
     )
+
+
+@pytest.mark.parametrize(
+    "category",
+    (ProviderErrorCategory.TIMEOUT, ProviderErrorCategory.DEADLINE_EXCEEDED),
+)
+def test_provider_timeout_attempts_use_timed_out_evidence_status(
+    category: ProviderErrorCategory,
+) -> None:
+    attempt = ModelAttempt(
+        request_id="request-timeout",
+        operation_id="qa-generation",
+        attempt_number=1,
+        route_id="generation-primary",
+        role=ProviderRole.GENERATION,
+        provider="test",
+        model="grounded-generator",
+        latency_ms=1,
+        status=AttemptStatus.FAILED,
+        is_fallback=False,
+        error_category=category,
+    )
+
+    assert _provider_attempt_evidence(attempt).status is ModelAttemptStatus.TIMED_OUT
 
 
 def _services(
@@ -296,6 +336,89 @@ async def test_success_uses_one_root_clock_and_stage_deadlines(tmp_path: Path) -
     assert response.diagnostics.stage_timings_ms["retrieval"] == pytest.approx(100)
     turns = conversations.list_turns(session_id, "owner-1")
     assert [turn.role for turn in turns] == [ConversationRole.USER]
+
+
+async def test_success_reports_all_internal_provider_attempts_without_content(
+    tmp_path: Path,
+) -> None:
+    clock = ManualClock()
+    retrieval = ScriptedRetrieval(
+        (_evidence("chunk-1", 1),),
+        clock,
+        provider_attempt_count=2,
+        provider_failed_attempt_count=1,
+    )
+    generation = ScriptedGeneration(
+        clock,
+        _generated(),
+        attempts=(_attempt(1, AttemptStatus.FAILED), _attempt(2)),
+    )
+    orchestrator, _, session_id = _services(
+        tmp_path,
+        clock,
+        retrieval,
+        ScriptedAssessor(clock),
+        generation,
+    )
+
+    response = await orchestrator.answer(
+        request_id="request-1",
+        session_id=session_id,
+        owner_id="owner-1",
+        question="What is the leave allowance?",
+        mode=RetrievalMode.HYBRID,
+    )
+
+    assert isinstance(response, QAAnswer)
+    assert response.diagnostics.metadata["provider_attempt_count"] == 4
+    assert response.diagnostics.metadata["provider_failed_attempt_count"] == 2
+    generation_attempts = tuple(
+        attempt
+        for attempt in response.diagnostics.provider_attempts
+        if attempt.role.value == "generation"
+    )
+    assert tuple(attempt.latency_ms for attempt in generation_attempts) == (1, 1)
+    assert generation_attempts[0].safe_error_category == "server"
+    assert "What is the leave allowance?" not in response.diagnostics.model_dump_json()
+
+
+async def test_generation_failure_preserves_every_failed_provider_attempt(
+    tmp_path: Path,
+) -> None:
+    clock = ManualClock()
+    generation_attempts = (
+        _attempt(1, AttemptStatus.FAILED),
+        _attempt(2, AttemptStatus.FAILED),
+    )
+    orchestrator, _, session_id = _services(
+        tmp_path,
+        clock,
+        ScriptedRetrieval((_evidence("chunk-1", 1),), clock),
+        ScriptedAssessor(clock),
+        ScriptedGeneration(
+            clock,
+            _generated(),
+            error=ProviderOperationError(
+                ProviderErrorCategory.SERVER,
+                generation_attempts,
+            ),
+        ),
+    )
+
+    response = await orchestrator.answer(
+        request_id="request-1",
+        session_id=session_id,
+        owner_id="owner-1",
+        question="What is the leave allowance?",
+        mode=RetrievalMode.HYBRID,
+    )
+
+    assert isinstance(response, QAError)
+    assert response.code is QAErrorCode.DEPENDENCY_FAILURE
+    assert response.diagnostics.metadata["provider_attempt_count"] == 3
+    assert response.diagnostics.metadata["provider_failed_attempt_count"] == 2
+    assert response.diagnostics.metadata["provider_unknown_usage_attempt_count"] == 3
+    assert len(response.diagnostics.provider_attempts) == 3
 
 
 async def test_follow_up_separates_current_question_from_retrieval_query(tmp_path: Path) -> None:

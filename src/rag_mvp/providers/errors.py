@@ -6,7 +6,12 @@ import asyncio
 from collections.abc import Mapping
 from typing import Final
 
-from rag_mvp.providers.models import ModelAttempt, ProviderErrorCategory
+from rag_mvp.providers.models import (
+    UNKNOWN_USAGE,
+    ModelAttempt,
+    ProviderErrorCategory,
+    TokenUsage,
+)
 
 _SAFE_MESSAGES: Final[Mapping[ProviderErrorCategory, str]] = {
     ProviderErrorCategory.NETWORK: "provider_network_error",
@@ -40,7 +45,10 @@ class ProviderError(Exception):
         *,
         retryable: bool | None = None,
         fallback_eligible: bool | None = None,
+        usage: TokenUsage = UNKNOWN_USAGE,
     ) -> None:
+        if not isinstance(usage, TokenUsage):
+            raise TypeError("provider error usage must be TokenUsage")
         self.category = category
         self.retryable = category in _TRANSIENT if retryable is None else retryable
         self.fallback_eligible = (
@@ -53,6 +61,7 @@ class ProviderError(Exception):
             if fallback_eligible is None
             else fallback_eligible
         )
+        self.usage = usage
         super().__init__(_SAFE_MESSAGES[category])
 
 
@@ -66,12 +75,14 @@ class ProviderOperationError(ProviderError):
         *,
         retryable: bool | None = None,
         fallback_eligible: bool | None = None,
+        usage: TokenUsage = UNKNOWN_USAGE,
     ) -> None:
         self.attempts = attempts
         super().__init__(
             category,
             retryable=retryable,
             fallback_eligible=fallback_eligible,
+            usage=usage,
         )
 
 

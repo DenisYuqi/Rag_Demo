@@ -10,13 +10,18 @@ from decimal import Decimal, InvalidOperation
 from typing import cast
 
 from rag_mvp.domain.retrieval import RankingEvidence
+from rag_mvp.providers.errors import ProviderOperationError
 from rag_mvp.providers.models import (
+    AttemptStatus,
     Deadline,
     EmbeddingRequest,
     EmbeddingResult,
     EmbeddingSpaceIdentity,
+    ModelAttempt,
+    ModelIdentity,
     ProviderCallContext,
     RoutedResult,
+    TokenUsage,
 )
 from rag_mvp.providers.protocols import EmbeddingProvider
 from rag_mvp.providers.routing import ModelProviderRouter
@@ -62,9 +67,63 @@ _UNIT_ALIASES = {
 class EvidenceAssessmentError(ValueError):
     """A stable failure to derive request-scoped fact evidence."""
 
-    def __init__(self, code: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        *,
+        provider_attempts: tuple[ModelAttempt, ...] = (),
+        unrecorded_provider_attempt_count: int = 0,
+    ) -> None:
         self.code = code
+        self.provider_attempts = tuple(provider_attempts)
+        self.unrecorded_provider_attempt_count = unrecorded_provider_attempt_count
         super().__init__(code)
+
+    @property
+    def provider_attempt_count(self) -> int:
+        return len(self.provider_attempts) + self.unrecorded_provider_attempt_count
+
+    @property
+    def provider_failed_attempt_count(self) -> int:
+        return (
+            sum(attempt.status is not AttemptStatus.SUCCEEDED for attempt in self.provider_attempts)
+            + self.unrecorded_provider_attempt_count
+        )
+
+    @property
+    def provider_unknown_usage_attempt_count(self) -> int:
+        return sum(_attempt_usage_unknown(attempt) for attempt in self.provider_attempts) + (
+            self.unrecorded_provider_attempt_count
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class FactAssessmentResult:
+    facts: tuple[FactEvidence, ...]
+    provider_attempts: tuple[ModelAttempt, ...] = ()
+    direct_provider_usage: TokenUsage | None = None
+    direct_provider_identity: ModelIdentity | None = None
+
+    def __post_init__(self) -> None:
+        if (self.direct_provider_usage is None) != (self.direct_provider_identity is None):
+            raise ValueError("direct provider usage and identity must be recorded together")
+
+    @property
+    def provider_attempt_count(self) -> int:
+        return len(self.provider_attempts) + int(self.direct_provider_usage is not None)
+
+    @property
+    def provider_failed_attempt_count(self) -> int:
+        return sum(
+            attempt.status is not AttemptStatus.SUCCEEDED for attempt in self.provider_attempts
+        )
+
+    @property
+    def provider_unknown_usage_attempt_count(self) -> int:
+        unknown = sum(_attempt_usage_unknown(attempt) for attempt in self.provider_attempts)
+        if self.direct_provider_usage is not None:
+            unknown += int(self.direct_provider_usage.input_tokens is None)
+        return unknown
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,6 +192,25 @@ class SemanticFactEvidenceAssessor:
         revision_id: str,
         deadline: Deadline,
     ) -> tuple[FactEvidence, ...]:
+        return (
+            await self.assess_with_diagnostics(
+                query,
+                candidates,
+                request_id=request_id,
+                revision_id=revision_id,
+                deadline=deadline,
+            )
+        ).facts
+
+    async def assess_with_diagnostics(
+        self,
+        query: str,
+        candidates: Sequence[RankingEvidence],
+        *,
+        request_id: str,
+        revision_id: str,
+        deadline: Deadline,
+    ) -> FactAssessmentResult:
         if not isinstance(request_id, str) or _SAFE_ID.fullmatch(request_id) is None:
             raise EvidenceAssessmentError("request_id_invalid")
         if not isinstance(revision_id, str) or _SAFE_ID.fullmatch(revision_id) is None:
@@ -146,81 +224,119 @@ class SemanticFactEvidenceAssessor:
             maximum_candidates=self.config.maximum_candidates,
         )
         if not evidence:
-            return tuple(FactEvidence(f"fact-{index}", 0) for index in range(1, len(facts) + 1))
+            return FactAssessmentResult(
+                tuple(FactEvidence(f"fact-{index}", 0) for index in range(1, len(facts) + 1))
+            )
 
         texts = (*facts, *(candidate.text for candidate in evidence))
         request = EmbeddingRequest(tuple(texts))
         context = ProviderCallContext(request_id, "fact-evidence-assessment", deadline)
-        raw_result = await self._embed(request, context)
+        raw_result, provider_attempts, direct_provider_usage = await self._embed(request, context)
         if deadline.expired:
             raise TimeoutError
-        if raw_result.identity != self.required_space or len(raw_result.vectors) != len(texts):
-            raise EvidenceAssessmentError("embedding_result_invalid")
-        fact_vectors = raw_result.vectors[: len(facts)]
-        candidate_vectors = raw_result.vectors[len(facts) :]
+        try:
+            if raw_result.identity != self.required_space or len(raw_result.vectors) != len(texts):
+                raise EvidenceAssessmentError("embedding_result_invalid")
+            fact_vectors = raw_result.vectors[: len(facts)]
+            candidate_vectors = raw_result.vectors[len(facts) :]
 
-        assessments: list[FactEvidence] = []
-        for index, fact_vector in enumerate(fact_vectors, start=1):
-            ranked = sorted(
-                (
-                    (_cosine_score(fact_vector, vector), candidate)
-                    for vector, candidate in zip(candidate_vectors, evidence, strict=True)
-                ),
-                key=lambda item: (-item[0], item[1].final_rank, item[1].chunk_id),
-            )
-            selected = tuple(
-                item for item in ranked if item[0] >= self.config.candidate_similarity_floor
-            )[: self.config.maximum_supporting_chunks]
-            if not selected:
-                assessments.append(FactEvidence(f"fact-{index}", 0))
-                continue
-            score = round(selected[0][0], 6)
-            primary = selected[0][1]
-            conflicts = tuple(
-                candidate.chunk_id
-                for _, candidate in selected[1:]
-                if candidate.source_id != primary.source_id
-                and _materially_conflicts(primary.text, candidate.text)
-            )
-            if conflicts:
-                assessments.append(
-                    FactEvidence(
-                        f"fact-{index}",
-                        score,
-                        (primary.chunk_id,),
-                        conflicts,
-                    )
+            assessments: list[FactEvidence] = []
+            for index, fact_vector in enumerate(fact_vectors, start=1):
+                ranked = sorted(
+                    (
+                        (_cosine_score(fact_vector, vector), candidate)
+                        for vector, candidate in zip(candidate_vectors, evidence, strict=True)
+                    ),
+                    key=lambda item: (-item[0], item[1].final_rank, item[1].chunk_id),
                 )
-            else:
-                assessments.append(
-                    FactEvidence(
-                        f"fact-{index}",
-                        score,
-                        tuple(candidate.chunk_id for _, candidate in selected),
-                    )
+                selected = tuple(
+                    item for item in ranked if item[0] >= self.config.candidate_similarity_floor
+                )[: self.config.maximum_supporting_chunks]
+                if not selected:
+                    assessments.append(FactEvidence(f"fact-{index}", 0))
+                    continue
+                score = round(selected[0][0], 6)
+                primary = selected[0][1]
+                conflicts = tuple(
+                    candidate.chunk_id
+                    for _, candidate in selected[1:]
+                    if candidate.source_id != primary.source_id
+                    and _materially_conflicts(primary.text, candidate.text)
                 )
-        return tuple(assessments)
+                if conflicts:
+                    assessments.append(
+                        FactEvidence(
+                            f"fact-{index}",
+                            score,
+                            (primary.chunk_id,),
+                            conflicts,
+                        )
+                    )
+                else:
+                    assessments.append(
+                        FactEvidence(
+                            f"fact-{index}",
+                            score,
+                            tuple(candidate.chunk_id for _, candidate in selected),
+                        )
+                    )
+        except EvidenceAssessmentError as error:
+            raise EvidenceAssessmentError(
+                error.code,
+                provider_attempts=provider_attempts,
+                unrecorded_provider_attempt_count=int(direct_provider_usage is not None),
+            ) from None
+        return FactAssessmentResult(
+            tuple(assessments),
+            provider_attempts,
+            direct_provider_usage,
+            raw_result.identity.model_identity if direct_provider_usage is not None else None,
+        )
 
     async def _embed(
         self,
         request: EmbeddingRequest,
         context: ProviderCallContext,
-    ) -> EmbeddingResult:
+    ) -> tuple[EmbeddingResult, tuple[ModelAttempt, ...], TokenUsage | None]:
         if isinstance(self._embedding, ModelProviderRouter):
-            routed = await self._embedding.embed(
-                request,
-                context,
-                required_space=self.required_space,
-            )
+            try:
+                routed = await self._embedding.embed(
+                    request,
+                    context,
+                    required_space=self.required_space,
+                )
+            except ProviderOperationError as error:
+                raise EvidenceAssessmentError(
+                    "embedding_provider_failed",
+                    provider_attempts=error.attempts,
+                ) from None
             if not isinstance(routed, RoutedResult) or not isinstance(
                 routed.value, EmbeddingResult
             ):
-                raise EvidenceAssessmentError("embedding_result_invalid")
-            return routed.value
-        result = await self._embedding.embed(request, context)
+                raise EvidenceAssessmentError(
+                    "embedding_result_invalid",
+                    provider_attempts=getattr(routed, "attempts", ()),
+                )
+            return routed.value, routed.attempts, None
+        try:
+            result = await self._embedding.embed(request, context)
+        except Exception:
+            raise EvidenceAssessmentError(
+                "embedding_provider_failed",
+                unrecorded_provider_attempt_count=1,
+            ) from None
         if not isinstance(result, EmbeddingResult):
-            raise EvidenceAssessmentError("embedding_result_invalid")
-        return result
+            raise EvidenceAssessmentError(
+                "embedding_result_invalid",
+                unrecorded_provider_attempt_count=1,
+            )
+        return result, (), result.usage
+
+
+def _attempt_usage_unknown(attempt: ModelAttempt) -> bool:
+    if attempt.role.value == "embedding":
+        return attempt.usage.input_tokens is None
+    return attempt.usage.input_tokens is None or attempt.usage.output_tokens is None
 
 
 def _decompose_query(query: str, *, maximum_facts: int) -> tuple[str, ...]:

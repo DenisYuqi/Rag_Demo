@@ -1,0 +1,10 @@
+# Reviewed 2026-08-07. Each exception is documented and verified in
+# docs/container-security-review.md. Re-run the unsuppressed JSON scan whenever
+# the base image, Chroma, or Trivy database changes.
+CVE-2026-58016
+CVE-2026-6653
+CVE-2026-13221
+CVE-2026-42496
+CVE-2026-57433
+CVE-2026-8376
+CVE-2026-45829

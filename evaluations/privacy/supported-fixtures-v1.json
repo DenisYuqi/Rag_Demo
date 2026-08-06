@@ -1,0 +1,78 @@
+{
+  "fixture_version": "supported-fixtures-v1",
+  "synthetic_only": true,
+  "fixtures": [
+    {
+      "id": "email",
+      "category": "email",
+      "synthetic": true,
+      "value": "privacy.fixture+alpha@example.invalid"
+    },
+    {
+      "id": "phone_china",
+      "category": "phone",
+      "synthetic": true,
+      "value": "13800138000"
+    },
+    {
+      "id": "phone_international",
+      "category": "phone",
+      "synthetic": true,
+      "value": "+1 (202) 555-0147"
+    },
+    {
+      "id": "chinese_national_id",
+      "category": "chinese_id",
+      "synthetic": true,
+      "value": "11010519491231002X"
+    },
+    {
+      "id": "us_ssn",
+      "category": "ssn",
+      "synthetic": true,
+      "value": "078-05-1120"
+    },
+    {
+      "id": "luhn_payment_card",
+      "category": "payment_card",
+      "synthetic": true,
+      "value": "4111111111111111"
+    },
+    {
+      "id": "ipv4_rfc5737",
+      "category": "ipv4",
+      "synthetic": true,
+      "value": "192.0.2.44"
+    },
+    {
+      "id": "ipv6_rfc3849",
+      "category": "ipv6",
+      "synthetic": true,
+      "value": "2001:db8::5"
+    },
+    {
+      "id": "api_key",
+      "category": "api_key",
+      "synthetic": true,
+      "value": "sk-privacyfixture-only-0123456789abcdef"
+    },
+    {
+      "id": "bearer_authorization",
+      "category": "bearer",
+      "synthetic": true,
+      "value": "Authorization: Bearer privacy-fixture-bearer-token-v1"
+    },
+    {
+      "id": "password_assignment",
+      "category": "password_assignment",
+      "synthetic": true,
+      "value": "password='Privacy-Fixture-Password-73!'"
+    },
+    {
+      "id": "private_key_block",
+      "category": "private_key",
+      "synthetic": true,
+      "value": "-----BEGIN PRIVATE KEY-----\nPRIVACYFIXTUREONLYNOTAKEY0123456789\n-----END PRIVATE KEY-----"
+    }
+  ]
+}

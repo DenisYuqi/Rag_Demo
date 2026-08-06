@@ -501,9 +501,7 @@ def test_builder_does_not_treat_numeric_evidence_as_raw_pii() -> None:
     assert execution is not None
     results = (
         original_results[0].model_copy(
-            update={
-                "execution": execution.model_copy(update={"latency_ms": 843.32269999868})
-            }
+            update={"execution": execution.model_copy(update={"latency_ms": 843.32269999868})}
         ),
         original_results[1],
     )

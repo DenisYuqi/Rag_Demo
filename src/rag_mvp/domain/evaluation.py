@@ -13,6 +13,7 @@ from rag_mvp.domain._base import (
     FiniteFloat,
     Identifier,
     NonEmptyText,
+    NonNegativeFiniteFloat,
     SafeScalar,
     utc_now,
 )
@@ -77,6 +78,28 @@ class ModelPricing(DomainModel):
     currency: Identifier
     input_per_million: Annotated[Decimal, Field(ge=0)] | None = None
     output_per_million: Annotated[Decimal, Field(ge=0)] | None = None
+
+
+class ProviderAttemptEvidence(DomainModel):
+    """Content-free, per-call provider ledger entry used by runtime evidence."""
+
+    operation_id: Identifier
+    attempt_number: Annotated[int, Field(gt=0)] = 1
+    route_id: Identifier | None = None
+    role: ModelRole
+    provider: Identifier
+    model: Identifier
+    status: ModelAttemptStatus
+    fallback: bool = False
+    latency_ms: NonNegativeFiniteFloat | None = None
+    safe_error_category: (
+        Annotated[
+            str,
+            Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_.-]*$"),
+        ]
+        | None
+    ) = None
+    usage: TokenUsage = Field(default_factory=TokenUsage)
 
 
 class ModelAttempt(DomainModel):

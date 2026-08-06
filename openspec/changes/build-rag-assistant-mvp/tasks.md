@@ -137,14 +137,14 @@ Implement and integrate in vertical gates. A gate is complete only when its end-
 
 ## 11. Load Evidence and Local Container Deployment
 
-- [ ] 11.1 Implement an HTTP load-test harness with warm-up, fixed five-user concurrency, cache-bypass headers, at least 500-success validation, nearest-rank percentiles, and error accounting; verify parser logic with `uv run pytest tests/unit/performance/test_load_report.py -q`.
-- [ ] 11.2 Implement the machine-readable performance evidence bundle with run/config/model IDs, warm-up, attempts, successes, errors, latency, stages, tokens, cost, and representative trace references; verify schema with `uv run pytest tests/unit/performance/test_evidence_bundle.py -q`.
-- [ ] 11.3 Add a multi-stage non-root `Dockerfile`, pinned runtime command, OCI labels, and `.dockerignore`; verify build and UID with `docker build -t rag-mvp:dev . && docker run --rm --entrypoint id rag-mvp:dev`.
-- [ ] 11.4 Add Docker Compose with exactly one app instance, loopback-default ingress, persistent data volume, runtime secrets, and health checks; validate with `docker compose config`.
-- [ ] 11.5 Implement exclusive data-root writer locking and graceful shutdown/drain behavior; verify competing-writer rejection and termination cleanup with `uv run pytest tests/integration/test_lifecycle.py -q`.
-- [ ] 11.6 Add `.env.example` and a local runbook covering build, start, health, sample ingestion, smoke QA, logs, backup, restore, and stop; execute every command in the runbook against a clean volume.
-- [ ] 11.7 Verify volume persistence by ingesting sample documents, recreating the container, and running the same grounded smoke query without re-ingestion; retain the smoke output as release evidence.
-- [ ] 11.8 Scan the image for embedded secrets and unresolved critical vulnerabilities; verify release checks with the documented secret scanner and `trivy image --exit-code 1 --severity CRITICAL rag-mvp:dev`.
+- [x] 11.1 Implement an HTTP load-test harness with warm-up, fixed five-user concurrency, cache-bypass headers, at least 500-success validation, nearest-rank percentiles, and error accounting; verify parser logic with `uv run pytest tests/unit/performance/test_load_report.py -q`.
+- [x] 11.2 Implement the machine-readable performance evidence bundle with run/config/model IDs, warm-up, attempts, successes, errors, latency, stages, tokens, cost, and representative trace references; verify schema with `uv run pytest tests/unit/performance/test_evidence_bundle.py -q`.
+- [x] 11.3 Add a multi-stage non-root `Dockerfile`, pinned runtime command, OCI labels, and `.dockerignore`; verify build and UID with `docker build -t rag-mvp:dev . && docker run --rm --entrypoint id rag-mvp:dev`.
+- [x] 11.4 Add Docker Compose with exactly one app instance, loopback-default ingress, persistent data volume, runtime secrets, and health checks; validate with `docker compose config`.
+- [x] 11.5 Implement exclusive data-root writer locking and graceful shutdown/drain behavior; verify competing-writer rejection and termination cleanup with `uv run pytest tests/integration/test_lifecycle.py -q`.
+- [x] 11.6 Add `.env.example` and a local runbook covering build, start, health, sample ingestion, smoke QA, logs, backup, restore, and stop; execute every command in the runbook against a clean volume.
+- [x] 11.7 Verify volume persistence by ingesting sample documents, recreating the container, and running the same grounded smoke query without re-ingestion; retain the smoke output as release evidence.
+- [x] 11.8 Scan the image for embedded secrets and unresolved critical vulnerabilities; verify release checks with the documented secret scanner and `trivy image --exit-code 1 --severity CRITICAL rag-mvp:dev`.
 
 ## 12. Final Acceptance
 

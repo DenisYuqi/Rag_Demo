@@ -12,7 +12,18 @@ from types import TracebackType
 from typing import Protocol, Self, cast
 
 from rag_mvp.config.settings import Settings
-from rag_mvp.domain.evaluation import TokenUsage as DiagnosticTokenUsage
+from rag_mvp.domain.evaluation import (
+    ModelAttemptStatus as EvidenceAttemptStatus,
+)
+from rag_mvp.domain.evaluation import (
+    ModelRole as EvidenceModelRole,
+)
+from rag_mvp.domain.evaluation import (
+    ProviderAttemptEvidence,
+)
+from rag_mvp.domain.evaluation import (
+    TokenUsage as DiagnosticTokenUsage,
+)
 from rag_mvp.domain.ingestion import DocumentKind
 from rag_mvp.domain.retrieval import (
     CacheOutcome,
@@ -23,7 +34,13 @@ from rag_mvp.domain.retrieval import (
     RetrievalResult,
 )
 from rag_mvp.performance.worker_pools import RagWorkerPools
-from rag_mvp.providers.models import ModelAttempt, ProviderCallContext, TokenUsage
+from rag_mvp.providers.models import (
+    AttemptStatus,
+    ModelAttempt,
+    ProviderCallContext,
+    ProviderErrorCategory,
+    TokenUsage,
+)
 from rag_mvp.providers.protocols import EmbeddingProvider, RerankingProvider
 from rag_mvp.providers.routing import ModelProviderRouter
 from rag_mvp.retrieval.binding import BoundRetrievalSnapshot
@@ -32,6 +49,7 @@ from rag_mvp.retrieval.collection import (
     HybridCollectionError,
     collect_hybrid_candidates,
 )
+from rag_mvp.retrieval.dense import DenseIndexError
 from rag_mvp.retrieval.evidence import EvidenceAssembler, assemble_legacy_evidence
 from rag_mvp.retrieval.fusion import (
     CandidateIntegrityError,
@@ -84,10 +102,36 @@ class RetrievalLimits:
 
 
 class RetrievalUnavailableError(RuntimeError):
-    def __init__(self, code: str, *, failed_stages: tuple[str, ...] = ()) -> None:
+    def __init__(
+        self,
+        code: str,
+        *,
+        failed_stages: tuple[str, ...] = (),
+        provider_attempts: tuple[ModelAttempt, ...] = (),
+        unrecorded_provider_attempt_count: int = 0,
+    ) -> None:
         super().__init__(code)
         self.code = code
         self.failed_stages = failed_stages
+        self.provider_attempts = tuple(provider_attempts)
+        self.unrecorded_provider_attempt_count = unrecorded_provider_attempt_count
+
+    @property
+    def provider_attempt_count(self) -> int:
+        return len(self.provider_attempts) + self.unrecorded_provider_attempt_count
+
+    @property
+    def provider_failed_attempt_count(self) -> int:
+        return (
+            sum(attempt.status is not AttemptStatus.SUCCEEDED for attempt in self.provider_attempts)
+            + self.unrecorded_provider_attempt_count
+        )
+
+    @property
+    def provider_unknown_usage_attempt_count(self) -> int:
+        return sum(_attempt_usage_unknown(attempt) for attempt in self.provider_attempts) + (
+            self.unrecorded_provider_attempt_count
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,6 +147,9 @@ class _RetrievalStages:
     timings: dict[str, float]
     embedding_usage: TokenUsage | None = None
     embedding_attempts: tuple[ModelAttempt, ...] = ()
+    embedding_provider_attempt_count: int = 0
+    embedding_provider_failed_attempt_count: int = 0
+    embedding_provider_unknown_usage_attempt_count: int = 0
 
 
 class RetrievalService:
@@ -331,10 +378,86 @@ class RetrievalService:
         elif stages.rerank is not None and stages.rerank.usage is not None:
             usage["reranker"] = _diagnostic_usage(stages.rerank.usage)
         attempt_counts: dict[str, int] = {}
-        if stages.embedding_attempts:
-            attempt_counts["embedding"] = len(stages.embedding_attempts)
+        failed_attempt_counts: dict[str, int] = {}
+        unknown_usage_attempt_counts: dict[str, int] = {}
+        provider_attempts: list[ProviderAttemptEvidence] = []
+        if stages.embedding_provider_attempt_count:
+            attempt_counts["embedding"] = stages.embedding_provider_attempt_count
+            failed_attempt_counts["embedding"] = stages.embedding_provider_failed_attempt_count
+            unknown_usage_attempt_counts["embedding"] = (
+                stages.embedding_provider_unknown_usage_attempt_count
+            )
+            provider_attempts.extend(
+                _provider_attempt_evidence(attempt) for attempt in stages.embedding_attempts
+            )
+            missing_embedding_attempts = stages.embedding_provider_attempt_count - len(
+                stages.embedding_attempts
+            )
+            if missing_embedding_attempts:
+                embedding_provider, embedding_model = self._embedding_provider_model()
+                missing_failures = max(
+                    0,
+                    stages.embedding_provider_failed_attempt_count
+                    - _failed_attempt_count(stages.embedding_attempts),
+                )
+                for index in range(missing_embedding_attempts):
+                    provider_attempts.append(
+                        _direct_provider_attempt_evidence(
+                            operation_id="qa-retrieval",
+                            attempt_number=index + 1,
+                            role=EvidenceModelRole.EMBEDDING,
+                            provider=embedding_provider,
+                            model=embedding_model,
+                            status=(
+                                EvidenceAttemptStatus.FAILED
+                                if index < missing_failures
+                                else EvidenceAttemptStatus.SUCCEEDED
+                            ),
+                            usage=(stages.embedding_usage if index >= missing_failures else None),
+                        )
+                    )
         if stages.rerank is not None:
-            attempt_counts["reranker"] = len(stages.rerank.attempts)
+            direct_rerank_attempted = bool(
+                stages.rerank.degraded
+                and stages.rerank.reason != "rerank_deadline_exceeded"
+                and stages.rerank.identity is not None
+            )
+            rerank_attempt_count = len(stages.rerank.attempts) or int(
+                stages.rerank.usage is not None or direct_rerank_attempted
+            )
+            if rerank_attempt_count:
+                attempt_counts["reranker"] = rerank_attempt_count
+                failed_attempt_counts["reranker"] = (
+                    _failed_attempt_count(stages.rerank.attempts)
+                    if stages.rerank.attempts
+                    else int(stages.rerank.degraded)
+                )
+                unknown_usage_attempt_counts["reranker"] = (
+                    sum(_attempt_usage_unknown(attempt) for attempt in stages.rerank.attempts)
+                    if stages.rerank.attempts
+                    else int(_usage_unknown("reranking", stages.rerank.usage))
+                )
+                provider_attempts.extend(
+                    _provider_attempt_evidence(attempt) for attempt in stages.rerank.attempts
+                )
+                if not stages.rerank.attempts and rerank_attempt_count:
+                    identity = stages.rerank.identity
+                    provider_attempts.append(
+                        _direct_provider_attempt_evidence(
+                            operation_id="qa-retrieval",
+                            role=EvidenceModelRole.RERANKING,
+                            provider=(identity.provider if identity is not None else "unknown"),
+                            model=(identity.model if identity is not None else "unknown"),
+                            status=(
+                                EvidenceAttemptStatus.TIMED_OUT
+                                if stages.rerank.reason == "rerank_timeout"
+                                else EvidenceAttemptStatus.FAILED
+                                if stages.rerank.degraded
+                                else EvidenceAttemptStatus.SUCCEEDED
+                            ),
+                            usage=stages.rerank.usage,
+                        )
+                    )
         diagnostics = RetrievalDiagnostics(
             request_id=context.request_id,
             requested_mode=context.mode,
@@ -346,6 +469,9 @@ class RetrievalService:
             provider_identities=identities,
             provider_usage=usage,
             provider_attempt_counts=attempt_counts,
+            provider_failed_attempt_counts=failed_attempt_counts,
+            provider_unknown_usage_attempt_counts=unknown_usage_attempt_counts,
+            provider_attempts=tuple(provider_attempts),
             degradation_reasons=stages.degradation_reasons,
             failed_stages=stages.failed_stages,
         )
@@ -368,6 +494,13 @@ class RetrievalService:
                 )
             except asyncio.CancelledError:
                 raise
+            except DenseIndexError as error:
+                raise RetrievalUnavailableError(
+                    "retrieval_unavailable",
+                    failed_stages=("dense",),
+                    provider_attempts=error.provider_attempts,
+                    unrecorded_provider_attempt_count=(error.unrecorded_provider_attempt_count),
+                ) from None
             except Exception:
                 raise RetrievalUnavailableError(
                     "retrieval_unavailable",
@@ -392,6 +525,13 @@ class RetrievalService:
                 },
                 embedding_usage=detailed.usage,
                 embedding_attempts=detailed.attempts,
+                embedding_provider_attempt_count=(len(detailed.attempts) or 1),
+                embedding_provider_failed_attempt_count=_failed_attempt_count(detailed.attempts),
+                embedding_provider_unknown_usage_attempt_count=(
+                    sum(_attempt_usage_unknown(attempt) for attempt in detailed.attempts)
+                    if detailed.attempts
+                    else int(_usage_unknown("embedding", detailed.usage))
+                ),
             )
 
         try:
@@ -409,6 +549,8 @@ class RetrievalService:
             raise RetrievalUnavailableError(
                 "retrieval_unavailable",
                 failed_stages=error.failed_stages,
+                provider_attempts=error.provider_attempts,
+                unrecorded_provider_attempt_count=(error.unrecorded_provider_attempt_count),
             ) from None
         except Exception:
             raise RetrievalUnavailableError("retrieval_result_invalid") from None
@@ -475,6 +617,13 @@ class RetrievalService:
             },
             embedding_usage=collection.embedding_usage,
             embedding_attempts=collection.embedding_attempts,
+            embedding_provider_attempt_count=(collection.embedding_provider_attempt_count),
+            embedding_provider_failed_attempt_count=(
+                collection.embedding_provider_failed_attempt_count
+            ),
+            embedding_provider_unknown_usage_attempt_count=(
+                collection.embedding_provider_unknown_usage_attempt_count
+            ),
         )
 
     async def _retrieve_legacy(self, context: RetrievalRequestContext) -> _RetrievalStages:
@@ -695,6 +844,12 @@ class RetrievalService:
             raise RetrievalUnavailableError("provider_context_missing")
         return self._provider_context
 
+    def _embedding_provider_model(self) -> tuple[str, str]:
+        if self._snapshot is None:
+            return "unknown", "unknown"
+        embedding = self._snapshot.revision.embedding_space
+        return embedding.provider_alias, embedding.model
+
     def close(self) -> None:
         if self._closed:
             return
@@ -796,6 +951,74 @@ def _aggregate_attempt_usage(
     return DiagnosticTokenUsage(
         input_tokens=input_tokens if any(value is not None for value in input_values) else None,
         output_tokens=output_tokens if any(value is not None for value in output_values) else None,
+    )
+
+
+def _failed_attempt_count(attempts: tuple[ModelAttempt, ...]) -> int:
+    return sum(attempt.status is not AttemptStatus.SUCCEEDED for attempt in attempts)
+
+
+def _attempt_usage_unknown(attempt: ModelAttempt) -> bool:
+    return _usage_unknown(attempt.role.value, attempt.usage)
+
+
+def _usage_unknown(role: str, usage: TokenUsage | None) -> bool:
+    if usage is None or usage.input_tokens is None:
+        return True
+    return role != "embedding" and usage.output_tokens is None
+
+
+def _provider_attempt_evidence(attempt: ModelAttempt) -> ProviderAttemptEvidence:
+    return ProviderAttemptEvidence(
+        operation_id=attempt.operation_id,
+        attempt_number=attempt.attempt_number,
+        route_id=attempt.route_id,
+        role=EvidenceModelRole(attempt.role.value),
+        provider=attempt.provider,
+        model=attempt.model,
+        status=_evidence_attempt_status(attempt),
+        fallback=attempt.is_fallback,
+        latency_ms=attempt.latency_ms,
+        safe_error_category=(
+            attempt.error_category.value if attempt.error_category is not None else None
+        ),
+        usage=DiagnosticTokenUsage(
+            input_tokens=attempt.usage.input_tokens,
+            output_tokens=attempt.usage.output_tokens,
+        ),
+    )
+
+
+def _evidence_attempt_status(attempt: ModelAttempt) -> EvidenceAttemptStatus:
+    if attempt.status is AttemptStatus.FAILED and attempt.error_category in {
+        ProviderErrorCategory.TIMEOUT,
+        ProviderErrorCategory.DEADLINE_EXCEEDED,
+    }:
+        return EvidenceAttemptStatus.TIMED_OUT
+    return EvidenceAttemptStatus(attempt.status.value)
+
+
+def _direct_provider_attempt_evidence(
+    *,
+    operation_id: str,
+    role: EvidenceModelRole,
+    provider: str,
+    model: str,
+    status: EvidenceAttemptStatus,
+    usage: TokenUsage | None,
+    attempt_number: int = 1,
+) -> ProviderAttemptEvidence:
+    return ProviderAttemptEvidence(
+        operation_id=operation_id,
+        attempt_number=attempt_number,
+        role=role,
+        provider=provider,
+        model=model,
+        status=status,
+        usage=DiagnosticTokenUsage(
+            input_tokens=(usage.input_tokens if usage is not None else None),
+            output_tokens=(usage.output_tokens if usage is not None else None),
+        ),
     )
 
 

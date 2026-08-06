@@ -15,6 +15,7 @@ from rag_mvp.providers.models import (
     ModelIdentity,
     ProviderCallContext,
     ProviderErrorCategory,
+    TokenUsage,
 )
 from rag_mvp.providers.openai_adapters import OpenAIChatGenerationProvider
 
@@ -119,3 +120,23 @@ async def test_empty_and_malformed_generation_is_rejected(
         )
 
     assert caught.value.category is ProviderErrorCategory.INCOMPATIBLE_RESPONSE
+
+
+async def test_malformed_generation_preserves_reported_usage(
+    provider_context: ProviderCallContext,
+) -> None:
+    provider, _ = provider_for(
+        {
+            "choices": [],
+            "usage": {"prompt_tokens": 11, "completion_tokens": 4},
+        }
+    )
+
+    with pytest.raises(ProviderError) as caught:
+        await provider.generate(
+            GenerationRequest((ChatMessage(ChatRole.USER, "question"),)),
+            provider_context,
+        )
+
+    assert caught.value.category is ProviderErrorCategory.INCOMPATIBLE_RESPONSE
+    assert caught.value.usage == TokenUsage(11, 4)

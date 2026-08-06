@@ -6,7 +6,7 @@ import hashlib
 import json
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, field_validator, model_validator
@@ -31,6 +31,8 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    CONTAINER_STOP_GRACE_SECONDS: ClassVar[float] = 20.0
+
     service_name: str = "rag-mvp"
     service_version: str = __version__
     environment: Literal["development", "test", "production"] = "development"
@@ -42,6 +44,7 @@ class Settings(BaseSettings):
 
     provider_backend: Literal["offline", "openai"] = "offline"
     openai_api_key: SecretStr | None = Field(default=None, repr=False)
+    openai_api_key_file: Path | None = Field(default=None, repr=False)
     openai_base_url: str = "https://api.openai.com/v1"
     openai_proxy_url: SecretStr | None = Field(default=None, repr=False)
     openai_send_dimensions: bool = True
@@ -90,10 +93,13 @@ class Settings(BaseSettings):
     qa_redaction_budget_seconds: float = Field(default=0.2, gt=0, le=60)
     qa_serialization_budget_seconds: float = Field(default=0.1, gt=0, le=60)
     qa_finalization_budget_seconds: float = Field(default=0.6, gt=0, le=60)
-    shutdown_grace_seconds: float = Field(default=15.0, gt=0, le=120)
+    server_shutdown_grace_seconds: int = Field(default=4, ge=1, le=19)
+    shutdown_grace_seconds: float = Field(default=15.0, gt=0, lt=20)
 
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     telemetry_exporter: Literal["none", "console", "otlp"] = "none"
+    telemetry_otlp_traces_endpoint: str | None = None
+    telemetry_export_timeout_seconds: float = Field(default=5.0, gt=0, le=30)
     pricing_version: str = "unconfigured"
 
     @field_validator("workbench_path")
@@ -111,6 +117,19 @@ class Settings(BaseSettings):
         normalized = value.rstrip("/")
         if not normalized.startswith(("http://", "https://")):
             raise ValueError("provider base URL must use http or https")
+        return normalized
+
+    @field_validator("telemetry_otlp_traces_endpoint", mode="before")
+    @classmethod
+    def validate_telemetry_otlp_traces_endpoint(cls, value: object) -> object:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
+        normalized = str(value).strip().rstrip("/")
+        parsed = urlsplit(normalized)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("OTLP traces endpoint must be an absolute HTTP(S) URL")
+        if parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise ValueError("OTLP traces endpoint must not contain credentials or query data")
         return normalized
 
     @field_validator("reranking_model", mode="before")
@@ -164,7 +183,28 @@ class Settings(BaseSettings):
             raise ValueError("generation and finalization budgets exceed the total QA deadline")
         if self.default_retrieval_mode == "hybrid-rerank" and self.reranking_model is None:
             raise ValueError("hybrid-rerank default requires a configured reranking model")
+        if self.total_shutdown_budget_seconds >= self.CONTAINER_STOP_GRACE_SECONDS:
+            raise ValueError("server and application shutdown budgets must fit container grace")
+        if self.openai_api_key is None and self.openai_api_key_file is not None:
+            try:
+                secret = self.openai_api_key_file.read_text(encoding="utf-8").strip()
+            except OSError:
+                secret = ""
+            if secret:
+                self.openai_api_key = SecretStr(secret)
         return self
+
+    @property
+    def app_shutdown_grace_seconds(self) -> float:
+        """Budget reserved for ASGI lifespan cleanup after server-side draining."""
+
+        return self.shutdown_grace_seconds
+
+    @property
+    def total_shutdown_budget_seconds(self) -> float:
+        """Maximum configured server drain plus application cleanup duration."""
+
+        return self.server_shutdown_grace_seconds + self.app_shutdown_grace_seconds
 
     def provider_readiness_errors(self) -> tuple[str, ...]:
         """Return safe configuration categories without exposing secret values."""
@@ -178,6 +218,13 @@ class Settings(BaseSettings):
         if not self.generation_model:
             errors.append("generation_model_missing")
         return tuple(errors)
+
+    def telemetry_readiness_errors(self) -> tuple[str, ...]:
+        """Return safe telemetry configuration categories without probing the network."""
+
+        if self.telemetry_exporter == "otlp" and self.telemetry_otlp_traces_endpoint is None:
+            return ("telemetry_otlp_endpoint_missing",)
+        return ()
 
     def safe_dump(self) -> dict[str, Any]:
         """Return diagnostics-safe settings with credentials replaced, never revealed."""

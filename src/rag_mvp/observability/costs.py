@@ -131,9 +131,7 @@ class PricingCatalog:
                 reasons.append(UnknownCostReason.OUTPUT_PRICE_UNKNOWN)
             else:
                 known_parts.append(
-                    Decimal(attempt.usage.output_tokens)
-                    * pricing.output_per_million
-                    / _ONE_MILLION
+                    Decimal(attempt.usage.output_tokens) * pricing.output_per_million / _ONE_MILLION
                 )
 
         known_cost = sum(known_parts, start=Decimal(0)) if known_parts else None

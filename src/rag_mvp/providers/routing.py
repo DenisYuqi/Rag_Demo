@@ -152,7 +152,11 @@ class ModelProviderRouter:
                 selected: EmbeddingRoute = route,
             ) -> EmbeddingResult:
                 result = await selected.provider.embed(request, context)
-                if result.identity != required_space or len(result.vectors) != len(request.texts):
+                if (
+                    not isinstance(result, EmbeddingResult)
+                    or result.identity != required_space
+                    or len(result.vectors) != len(request.texts)
+                ):
                     raise ProviderError(ProviderErrorCategory.INCOMPATIBLE_RESPONSE)
                 return result
 
@@ -204,7 +208,10 @@ class ModelProviderRouter:
                 selected: GenerationRoute = route,
             ) -> GenerationResult:
                 result = await selected.provider.generate(request, context)
-                if result.identity != selected.provider.identity:
+                if (
+                    not isinstance(result, GenerationResult)
+                    or result.identity != selected.provider.identity
+                ):
                     raise ProviderError(ProviderErrorCategory.INCOMPATIBLE_RESPONSE)
                 return result
 

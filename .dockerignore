@@ -1,0 +1,43 @@
+# Build from an allowlist. Local configuration, persistent data, reports, and
+# credentials must never enter the Docker build context.
+.git
+.git/**
+data
+data/**
+evaluations/results
+evaluations/results/**
+evaluations/**/runs
+evaluations/**/runs/**
+
+# Everything is excluded unless the production build explicitly needs it.
+**
+!pyproject.toml
+!uv.lock
+!src/
+!src/**/
+!src/**/*.py
+!src/**/*.json
+!src/**/*.j2
+
+# Keep credential exclusions after allowlist negations: Docker applies the last
+# matching rule, including for files nested below the allowed src tree.
+.env
+.env.*
+**/.env
+**/.env.*
+secrets
+secrets/**
+**/secrets
+**/secrets/**
+**/*.key
+**/*.pem
+**/*.p12
+**/*.pfx
+**/id_rsa*
+**/*credential*
+**/*secret*
+**/__pycache__
+**/__pycache__/**
+**/*.py[cod]
+**/*.egg-info
+**/*.egg-info/**

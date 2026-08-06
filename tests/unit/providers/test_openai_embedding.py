@@ -13,6 +13,7 @@ from rag_mvp.providers.models import (
     NormalizationPolicy,
     ProviderCallContext,
     ProviderErrorCategory,
+    TokenUsage,
 )
 from rag_mvp.providers.openai_adapters import OpenAIEmbeddingProvider
 
@@ -145,6 +146,47 @@ async def test_incompatible_embedding_responses_are_rejected(
         await provider.embed(EmbeddingRequest(input_texts), provider_context)
 
     assert caught.value.category is ProviderErrorCategory.INCOMPATIBLE_RESPONSE
+
+
+async def test_malformed_later_embedding_batch_aggregates_reported_usage(
+    provider_context: ProviderCallContext,
+) -> None:
+    resource = SequentialFakeCreateResource(
+        [
+            {
+                "data": [{"index": 0, "embedding": [1.0, 2.0]}],
+                "usage": {"prompt_tokens": 5},
+            },
+            {"data": [], "usage": {"prompt_tokens": 3}},
+        ]
+    )
+    provider = OpenAIEmbeddingProvider(FakeClient(resource), identity(), batch_size=1)
+
+    with pytest.raises(ProviderError) as caught:
+        await provider.embed(EmbeddingRequest(("first", "second")), provider_context)
+
+    assert caught.value.category is ProviderErrorCategory.INCOMPATIBLE_RESPONSE
+    assert caught.value.usage == TokenUsage(8, None)
+
+
+async def test_unknown_failed_embedding_batch_keeps_aggregate_usage_unknown(
+    provider_context: ProviderCallContext,
+) -> None:
+    resource = SequentialFakeCreateResource(
+        [
+            {
+                "data": [{"index": 0, "embedding": [1.0, 2.0]}],
+                "usage": {"prompt_tokens": 5},
+            },
+            {"data": []},
+        ]
+    )
+    provider = OpenAIEmbeddingProvider(FakeClient(resource), identity(), batch_size=1)
+
+    with pytest.raises(ProviderError) as caught:
+        await provider.embed(EmbeddingRequest(("first", "second")), provider_context)
+
+    assert caught.value.usage == TokenUsage()
 
 
 async def test_zero_vector_cannot_be_l2_normalized(

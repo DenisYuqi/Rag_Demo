@@ -1,0 +1,542 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rag-mvp.local/schemas/performance-evidence-v1.schema.json",
+  "title": "RAG MVP single-instance performance evidence",
+  "description": "Privacy-safe, attempt-auditable evidence for one HTTP acceptance run.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "schema_version",
+    "run_id",
+    "generated_at",
+    "identity",
+    "execution",
+    "warm_up",
+    "attempts",
+    "latency_ms",
+    "tokens",
+    "cost",
+    "thresholds",
+    "evidence_references",
+    "decision"
+  ],
+  "properties": {
+    "$schema": {
+      "const": "https://rag-mvp.local/schemas/performance-evidence-v1.schema.json"
+    },
+    "schema_version": {"const": "1.0.0"},
+    "run_id": {"$ref": "#/$defs/identifier"},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "identity": {"$ref": "#/$defs/identity"},
+    "execution": {"$ref": "#/$defs/execution"},
+    "warm_up": {"$ref": "#/$defs/warmUp"},
+    "attempts": {"$ref": "#/$defs/attempts"},
+    "latency_ms": {"$ref": "#/$defs/latencyEvidence"},
+    "tokens": {"$ref": "#/$defs/tokenEvidence"},
+    "cost": {"$ref": "#/$defs/costEvidence"},
+    "thresholds": {"$ref": "#/$defs/thresholds"},
+    "evidence_references": {"$ref": "#/$defs/evidenceReferences"},
+    "decision": {"$ref": "#/$defs/decision"}
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]*$"
+    },
+    "safeCode": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z][a-z0-9_.-]*$"
+    },
+    "pricingEvidenceDigest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "pricingSourceReferences": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 500,
+        "pattern": "^\\S+$"
+      }
+    },
+    "nonEmptyString": {"type": "string", "minLength": 1},
+    "nonNegativeNumber": {"type": "number", "minimum": 0},
+    "stringMap": {
+      "type": "object",
+      "propertyNames": {"pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+      "additionalProperties": {"$ref": "#/$defs/nonEmptyString"}
+    },
+    "numberMap": {
+      "type": "object",
+      "propertyNames": {"pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+      "additionalProperties": {"$ref": "#/$defs/nonNegativeNumber"}
+    },
+    "integerMap": {
+      "type": "object",
+      "propertyNames": {"pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+      "additionalProperties": {"type": "integer", "minimum": 0}
+    },
+    "identifierArray": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/identifier"}
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code_revision",
+        "configuration_id",
+        "service_version",
+        "load_harness_version",
+        "model_identities",
+        "instance_identity",
+        "pricing_evidence_digest"
+      ],
+      "properties": {
+        "code_revision": {"$ref": "#/$defs/identifier"},
+        "configuration_id": {"$ref": "#/$defs/identifier"},
+        "service_version": {"$ref": "#/$defs/identifier"},
+        "load_harness_version": {"$ref": "#/$defs/identifier"},
+        "model_identities": {
+          "allOf": [
+            {"$ref": "#/$defs/stringMap"},
+            {"minProperties": 1}
+          ]
+        },
+        "instance_identity": {
+          "oneOf": [
+            {"$ref": "#/$defs/identifier"},
+            {"type": "null"}
+          ]
+        },
+        "pricing_evidence_digest": {
+          "oneOf": [
+            {"$ref": "#/$defs/pricingEvidenceDigest"},
+            {"type": "null"}
+          ]
+        }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "started_at",
+        "completed_at",
+        "duration_ms",
+        "instance_count",
+        "configured_concurrency",
+        "observed_peak_concurrency",
+        "throughput_successes_per_second",
+        "workload_digest",
+        "scenario_ids",
+        "cache_policy"
+      ],
+      "properties": {
+        "started_at": {"type": "string", "format": "date-time"},
+        "completed_at": {"type": "string", "format": "date-time"},
+        "duration_ms": {"$ref": "#/$defs/nonNegativeNumber"},
+        "instance_count": {"type": "integer", "minimum": 1},
+        "configured_concurrency": {"type": "integer", "minimum": 1},
+        "observed_peak_concurrency": {"type": "integer", "minimum": 0},
+        "throughput_successes_per_second": {"$ref": "#/$defs/nonNegativeNumber"},
+        "workload_digest": {
+          "oneOf": [{"$ref": "#/$defs/identifier"}, {"type": "null"}]
+        },
+        "scenario_ids": {"$ref": "#/$defs/identifierArray"},
+        "cache_policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["policy", "request_header", "request_value", "satisfied_attempts"],
+          "properties": {
+            "policy": {"$ref": "#/$defs/nonEmptyString"},
+            "request_header": {"$ref": "#/$defs/nonEmptyString"},
+            "request_value": {"$ref": "#/$defs/nonEmptyString"},
+            "satisfied_attempts": {"type": "integer", "minimum": 0}
+          }
+        }
+      }
+    },
+    "attemptRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attempt_id",
+        "logical_request_id",
+        "scenario_id",
+        "attempt_number",
+        "retry_of_attempt_id",
+        "status",
+        "started_at",
+        "completed_at",
+        "latency_ms",
+        "http_status_code",
+        "request_id",
+        "trace_id",
+        "instance_identity",
+        "terminal_kind",
+        "safe_error_code",
+        "retryable",
+        "provider_attempt_count",
+        "provider_failed_attempt_count",
+        "provider_unknown_usage_attempt_count",
+        "provider_evidence_complete",
+        "provider_attempts",
+        "stage_timings_ms",
+        "token_counts",
+        "model_identities",
+        "cache_status"
+      ],
+      "properties": {
+        "attempt_id": {"$ref": "#/$defs/identifier"},
+        "logical_request_id": {"$ref": "#/$defs/identifier"},
+        "scenario_id": {
+          "oneOf": [{"$ref": "#/$defs/identifier"}, {"type": "null"}]
+        },
+        "attempt_number": {"type": "integer", "minimum": 1},
+        "retry_of_attempt_id": {
+          "oneOf": [{"$ref": "#/$defs/identifier"}, {"type": "null"}]
+        },
+        "status": {
+          "enum": [
+            "succeeded",
+            "http-error",
+            "terminal-error",
+            "timeout",
+            "incomplete",
+            "malformed",
+            "transport-error"
+          ]
+        },
+        "started_at": {"type": "string", "format": "date-time"},
+        "completed_at": {"type": "string", "format": "date-time"},
+        "latency_ms": {"$ref": "#/$defs/nonNegativeNumber"},
+        "http_status_code": {"type": ["integer", "null"], "minimum": 100, "maximum": 599},
+        "request_id": {
+          "oneOf": [{"$ref": "#/$defs/identifier"}, {"type": "null"}]
+        },
+        "trace_id": {
+          "oneOf": [{"$ref": "#/$defs/identifier"}, {"type": "null"}]
+        },
+        "instance_identity": {
+          "oneOf": [{"$ref": "#/$defs/identifier"}, {"type": "null"}]
+        },
+        "terminal_kind": {"enum": ["answer", "refusal", "error", null]},
+        "safe_error_code": {
+          "oneOf": [{"$ref": "#/$defs/safeCode"}, {"type": "null"}]
+        },
+        "retryable": {"type": "boolean"},
+        "provider_attempt_count": {"type": "integer", "minimum": 0},
+        "provider_failed_attempt_count": {"type": "integer", "minimum": 0},
+        "provider_unknown_usage_attempt_count": {"type": "integer", "minimum": 0},
+        "provider_evidence_complete": {"type": "boolean"},
+        "provider_attempts": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/providerAttemptRecord"}
+        },
+        "stage_timings_ms": {"$ref": "#/$defs/numberMap"},
+        "token_counts": {"$ref": "#/$defs/integerMap"},
+        "model_identities": {"$ref": "#/$defs/stringMap"},
+        "cache_status": {"$ref": "#/$defs/stringMap"}
+      }
+    },
+    "providerAttemptRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation_id",
+        "attempt_number",
+        "route_id",
+        "role",
+        "provider",
+        "model",
+        "status",
+        "fallback",
+        "latency_ms",
+        "safe_error_category",
+        "usage"
+      ],
+      "properties": {
+        "operation_id": {"$ref": "#/$defs/identifier"},
+        "attempt_number": {"type": "integer", "minimum": 1},
+        "route_id": {
+          "oneOf": [{"$ref": "#/$defs/identifier"}, {"type": "null"}]
+        },
+        "role": {"enum": ["embedding", "generation", "reranking", "evaluation"]},
+        "provider": {"$ref": "#/$defs/identifier"},
+        "model": {"$ref": "#/$defs/identifier"},
+        "status": {"enum": ["succeeded", "failed", "cancelled", "timed-out"]},
+        "fallback": {"type": "boolean"},
+        "latency_ms": {
+          "oneOf": [{"$ref": "#/$defs/nonNegativeNumber"}, {"type": "null"}]
+        },
+        "safe_error_category": {
+          "oneOf": [{"$ref": "#/$defs/safeCode"}, {"type": "null"}]
+        },
+        "usage": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["input_tokens", "output_tokens", "total_tokens_reported"],
+          "properties": {
+            "input_tokens": {"type": ["integer", "null"], "minimum": 0},
+            "output_tokens": {"type": ["integer", "null"], "minimum": 0},
+            "total_tokens_reported": {"type": ["integer", "null"], "minimum": 0}
+          }
+        }
+      }
+    },
+    "warmUp": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "readiness_passed",
+        "excluded_from_measurement",
+        "configured_attempts",
+        "attempt_count",
+        "successes",
+        "errors",
+        "started_at",
+        "completed_at",
+        "duration_ms",
+        "records"
+      ],
+      "properties": {
+        "readiness_passed": {"type": "boolean"},
+        "excluded_from_measurement": {"const": true},
+        "configured_attempts": {"type": "integer", "minimum": 0},
+        "attempt_count": {"type": "integer", "minimum": 0},
+        "successes": {"type": "integer", "minimum": 0},
+        "errors": {"type": "integer", "minimum": 0},
+        "started_at": {"type": "string", "format": "date-time"},
+        "completed_at": {"type": "string", "format": "date-time"},
+        "duration_ms": {"$ref": "#/$defs/nonNegativeNumber"},
+        "records": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/attemptRecord"}
+        }
+      }
+    },
+    "attempts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "total",
+        "successful",
+        "errors",
+        "retry_attempts",
+        "error_rate",
+        "denominator",
+        "records"
+      ],
+      "properties": {
+        "total": {"type": "integer", "minimum": 0},
+        "successful": {"type": "integer", "minimum": 0},
+        "errors": {"type": "integer", "minimum": 0},
+        "retry_attempts": {"type": "integer", "minimum": 0},
+        "error_rate": {"type": "number", "minimum": 0, "maximum": 1},
+        "denominator": {"const": "all-http-attempts-including-retries"},
+        "records": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/attemptRecord"}
+        }
+      }
+    },
+    "latencySummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["count", "minimum", "p50", "p90", "p95", "p99", "maximum"],
+      "properties": {
+        "count": {"type": "integer", "minimum": 1},
+        "minimum": {"$ref": "#/$defs/nonNegativeNumber"},
+        "p50": {"$ref": "#/$defs/nonNegativeNumber"},
+        "p90": {"$ref": "#/$defs/nonNegativeNumber"},
+        "p95": {"$ref": "#/$defs/nonNegativeNumber"},
+        "p99": {"$ref": "#/$defs/nonNegativeNumber"},
+        "maximum": {"$ref": "#/$defs/nonNegativeNumber"}
+      }
+    },
+    "latencyEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "sample_scope", "complete", "stages"],
+      "properties": {
+        "method": {"const": "nearest-rank"},
+        "sample_scope": {"const": "successful-complete-http-attempts"},
+        "complete": {
+          "oneOf": [{"$ref": "#/$defs/latencySummary"}, {"type": "null"}]
+        },
+        "stages": {
+          "type": "object",
+          "propertyNames": {"pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+          "additionalProperties": {"$ref": "#/$defs/latencySummary"}
+        }
+      }
+    },
+    "tokenEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["complete", "attempts_with_usage", "totals", "unknown_reasons"],
+      "properties": {
+        "complete": {"type": "boolean"},
+        "attempts_with_usage": {"type": "integer", "minimum": 0},
+        "totals": {"$ref": "#/$defs/integerMap"},
+        "unknown_reasons": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/safeCode"}
+        }
+      }
+    },
+    "money": {
+      "oneOf": [
+        {"type": "number", "minimum": 0},
+        {"type": "string", "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?$"}
+      ]
+    },
+    "nullableMoney": {
+      "oneOf": [{"$ref": "#/$defs/money"}, {"type": "null"}]
+    },
+    "costEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pricing_version",
+        "pricing_evidence_digest",
+        "source_references",
+        "currency",
+        "complete",
+        "input_tokens",
+        "output_tokens",
+        "known_cost",
+        "estimated_cost",
+        "cost_per_1000_calls",
+        "provider_attempt_count",
+        "rate_card",
+        "unknown_reasons",
+        "assumptions"
+      ],
+      "properties": {
+        "pricing_version": {"$ref": "#/$defs/identifier"},
+        "pricing_evidence_digest": {
+          "oneOf": [
+            {"$ref": "#/$defs/pricingEvidenceDigest"},
+            {"type": "null"}
+          ]
+        },
+        "source_references": {"$ref": "#/$defs/pricingSourceReferences"},
+        "currency": {"type": ["string", "null"]},
+        "complete": {"type": "boolean"},
+        "input_tokens": {"type": ["integer", "null"], "minimum": 0},
+        "output_tokens": {"type": ["integer", "null"], "minimum": 0},
+        "known_cost": {"$ref": "#/$defs/nullableMoney"},
+        "estimated_cost": {"$ref": "#/$defs/nullableMoney"},
+        "cost_per_1000_calls": {"$ref": "#/$defs/nullableMoney"},
+        "provider_attempt_count": {"type": "integer", "minimum": 0},
+        "rate_card": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "role",
+              "provider",
+              "model",
+              "input_per_million",
+              "output_per_million"
+            ],
+            "properties": {
+              "role": {"enum": ["embedding", "generation", "reranking", "evaluation"]},
+              "provider": {"$ref": "#/$defs/identifier"},
+              "model": {"$ref": "#/$defs/identifier"},
+              "input_per_million": {"$ref": "#/$defs/nullableMoney"},
+              "output_per_million": {"$ref": "#/$defs/nullableMoney"}
+            }
+          }
+        },
+        "unknown_reasons": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/safeCode"}
+        },
+        "assumptions": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/nonEmptyString"}
+        }
+      }
+    },
+    "comparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operator", "value"],
+      "properties": {
+        "operator": {"enum": ["==", ">=", "<=", "<"]},
+        "value": {"type": "number", "minimum": 0}
+      }
+    },
+    "thresholds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "instance_count",
+        "concurrency",
+        "successful_requests",
+        "p90_latency_ms",
+        "error_rate",
+        "cache_policy"
+      ],
+      "properties": {
+        "instance_count": {"$ref": "#/$defs/comparison"},
+        "concurrency": {"$ref": "#/$defs/comparison"},
+        "successful_requests": {"$ref": "#/$defs/comparison"},
+        "p90_latency_ms": {"$ref": "#/$defs/comparison"},
+        "error_rate": {"$ref": "#/$defs/comparison"},
+        "cache_policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operator", "value"],
+          "properties": {
+            "operator": {"const": "=="},
+            "value": {"const": "bypass"}
+          }
+        }
+      }
+    },
+    "evidenceReferences": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["metrics", "logs", "representative_traces"],
+      "properties": {
+        "metrics": {"$ref": "#/$defs/identifierArray"},
+        "logs": {"$ref": "#/$defs/identifierArray"},
+        "representative_traces": {"$ref": "#/$defs/identifierArray"}
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["valid", "passed", "invalid_reasons", "failure_reasons"],
+      "properties": {
+        "valid": {"type": "boolean"},
+        "passed": {"type": "boolean"},
+        "invalid_reasons": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/safeCode"}
+        },
+        "failure_reasons": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/safeCode"}
+        }
+      }
+    }
+  }
+}

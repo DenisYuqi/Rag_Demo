@@ -1,0 +1,36 @@
+{
+  "pricing_version": "openai-standard-2026-08-07",
+  "currency": "USD",
+  "rates": [
+    {
+      "role": "embedding",
+      "provider": "openai-compatible-d9617135d6fdd0a2",
+      "model": "text-embedding-3-small",
+      "input_per_million": "0.02",
+      "output_per_million": null
+    },
+    {
+      "role": "generation",
+      "provider": "openai-compatible-d9617135d6fdd0a2",
+      "model": "gpt-4.1-mini",
+      "input_per_million": "0.40",
+      "output_per_million": "1.60"
+    },
+    {
+      "role": "generation",
+      "provider": "openai-compatible-d9617135d6fdd0a2",
+      "model": "gpt-5.4",
+      "input_per_million": "2.50",
+      "output_per_million": "15.00"
+    }
+  ],
+  "source_references": [
+    "https://developers.openai.com/api/docs/models/gpt-4.1-mini",
+    "https://developers.openai.com/api/docs/models/gpt-5.4",
+    "https://developers.openai.com/api/docs/models/text-embedding-3-small"
+  ],
+  "assumptions": [
+    "standard non-batch and non-priority API pricing",
+    "no cached-input discount is claimed"
+  ]
+}

@@ -9,6 +9,7 @@ from rag_mvp.domain.evaluation import (
     ModelAttemptStatus,
     ModelPricing,
     ModelRole,
+    ProviderAttemptEvidence,
     ReportManifest,
     TokenUsage,
 )
@@ -96,6 +97,7 @@ __all__ = [
     "ModelAttemptStatus",
     "ModelPricing",
     "ModelRole",
+    "ProviderAttemptEvidence",
     "QAAnswer",
     "QAError",
     "QAErrorCode",

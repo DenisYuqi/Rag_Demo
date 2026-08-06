@@ -71,3 +71,21 @@ def test_unknown_model_is_explicitly_unpriced() -> None:
     assert estimate.complete is False
     assert estimate.estimated_cost is None
     assert tuple(reason.value for reason in estimate.unknown_reasons) == ("pricing-not-found",)
+
+
+def test_pinned_catalog_prices_gpt_4_1_mini_acceptance_model() -> None:
+    catalog = openai_standard_pricing_catalog(
+        provider="openai-compatible-test",
+        models=("gpt-4.1-mini",),
+    )
+
+    estimate = catalog.estimate_attempt(
+        _attempt(
+            ModelRole.GENERATION,
+            "gpt-4.1-mini",
+            TokenUsage(input_tokens=1_000_000, output_tokens=1_000_000),
+        )
+    )
+
+    assert estimate.complete is True
+    assert estimate.estimated_cost == Decimal("2.00")

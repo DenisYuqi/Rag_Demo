@@ -15,6 +15,7 @@ from rag_mvp.domain._base import (
     SafeScalar,
     utc_now,
 )
+from rag_mvp.domain.evaluation import ProviderAttemptEvidence
 from rag_mvp.domain.ingestion import ChunkLocator
 
 
@@ -76,6 +77,7 @@ class SafeQADiagnostics(DomainModel):
     cache_status: dict[str, str] = Field(default_factory=dict)
     model_identities: dict[str, str] = Field(default_factory=dict)
     token_counts: dict[str, Annotated[int, Field(ge=0)]] = Field(default_factory=dict)
+    provider_attempts: tuple[ProviderAttemptEvidence, ...] = ()
     degradation_reasons: tuple[str, ...] = ()
     metadata: dict[str, SafeScalar] = Field(default_factory=dict)
 

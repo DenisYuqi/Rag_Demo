@@ -221,9 +221,16 @@ class RerankStage:
             max_candidate_tokens=self.truncation.maximum_candidate_tokens,
         )
 
+        raw_result: object
         try:
-            async with asyncio.timeout(duration):
+            if isinstance(self._reranker, ModelProviderRouter):
+                # The router enforces the same subdeadline inside resilience and
+                # returns its complete attempt ledger.  A second timeout at this
+                # boundary can win the cancellation race and discard that ledger.
                 raw_result = await self._reranker.rerank(request, subcontext)
+            else:
+                async with asyncio.timeout(duration):
+                    raw_result = await self._reranker.rerank(request, subcontext)
         except asyncio.CancelledError:
             raise
         except TimeoutError:

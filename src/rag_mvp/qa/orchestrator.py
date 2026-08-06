@@ -8,9 +8,24 @@ import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from rag_mvp.config.settings import Settings
+from rag_mvp.domain.evaluation import (
+    ModelAttempt as CostModelAttempt,
+)
+from rag_mvp.domain.evaluation import (
+    ModelAttemptStatus as EvidenceAttemptStatus,
+)
+from rag_mvp.domain.evaluation import (
+    ModelRole as EvidenceModelRole,
+)
+from rag_mvp.domain.evaluation import (
+    ProviderAttemptEvidence,
+)
+from rag_mvp.domain.evaluation import (
+    TokenUsage as EvidenceTokenUsage,
+)
 from rag_mvp.domain.qa import (
     Citation,
     ConversationRole,
@@ -29,21 +44,27 @@ from rag_mvp.domain.retrieval import (
     RetrievalMode,
     RetrievalResult,
 )
+from rag_mvp.observability.costs import PricingCatalog
 from rag_mvp.performance.worker_pools import RagWorkerPools
 from rag_mvp.providers.errors import ProviderError, ProviderOperationError
 from rag_mvp.providers.models import (
+    AttemptStatus,
     Deadline,
     FinishReason,
     GenerationRequest,
     GenerationResult,
+    ModelAttempt,
     ProviderCallContext,
+    ProviderErrorCategory,
     RoutedResult,
 )
 from rag_mvp.providers.protocols import EmbeddingProvider, RerankingProvider
+from rag_mvp.providers.resilience import capture_provider_attempts, current_provider_attempts
 from rag_mvp.providers.routing import ModelProviderRouter
 from rag_mvp.qa.citations import StructuredAnswerError, StructuredAnswerParser
 from rag_mvp.qa.context import ContextBuilder, ContextSelectionError
 from rag_mvp.qa.deadlines import DeadlineRunner, QAStageBudgets
+from rag_mvp.qa.evidence_assessor import EvidenceAssessmentError, FactAssessmentResult
 from rag_mvp.qa.grounding import (
     GroundingValidationError,
     GroundingValidator,
@@ -149,6 +170,19 @@ class FactEvidenceAssessor(Protocol):
         revision_id: str,
         deadline: Deadline,
     ) -> tuple[FactEvidence, ...]: ...
+
+
+@runtime_checkable
+class _DiagnosticFactEvidenceAssessor(Protocol):
+    async def assess_with_diagnostics(
+        self,
+        query: str,
+        candidates: Sequence[RankingEvidence],
+        *,
+        request_id: str,
+        revision_id: str,
+        deadline: Deadline,
+    ) -> FactAssessmentResult: ...
 
 
 class _TokenUsageLike(Protocol):
@@ -272,6 +306,7 @@ class QAOrchestrator:
         deadline_runner: DeadlineRunner | None = None,
         maximum_provider_attempts: int = 2,
         stage_observer: QAStageObserver | None = None,
+        pricing_catalog: PricingCatalog | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         if type(maximum_provider_attempts) is not int or maximum_provider_attempts < 1:
@@ -293,6 +328,7 @@ class QAOrchestrator:
         self._deadline_runner = deadline_runner or DeadlineRunner()
         self._maximum_provider_attempts = maximum_provider_attempts
         self._stage_observer = stage_observer
+        self._pricing_catalog = pricing_catalog
         self._clock = clock
 
     def set_stage_observer(self, observer: QAStageObserver | None) -> None:
@@ -334,13 +370,37 @@ class QAOrchestrator:
         requested_language: str | None = None,
         cache_policy: CachePolicy | str = CachePolicy.USE,
     ) -> OrchestratedResponse:
+        with capture_provider_attempts():
+            return await self._run_captured(
+                request_id=request_id,
+                session_id=session_id,
+                owner_id=owner_id,
+                question=question,
+                mode=mode,
+                requested_language=requested_language,
+                cache_policy=cache_policy,
+            )
+
+    async def _run_captured(
+        self,
+        *,
+        request_id: str,
+        session_id: str,
+        owner_id: str,
+        question: str,
+        mode: RetrievalMode | str,
+        requested_language: str | None = None,
+        cache_policy: CachePolicy | str = CachePolicy.USE,
+    ) -> OrchestratedResponse:
         started = self._clock()
         root_deadline = Deadline(started + self._budgets.total_seconds, self._clock)
         timings: dict[str, float] = {}
         retrieval_result: RetrievalResult | None = None
         generation_result: RoutedResult[GenerationResult] | None = None
+        fact_assessment: FactAssessmentResult | None = None
         decision: EvidenceDecision | None = None
         safety_reasons: tuple[str, ...] = ()
+        failed_provider_attempts: tuple[ProviderAttemptEvidence, ...] = ()
 
         normalized_question, language, resolved_mode, resolved_cache = self._request_values(
             request_id,
@@ -432,7 +492,17 @@ class QAOrchestrator:
                     code,
                     retryable=code is QAErrorCode.INDEX_NOT_READY,
                 ) from None
-            except RetrievalUnavailableError:
+            except RetrievalUnavailableError as error:
+                failed_provider_attempts += tuple(
+                    _provider_attempt_evidence(attempt) for attempt in error.provider_attempts
+                ) + tuple(
+                    _unknown_provider_attempt_evidence(
+                        role=EvidenceModelRole.EMBEDDING,
+                        operation_id="qa-retrieval",
+                        attempt_number=index + 1,
+                    )
+                    for index in range(error.unrecorded_provider_attempt_count)
+                )
                 raise _PipelineFailure(QAErrorCode.RETRIEVAL_UNAVAILABLE) from None
             except _DeadlineExpired:
                 raise
@@ -464,12 +534,12 @@ class QAOrchestrator:
                     detected_retrieved_instructions.append(assessment.reason_code)
             safety_reasons = tuple(dict.fromkeys(detected_retrieved_instructions))
             try:
-                facts = await self._run_stage(
+                fact_assessment = await self._run_stage(
                     "evidence_assessment",
                     self._budgets.evidence_assessment_seconds,
                     root_deadline,
                     timings,
-                    lambda deadline: self._fact_assessor.assess(
+                    lambda deadline: self._assess_facts(
                         rewrite.query,
                         retrieval_result.evidence,
                         request_id=request_id,
@@ -477,6 +547,19 @@ class QAOrchestrator:
                         deadline=deadline,
                     ),
                 )
+                facts = fact_assessment.facts
+            except EvidenceAssessmentError as error:
+                failed_provider_attempts += tuple(
+                    _provider_attempt_evidence(attempt) for attempt in error.provider_attempts
+                ) + tuple(
+                    _unknown_provider_attempt_evidence(
+                        role=EvidenceModelRole.EMBEDDING,
+                        operation_id="fact-evidence-assessment",
+                        attempt_number=index + 1,
+                    )
+                    for index in range(error.unrecorded_provider_attempt_count)
+                )
+                raise _PipelineFailure(QAErrorCode.DEPENDENCY_FAILURE) from None
             except _DeadlineExpired:
                 raise
             except Exception:
@@ -506,6 +589,7 @@ class QAOrchestrator:
                         timings,
                         started,
                         retrieval=retrieval_result,
+                        fact_assessment=fact_assessment,
                         decision=decision,
                         extra_degradation=safety_reasons,
                     ),
@@ -546,11 +630,20 @@ class QAOrchestrator:
                     require_full_budget=True,
                 )
             except ProviderOperationError as error:
+                failed_provider_attempts += tuple(
+                    _provider_attempt_evidence(attempt) for attempt in error.attempts
+                )
                 raise _PipelineFailure(
                     QAErrorCode.DEPENDENCY_FAILURE,
                     retryable=error.retryable,
                 ) from None
             except ProviderError as error:
+                failed_provider_attempts += (
+                    _unknown_provider_attempt_evidence(
+                        role=EvidenceModelRole.GENERATION,
+                        operation_id="qa-generation",
+                    ),
+                )
                 raise _PipelineFailure(
                     QAErrorCode.DEPENDENCY_FAILURE,
                     retryable=error.retryable,
@@ -604,7 +697,9 @@ class QAOrchestrator:
                     diagnostics=self._diagnostics(
                         timings,
                         started,
+                        request_id=request_id,
                         retrieval=retrieval_result,
+                        fact_assessment=fact_assessment,
                         generation=generation_result,
                         decision=decision,
                         extra_degradation=safety_reasons,
@@ -635,6 +730,8 @@ class QAOrchestrator:
                     generation_result,
                     decision,
                     safety_reasons,
+                    fact_assessment=fact_assessment,
+                    failed_provider_attempts=failed_provider_attempts,
                 )
             )
         except _PipelineFailure as error:
@@ -652,6 +749,8 @@ class QAOrchestrator:
                     decision,
                     safety_reasons,
                     failure_detail=error.detail_code,
+                    fact_assessment=fact_assessment,
+                    failed_provider_attempts=failed_provider_attempts,
                 )
             )
         except (QueryRewriteError, TypeError, ValueError):
@@ -668,6 +767,8 @@ class QAOrchestrator:
                     generation_result,
                     decision,
                     safety_reasons,
+                    fact_assessment=fact_assessment,
+                    failed_provider_attempts=failed_provider_attempts,
                 )
             )
         except Exception:
@@ -684,6 +785,8 @@ class QAOrchestrator:
                     generation_result,
                     decision,
                     safety_reasons,
+                    fact_assessment=fact_assessment,
+                    failed_provider_attempts=failed_provider_attempts,
                 )
             )
 
@@ -713,6 +816,35 @@ class QAOrchestrator:
         except (RetrievalRequestError, QueryRewriteError, TypeError, ValueError):
             raise QARequestError("request_invalid") from None
         return normalized_question, language, resolved_mode, resolved_cache
+
+    async def _assess_facts(
+        self,
+        query: str,
+        candidates: Sequence[RankingEvidence],
+        *,
+        request_id: str,
+        revision_id: str,
+        deadline: Deadline,
+    ) -> FactAssessmentResult:
+        if isinstance(self._fact_assessor, _DiagnosticFactEvidenceAssessor):
+            result = await self._fact_assessor.assess_with_diagnostics(
+                query,
+                candidates,
+                request_id=request_id,
+                revision_id=revision_id,
+                deadline=deadline,
+            )
+            if not isinstance(result, FactAssessmentResult):
+                raise TypeError("fact assessment result is invalid")
+            return result
+        facts = await self._fact_assessor.assess(
+            query,
+            candidates,
+            request_id=request_id,
+            revision_id=revision_id,
+            deadline=deadline,
+        )
+        return FactAssessmentResult(tuple(facts))
 
     async def _run_stage[T](
         self,
@@ -865,6 +997,7 @@ class QAOrchestrator:
         started: float,
         *,
         retrieval: RetrievalResult | None = None,
+        fact_assessment: FactAssessmentResult | None = None,
         decision: EvidenceDecision | None = None,
         extra_degradation: Sequence[str] = (),
         metadata: dict[str, str | int | float | bool | None] | None = None,
@@ -879,7 +1012,9 @@ class QAOrchestrator:
             diagnostics=self._diagnostics(
                 timings,
                 started,
+                request_id=request_id,
                 retrieval=retrieval,
+                fact_assessment=fact_assessment,
                 decision=decision,
                 extra_degradation=extra_degradation,
                 extra_metadata=metadata,
@@ -901,6 +1036,8 @@ class QAOrchestrator:
         extra_degradation: Sequence[str],
         *,
         failure_detail: str | None = None,
+        fact_assessment: FactAssessmentResult | None = None,
+        failed_provider_attempts: Sequence[ProviderAttemptEvidence] = (),
     ) -> QAError:
         return QAError(
             request_id=request_id,
@@ -915,15 +1052,16 @@ class QAOrchestrator:
             diagnostics=self._diagnostics(
                 timings,
                 started,
+                request_id=request_id,
                 retrieval=retrieval,
+                fact_assessment=fact_assessment,
                 generation=generation,
                 decision=decision,
                 extra_degradation=extra_degradation,
                 extra_metadata=(
-                    {"failure_detail_code": failure_detail}
-                    if failure_detail is not None
-                    else None
+                    {"failure_detail_code": failure_detail} if failure_detail is not None else None
                 ),
+                failed_provider_attempts=failed_provider_attempts,
             ),
         )
 
@@ -932,20 +1070,70 @@ class QAOrchestrator:
         timings: dict[str, float],
         started: float,
         *,
+        request_id: str,
         retrieval: RetrievalResult | None = None,
+        fact_assessment: FactAssessmentResult | None = None,
         generation: RoutedResult[GenerationResult] | None = None,
         decision: EvidenceDecision | None = None,
         extra_degradation: Sequence[str] = (),
         extra_metadata: dict[str, str | int | float | bool | None] | None = None,
+        failed_provider_attempts: Sequence[ProviderAttemptEvidence] = (),
     ) -> SafeQADiagnostics:
         stage_timings = {**timings, "total": self._elapsed_ms(started)}
         cache_status: dict[str, str] = {}
         model_identities: dict[str, str] = {}
         token_counts: dict[str, int] = {}
         degradation: list[str] = []
+        provider_attempts: list[ProviderAttemptEvidence] = [
+            _provider_attempt_evidence(attempt) for attempt in current_provider_attempts()
+        ]
         metadata: dict[str, str | int | float | bool | None] = dict(extra_metadata or {})
+        provider_attempt_count = 0
+        provider_failed_attempt_count = 0
+        provider_unknown_usage_attempt_count = 0
         if retrieval is not None:
             diagnostics = retrieval.diagnostics
+            provider_attempt_count += sum(diagnostics.provider_attempt_counts.values())
+            provider_failed_attempt_count += sum(
+                diagnostics.provider_failed_attempt_counts.values()
+            )
+            provider_unknown_usage_attempt_count += sum(
+                diagnostics.provider_unknown_usage_attempt_counts.values()
+            )
+            provider_attempts.extend(diagnostics.provider_attempts)
+            for diagnostic_role, declared_count in diagnostics.provider_attempt_counts.items():
+                evidence_role = (
+                    EvidenceModelRole.RERANKING
+                    if diagnostic_role == "reranker"
+                    else EvidenceModelRole(diagnostic_role)
+                )
+                recorded = tuple(
+                    attempt
+                    for attempt in provider_attempts
+                    if attempt.operation_id == "qa-retrieval" and attempt.role is evidence_role
+                )
+                missing_count = max(0, declared_count - len(recorded))
+                recorded_failures = sum(
+                    attempt.status is not EvidenceAttemptStatus.SUCCEEDED for attempt in recorded
+                )
+                missing_failures = max(
+                    0,
+                    diagnostics.provider_failed_attempt_counts.get(diagnostic_role, 0)
+                    - recorded_failures,
+                )
+                provider_attempts.extend(
+                    _unknown_provider_attempt_evidence(
+                        role=evidence_role,
+                        operation_id="qa-retrieval",
+                        attempt_number=len(recorded) + index + 1,
+                        status=(
+                            EvidenceAttemptStatus.FAILED
+                            if index < missing_failures
+                            else EvidenceAttemptStatus.SUCCEEDED
+                        ),
+                    )
+                    for index in range(missing_count)
+                )
             for stage, duration_ms in diagnostics.stage_timings_ms.items():
                 if stage != "total":
                     stage_timings.setdefault(stage, duration_ms)
@@ -970,18 +1158,105 @@ class QAOrchestrator:
                     ),
                 }
             )
+        if fact_assessment is not None:
+            provider_attempt_count += fact_assessment.provider_attempt_count
+            provider_failed_attempt_count += fact_assessment.provider_failed_attempt_count
+            provider_unknown_usage_attempt_count += (
+                fact_assessment.provider_unknown_usage_attempt_count
+            )
+            for attempt in fact_assessment.provider_attempts:
+                _merge_token_counts(token_counts, attempt.role.value, attempt.usage)
+                provider_attempts.append(_provider_attempt_evidence(attempt))
+            if fact_assessment.direct_provider_usage is not None:
+                _merge_token_counts(
+                    token_counts,
+                    "embedding",
+                    fact_assessment.direct_provider_usage,
+                )
+                assert fact_assessment.direct_provider_identity is not None
+                provider_attempts.append(
+                    _direct_provider_attempt_evidence(
+                        operation_id="fact-evidence-assessment",
+                        role=EvidenceModelRole.EMBEDDING,
+                        provider=fact_assessment.direct_provider_identity.provider,
+                        model=fact_assessment.direct_provider_identity.model,
+                        usage=fact_assessment.direct_provider_usage,
+                    )
+                )
         if generation is not None and isinstance(generation.value, GenerationResult):
             identity = generation.value.identity
             model_identities["generation"] = (
                 f"{identity.provider}/{identity.model}/{identity.adapter_version}"
             )
-            metadata["generation_attempts"] = len(generation.attempts)
+            generation_attempt_count = len(generation.attempts) or 1
+            metadata["generation_attempts"] = generation_attempt_count
             metadata["generation_fallback"] = generation.used_fallback
+            provider_attempt_count += generation_attempt_count
+            provider_failed_attempt_count += sum(
+                attempt.status is not AttemptStatus.SUCCEEDED for attempt in generation.attempts
+            )
             if generation.attempts:
                 for attempt in generation.attempts:
                     _merge_token_counts(token_counts, "generation", attempt.usage)
+                    provider_attempts.append(_provider_attempt_evidence(attempt))
+                provider_unknown_usage_attempt_count += sum(
+                    _attempt_usage_unknown(attempt) for attempt in generation.attempts
+                )
             else:
                 _merge_token_counts(token_counts, "generation", generation.value.usage)
+                provider_unknown_usage_attempt_count += int(
+                    _usage_unknown("generation", generation.value.usage)
+                )
+                provider_attempts.append(
+                    _direct_provider_attempt_evidence(
+                        operation_id="qa-generation",
+                        role=EvidenceModelRole.GENERATION,
+                        provider=identity.provider,
+                        model=identity.model,
+                        usage=generation.value.usage,
+                    )
+                )
+        provider_attempt_count += len(failed_provider_attempts)
+        provider_failed_attempt_count += sum(
+            attempt.status is not EvidenceAttemptStatus.SUCCEEDED
+            for attempt in failed_provider_attempts
+        )
+        provider_unknown_usage_attempt_count += sum(
+            _attempt_usage_unknown(attempt) for attempt in failed_provider_attempts
+        )
+        for failed_attempt in failed_provider_attempts:
+            _merge_token_counts(
+                token_counts,
+                failed_attempt.role.value,
+                failed_attempt.usage,
+            )
+        provider_attempts.extend(failed_provider_attempts)
+        complete_provider_attempts = _deduplicated_provider_attempts(provider_attempts)
+        if complete_provider_attempts:
+            provider_attempt_count = len(complete_provider_attempts)
+            provider_failed_attempt_count = sum(
+                attempt.status is not EvidenceAttemptStatus.SUCCEEDED
+                for attempt in complete_provider_attempts
+            )
+            provider_unknown_usage_attempt_count = sum(
+                _attempt_usage_unknown(attempt) for attempt in complete_provider_attempts
+            )
+            token_counts = {}
+            for complete_attempt in complete_provider_attempts:
+                _merge_token_counts(
+                    token_counts,
+                    complete_attempt.role.value,
+                    complete_attempt.usage,
+                )
+        metadata["provider_attempt_count"] = provider_attempt_count
+        metadata["provider_failed_attempt_count"] = provider_failed_attempt_count
+        metadata["provider_unknown_usage_attempt_count"] = provider_unknown_usage_attempt_count
+        metadata.update(
+            self._provider_cost_metadata(
+                request_id=request_id,
+                attempts=complete_provider_attempts,
+            )
+        )
         if decision is not None:
             metadata["decision_code"] = decision.code.value
             metadata["refusal_policy_version"] = decision.policy_version
@@ -992,9 +1267,60 @@ class QAOrchestrator:
             cache_status=cache_status,
             model_identities=model_identities,
             token_counts=token_counts,
+            provider_attempts=complete_provider_attempts,
             degradation_reasons=tuple(dict.fromkeys(degradation)),
             metadata=metadata,
         )
+
+    def _provider_cost_metadata(
+        self,
+        *,
+        request_id: str,
+        attempts: Sequence[ProviderAttemptEvidence],
+    ) -> dict[str, str | int | float | bool | None]:
+        if self._pricing_catalog is None:
+            return {
+                "pricing_version": "unconfigured",
+                "currency": None,
+                "estimated_cost": None,
+                "cost_complete": False,
+                "cost_unknown_reasons": "pricing-not-configured",
+            }
+        cost_attempts = tuple(
+            CostModelAttempt(
+                attempt_id=f"qa-cost-attempt-{index + 1}",
+                operation_id=attempt.operation_id,
+                request_id=request_id,
+                role=attempt.role,
+                provider=attempt.provider,
+                model=attempt.model,
+                status=attempt.status,
+                attempt_number=attempt.attempt_number,
+                fallback=attempt.fallback,
+                latency_ms=attempt.latency_ms or 0,
+                usage=attempt.usage,
+                safe_error_category=attempt.safe_error_category,
+            )
+            for index, attempt in enumerate(attempts)
+        )
+        aggregate = self._pricing_catalog.aggregate_request(
+            cost_attempts,
+            request_id=request_id,
+        )
+        return {
+            "pricing_version": aggregate.pricing_version,
+            "currency": aggregate.currency,
+            "known_cost": (
+                format(aggregate.known_cost, "f") if aggregate.known_cost is not None else None
+            ),
+            "estimated_cost": (
+                format(aggregate.estimated_cost, "f")
+                if aggregate.estimated_cost is not None
+                else None
+            ),
+            "cost_complete": aggregate.complete,
+            "cost_unknown_reasons": ",".join(reason.value for reason in aggregate.unknown_reasons),
+        }
 
 
 class _DeadlineExpired(TimeoutError):
@@ -1029,3 +1355,110 @@ def _merge_token_counts(
         target[f"{normalized_role}-output"] = (
             target.get(f"{normalized_role}-output", 0) + usage.output_tokens
         )
+
+
+def _attempt_usage_unknown(
+    attempt: ModelAttempt | ProviderAttemptEvidence,
+) -> bool:
+    return _usage_unknown(attempt.role.value, attempt.usage)
+
+
+def _usage_unknown(role: str, usage: _TokenUsageLike) -> bool:
+    if usage.input_tokens is None:
+        return True
+    return role != "embedding" and usage.output_tokens is None
+
+
+def _provider_attempt_evidence(attempt: ModelAttempt) -> ProviderAttemptEvidence:
+    return ProviderAttemptEvidence(
+        operation_id=attempt.operation_id,
+        attempt_number=attempt.attempt_number,
+        route_id=attempt.route_id,
+        role=EvidenceModelRole(attempt.role.value),
+        provider=attempt.provider,
+        model=attempt.model,
+        status=_evidence_attempt_status(attempt),
+        fallback=attempt.is_fallback,
+        latency_ms=attempt.latency_ms,
+        safe_error_category=(
+            attempt.error_category.value if attempt.error_category is not None else None
+        ),
+        usage=EvidenceTokenUsage(
+            input_tokens=attempt.usage.input_tokens,
+            output_tokens=attempt.usage.output_tokens,
+        ),
+    )
+
+
+def _evidence_attempt_status(attempt: ModelAttempt) -> EvidenceAttemptStatus:
+    if attempt.status is AttemptStatus.FAILED and attempt.error_category in {
+        ProviderErrorCategory.TIMEOUT,
+        ProviderErrorCategory.DEADLINE_EXCEEDED,
+    }:
+        return EvidenceAttemptStatus.TIMED_OUT
+    return EvidenceAttemptStatus(attempt.status.value)
+
+
+def _direct_provider_attempt_evidence(
+    *,
+    operation_id: str,
+    role: EvidenceModelRole,
+    provider: str,
+    model: str,
+    usage: _TokenUsageLike,
+) -> ProviderAttemptEvidence:
+    return ProviderAttemptEvidence(
+        operation_id=operation_id,
+        role=role,
+        provider=provider,
+        model=model,
+        status=EvidenceAttemptStatus.SUCCEEDED,
+        usage=EvidenceTokenUsage(
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+        ),
+    )
+
+
+def _unknown_provider_attempt_evidence(
+    *,
+    role: EvidenceModelRole,
+    operation_id: str,
+    attempt_number: int = 1,
+    status: EvidenceAttemptStatus = EvidenceAttemptStatus.FAILED,
+) -> ProviderAttemptEvidence:
+    return ProviderAttemptEvidence(
+        operation_id=operation_id,
+        attempt_number=attempt_number,
+        role=role,
+        provider="unknown",
+        model="unknown",
+        status=status,
+        usage=EvidenceTokenUsage(),
+    )
+
+
+def _deduplicated_provider_attempts(
+    attempts: Sequence[ProviderAttemptEvidence],
+) -> tuple[ProviderAttemptEvidence, ...]:
+    unique: list[ProviderAttemptEvidence] = []
+    seen: set[tuple[object, ...]] = set()
+    for attempt in attempts:
+        key = (
+            attempt.operation_id,
+            attempt.attempt_number,
+            attempt.route_id,
+            attempt.role.value,
+            attempt.provider,
+            attempt.model,
+            attempt.status.value,
+            attempt.fallback,
+            attempt.latency_ms,
+            attempt.safe_error_category,
+            attempt.usage.input_tokens,
+            attempt.usage.output_tokens,
+        )
+        if key not in seen:
+            seen.add(key)
+            unique.append(attempt)
+    return tuple(unique)

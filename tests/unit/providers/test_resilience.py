@@ -19,6 +19,8 @@ from rag_mvp.providers.models import (
 from rag_mvp.providers.resilience import (
     InMemoryAttemptRecorder,
     RetryPolicy,
+    capture_provider_attempts,
+    current_provider_attempts,
     execute_with_resilience,
 )
 
@@ -63,6 +65,28 @@ async def test_transient_failures_retry_with_all_attempts_accounted() -> None:
     ]
     assert result.attempts[-1].usage == TokenUsage(7, 2)
     assert recorder.attempts == result.attempts
+
+
+async def test_failed_attempt_preserves_safe_provider_reported_usage() -> None:
+    reported_usage = TokenUsage(11, 4)
+
+    async def operation() -> object:
+        raise ProviderError(
+            ProviderErrorCategory.INCOMPATIBLE_RESPONSE,
+            usage=reported_usage,
+        )
+
+    with pytest.raises(ProviderOperationError) as caught:
+        await execute_with_resilience(
+            operation,
+            context=context(),
+            route=ROUTE,
+            policy=RetryPolicy(1),
+            is_fallback=False,
+        )
+
+    assert len(caught.value.attempts) == 1
+    assert caught.value.attempts[0].usage == reported_usage
 
 
 @pytest.mark.parametrize(
@@ -200,6 +224,35 @@ async def test_cancellation_stops_active_operation_and_records_it() -> None:
     assert len(recorder.attempts) == 1
     assert recorder.attempts[0].status is AttemptStatus.CANCELLED
     assert recorder.attempts[0].error_category is ProviderErrorCategory.CANCELLED
+
+
+async def test_request_scoped_ledger_retains_cancelled_attempt_after_task_cleanup() -> None:
+    started = asyncio.Event()
+
+    async def operation() -> object:
+        started.set()
+        await asyncio.Event().wait()
+        return object()
+
+    with capture_provider_attempts() as request_ledger:
+        task = asyncio.create_task(
+            execute_with_resilience(
+                operation,
+                context=context(),
+                route=ROUTE,
+                policy=RetryPolicy(1),
+                is_fallback=False,
+            )
+        )
+        await started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert current_provider_attempts() == request_ledger.attempts
+        assert request_ledger.attempts[0].status is AttemptStatus.CANCELLED
+
+    assert current_provider_attempts() == ()
 
 
 async def test_retry_is_not_started_when_backoff_cannot_fit_deadline() -> None:

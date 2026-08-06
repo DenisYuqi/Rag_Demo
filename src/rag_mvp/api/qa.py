@@ -39,6 +39,7 @@ from rag_mvp.performance.deadlines import (
     QALatencyBudgets,
     StageDeadlineExceededError,
 )
+from rag_mvp.performance.load_report import INSTANCE_ID_HEADER
 from rag_mvp.qa.orchestrator import OrchestratedResponse
 from rag_mvp.qa.query_rewrite import select_response_language
 from rag_mvp.qa.sessions import ConversationService
@@ -114,6 +115,7 @@ class QARuntimeReadinessCheck:
 
 class QAApiRuntime(Protocol):
     settings: Settings
+    instance_identity: str
     readiness: ReadinessRegistry
     accepting_traffic: bool
     qa_services: QARuntimeServices | None
@@ -641,5 +643,7 @@ async def answer_question(
             "X-Accel-Buffering": "no",
             "X-Content-Type-Options": "nosniff",
             "X-Request-ID": request_id,
+            "X-RAG-Cache-Policy": cache_policy.value,
+            INSTANCE_ID_HEADER: runtime.instance_identity,
         },
     )

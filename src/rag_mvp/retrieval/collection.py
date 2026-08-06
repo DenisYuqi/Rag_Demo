@@ -11,7 +11,7 @@ from typing import Protocol, cast
 from rag_mvp.domain.retrieval import RetrievalCandidate
 from rag_mvp.performance.worker_pools import BoundedWorkerPool
 from rag_mvp.providers.errors import ProviderError, ProviderOperationError
-from rag_mvp.providers.models import ModelAttempt, TokenUsage
+from rag_mvp.providers.models import AttemptStatus, ModelAttempt, TokenUsage
 from rag_mvp.retrieval.bm25 import (
     LexicalIndexError,
     default_bm25_worker_pool,
@@ -41,13 +41,43 @@ class HybridCandidateCollection:
     bm25_elapsed_ms: float = 0.0
     embedding_attempts: tuple[ModelAttempt, ...] = ()
     embedding_usage: TokenUsage | None = None
+    embedding_provider_attempt_count: int = 0
+    embedding_provider_failed_attempt_count: int = 0
+    embedding_provider_unknown_usage_attempt_count: int = 0
 
 
 class HybridCollectionError(RuntimeError):
-    def __init__(self, code: str, failed_stages: tuple[str, ...]) -> None:
+    def __init__(
+        self,
+        code: str,
+        failed_stages: tuple[str, ...],
+        *,
+        provider_attempts: tuple[ModelAttempt, ...] = (),
+        unrecorded_provider_attempt_count: int = 0,
+    ) -> None:
         self.code = code
         self.failed_stages = failed_stages
+        self.provider_attempts = tuple(provider_attempts)
+        self.unrecorded_provider_attempt_count = unrecorded_provider_attempt_count
         super().__init__(code)
+
+    @property
+    def provider_attempt_count(self) -> int:
+        return len(self.provider_attempts) + self.unrecorded_provider_attempt_count
+
+    @property
+    def provider_failed_attempt_count(self) -> int:
+        return (
+            sum(attempt.status is not AttemptStatus.SUCCEEDED for attempt in self.provider_attempts)
+            + self.unrecorded_provider_attempt_count
+        )
+
+    @property
+    def provider_unknown_usage_attempt_count(self) -> int:
+        return (
+            sum(attempt.usage.input_tokens is None for attempt in self.provider_attempts)
+            + self.unrecorded_provider_attempt_count
+        )
 
 
 class _TimedChannelError(Exception):
@@ -125,14 +155,34 @@ async def collect_hybrid_candidates(
         for stage, result in (("dense", dense_value), ("bm25", bm25_value))
         if isinstance(result, Exception)
     )
+    (
+        embedding_attempts,
+        embedding_provider_attempt_count,
+        embedding_provider_failed_attempt_count,
+        embedding_provider_unknown_usage_attempt_count,
+    ) = _embedding_attempt_summary(dense_value)
     for stage, result in (("dense", dense_value), ("bm25", bm25_value)):
         if isinstance(result, _TimedChannelError) and not _normalized_failure(
             stage,
             result.cause,
         ):
-            raise HybridCollectionError("retrieval_unavailable", failed_stages) from None
+            raise HybridCollectionError(
+                "retrieval_unavailable",
+                failed_stages,
+                provider_attempts=embedding_attempts,
+                unrecorded_provider_attempt_count=(
+                    embedding_provider_attempt_count - len(embedding_attempts)
+                ),
+            ) from None
     if len(failed_stages) == 2 or (failed_stages and not allow_single_retriever_degradation):
-        raise HybridCollectionError("retrieval_unavailable", failed_stages)
+        raise HybridCollectionError(
+            "retrieval_unavailable",
+            failed_stages,
+            provider_attempts=embedding_attempts,
+            unrecorded_provider_attempt_count=(
+                embedding_provider_attempt_count - len(embedding_attempts)
+            ),
+        )
     if (
         _retriever_revision(dense, "dense") != dense_revision
         or _retriever_revision(bm25, "bm25") != dense_revision
@@ -189,11 +239,14 @@ async def collect_hybrid_candidates(
         bm25_elapsed_ms=(
             bm25_value.elapsed_ms if isinstance(bm25_value, _TimedChannelError) else bm25_value[1]
         ),
-        embedding_attempts=(
-            () if isinstance(dense_value, _TimedChannelError) else dense_value.attempts
-        ),
+        embedding_attempts=embedding_attempts,
         embedding_usage=(
             None if isinstance(dense_value, _TimedChannelError) else dense_value.usage
+        ),
+        embedding_provider_attempt_count=embedding_provider_attempt_count,
+        embedding_provider_failed_attempt_count=embedding_provider_failed_attempt_count,
+        embedding_provider_unknown_usage_attempt_count=(
+            embedding_provider_unknown_usage_attempt_count
         ),
     )
 
@@ -244,6 +297,29 @@ async def _search_channel(
             error,
             max(0.0, (time.monotonic() - started) * 1000),
         ) from None
+
+
+def _embedding_attempt_summary(
+    result: DenseSearchResult | _TimedChannelError,
+) -> tuple[tuple[ModelAttempt, ...], int, int, int]:
+    if isinstance(result, _TimedChannelError):
+        if isinstance(result.cause, DenseIndexError):
+            error = result.cause
+            return (
+                error.provider_attempts,
+                error.provider_attempt_count,
+                error.provider_failed_attempt_count,
+                error.provider_unknown_usage_attempt_count,
+            )
+        return (), 0, 0, 0
+    if result.attempts:
+        return (
+            result.attempts,
+            len(result.attempts),
+            sum(attempt.status is not AttemptStatus.SUCCEEDED for attempt in result.attempts),
+            sum(attempt.usage.input_tokens is None for attempt in result.attempts),
+        )
+    return (), 1, 0, int(result.usage.input_tokens is None)
 
 
 def _normalized_failure(stage: str, error: Exception) -> bool:

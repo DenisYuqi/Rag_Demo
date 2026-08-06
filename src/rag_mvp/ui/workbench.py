@@ -76,7 +76,11 @@ def create_workbench(
 
     controller = callbacks or WorkbenchCallbacks(services)
     with gr.Blocks(title="RAG Assistant Workbench") as demo:
-        session_state = gr.State(value=controller.new_session)
+        # Gradio deep-copies the state factory.  A controller-bound method would
+        # recursively copy the production service graph, including non-copyable
+        # locks and HTTP clients.  The model factory is stateless and still gives
+        # every browser session a distinct owner identifier.
+        session_state = gr.State(value=BrowserSessionState.create)
         gr.Markdown("# RAG Assistant Workbench / RAG 助手工作台")
 
         with gr.Tabs(selected="chat-tab"):

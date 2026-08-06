@@ -16,6 +16,7 @@ from pydantic import ValidationError
 
 from rag_mvp.domain.ingestion import Chunk, ChunkLocator, EmbeddingSpaceIdentity
 from rag_mvp.domain.retrieval import RetrievalCandidate
+from rag_mvp.providers.models import AttemptStatus, ModelAttempt
 from rag_mvp.retrieval.snapshot import (
     RECORD_DIGEST_ALGORITHM,
     canonical_locator_json,
@@ -27,9 +28,35 @@ from rag_mvp.retrieval.snapshot import (
 class DenseIndexError(ValueError):
     """A safe dense index validation or lifecycle error."""
 
-    def __init__(self, code: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        *,
+        provider_attempts: tuple[ModelAttempt, ...] = (),
+        unrecorded_provider_attempt_count: int = 0,
+    ) -> None:
         self.code = code
+        self.provider_attempts = tuple(provider_attempts)
+        self.unrecorded_provider_attempt_count = unrecorded_provider_attempt_count
         super().__init__(code)
+
+    @property
+    def provider_attempt_count(self) -> int:
+        return len(self.provider_attempts) + self.unrecorded_provider_attempt_count
+
+    @property
+    def provider_failed_attempt_count(self) -> int:
+        return (
+            sum(attempt.status is not AttemptStatus.SUCCEEDED for attempt in self.provider_attempts)
+            + self.unrecorded_provider_attempt_count
+        )
+
+    @property
+    def provider_unknown_usage_attempt_count(self) -> int:
+        return (
+            sum(attempt.usage.input_tokens is None for attempt in self.provider_attempts)
+            + self.unrecorded_provider_attempt_count
+        )
 
 
 class PersistentChromaIndex:
