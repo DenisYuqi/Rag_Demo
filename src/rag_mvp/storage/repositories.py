@@ -919,6 +919,10 @@ class SessionRepository:
     def __init__(self, database: Database) -> None:
         self._database = database
 
+    @property
+    def database(self) -> Database:
+        return self._database
+
     def create(
         self,
         session: ConversationSession,
@@ -955,8 +959,14 @@ class SessionRepository:
             ).fetchone()
         return None if row is None else _decode(ConversationSession, row)
 
-    def require_owned(self, session_id: str, owner_id: str) -> ConversationSession:
-        session = self.get(session_id)
+    def require_owned(
+        self,
+        session_id: str,
+        owner_id: str,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> ConversationSession:
+        session = self.get(session_id, connection=connection)
         if session is None:
             raise RepositoryNotFound(f"session {session_id!r} was not found")
         if session.owner_id != owner_id:
@@ -1003,14 +1013,15 @@ class SessionRepository:
         session_id: str,
         *,
         include_reset_history: bool = False,
+        connection: sqlite3.Connection | None = None,
     ) -> list[ConversationTurn]:
-        session = self.get(session_id)
-        if session is None:
-            raise RepositoryNotFound(f"session {session_id!r} was not found")
-        if session.status is SessionStatus.RESET and not include_reset_history:
-            return []
-        with self._database.connection() as connection:
-            rows = connection.execute(
+        with _read_connection(self._database, connection) as active:
+            session = self.get(session_id, connection=active)
+            if session is None:
+                raise RepositoryNotFound(f"session {session_id!r} was not found")
+            if session.status is SessionStatus.RESET and not include_reset_history:
+                return []
+            rows = active.execute(
                 """
                 SELECT payload_json FROM session_turns
                 WHERE session_id = ? ORDER BY ordinal

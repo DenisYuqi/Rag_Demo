@@ -16,6 +16,7 @@ from rag_mvp.safety.injection import (
     InjectionAction,
     InjectionAssessment,
     InjectionPolicy,
+    check_generated_output,
     check_retrieved_content,
     check_user_input,
 )
@@ -78,6 +79,7 @@ __all__ = [
     "SensitiveKind",
     "SensitiveSpan",
     "TelemetryFilter",
+    "check_generated_output",
     "check_retrieved_content",
     "check_user_input",
     "filter_telemetry_event",

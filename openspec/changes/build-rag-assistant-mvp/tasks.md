@@ -81,16 +81,17 @@ Implement and integrate in vertical gates. A gate is complete only when its end-
 
 ## 7. Grounded QA Pipeline
 
-- [ ] 7.1 Implement isolated conversation-session creation, turn storage, reset, and ownership checks; verify with `uv run pytest tests/unit/qa/test_sessions.py -q`.
-- [ ] 7.2 Implement latest-turn language selection and conditional follow-up query rewriting that never treats assistant history as evidence; verify with `uv run pytest tests/unit/qa/test_query_rewrite.py -q`.
-- [ ] 7.3 Implement context selection with chunk-count, per-chunk, and total-token bounds; verify ordering and truncation with `uv run pytest tests/unit/qa/test_context_builder.py -q`.
-- [ ] 7.4 Implement the versioned generator prompt that labels retrieved chunks untrusted and requires structured claims with chunk IDs; verify prompt boundaries without snapshotting secret configuration with `uv run pytest tests/unit/qa/test_prompt_builder.py -q`.
-- [ ] 7.5 Implement structured answer parsing and deterministic citation existence/locator validation; verify invented and stale citations are rejected with `uv run pytest tests/unit/qa/test_citations.py -q`.
-- [ ] 7.6 Implement deterministic factual-unit citation coverage and request-scoped candidate validation; withhold the complete generated response on invalid coverage and leave semantic scoring to evaluation; verify invalid claims/citations never reach output with `uv run pytest tests/unit/qa/test_grounding.py -q`.
-- [ ] 7.7 Implement calibrated insufficient/conflicting-evidence refusal decisions with stable safe reason codes; verify answerable, partial, absent, and conflict fixtures with `uv run pytest tests/unit/qa/test_refusal_policy.py -q`.
-- [ ] 7.8 Implement the async QA orchestrator with one total deadline, stage budgets, cancellation, retry limits, and optional rerank degradation; verify with fake-clock tests using `uv run pytest tests/unit/qa/test_orchestrator.py -q`.
-- [ ] 7.9 Connect complete-response validated emission to grounding, citation, injection, and redaction gates; add sentence-level validated events only if needed for perceived latency; verify no raw model delta or pending unsafe tail is emitted with `uv run pytest tests/unit/qa/test_streaming.py -q`.
-- [ ] 7.10 Add end-to-end QA integration tests for bilingual answers, multi-turn retrieval, citations, partial answers, refusals, injection, PII, provider failure, and deadline failure; verify with `uv run pytest tests/integration/test_qa_pipeline.py -q`.
+- [x] 7.1 Implement isolated conversation-session creation, turn storage, reset, and ownership checks; verify with `uv run pytest tests/unit/qa/test_sessions.py -q`.
+- [x] 7.2 Implement latest-turn language selection and conditional follow-up query rewriting that never treats assistant history as evidence; verify with `uv run pytest tests/unit/qa/test_query_rewrite.py -q`.
+- [x] 7.3 Implement context selection with chunk-count, per-chunk, and total-token bounds; verify ordering and truncation with `uv run pytest tests/unit/qa/test_context_builder.py -q`.
+- [x] 7.4 Implement the versioned generator prompt that labels retrieved chunks untrusted and requires structured claims with chunk IDs; verify prompt boundaries without snapshotting secret configuration with `uv run pytest tests/unit/qa/test_prompt_builder.py -q`.
+- [x] 7.5 Implement structured answer parsing and deterministic citation existence/locator validation; verify invented and stale citations are rejected with `uv run pytest tests/unit/qa/test_citations.py -q`.
+- [x] 7.6 Implement deterministic factual-unit citation coverage and request-scoped candidate validation; withhold the complete generated response on invalid coverage and leave semantic scoring to evaluation; verify invalid claims/citations never reach output with `uv run pytest tests/unit/qa/test_grounding.py -q`.
+- [x] 7.7 Implement calibrated insufficient/conflicting-evidence refusal decisions with stable safe reason codes; verify answerable, partial, absent, and conflict fixtures with `uv run pytest tests/unit/qa/test_refusal_policy.py -q`.
+- [x] 7.8 Implement the async QA orchestrator with one total deadline, stage budgets, cancellation, retry limits, optional rerank degradation, and an injected `FactEvidenceAssessor`; verify with fake-clock tests using `uv run pytest tests/unit/qa/test_orchestrator.py -q`.
+- [x] 7.8a Implement and calibrate the versioned production `FactEvidenceAssessor` before end-to-end QA integration; bind signals to current request candidates/revision, detect material conflicts without treating raw dense/BM25/RRF scores as interchangeable probabilities, and verify with `uv run pytest tests/unit/qa/test_evidence_assessor.py -q`.
+- [x] 7.9 Connect complete-response validated emission to grounding, citation, injection, and redaction gates; add sentence-level validated events only if needed for perceived latency; verify no raw model delta or pending unsafe tail is emitted with `uv run pytest tests/unit/qa/test_streaming.py -q`.
+- [x] 7.10 Add end-to-end QA integration tests for bilingual answers, multi-turn retrieval, citations, partial answers, refusals, injection, PII, provider failure, and deadline failure; verify with `uv run pytest tests/integration/test_qa_pipeline.py -q`.
 
 ## 8. HTTP API and Gradio Workbench
 

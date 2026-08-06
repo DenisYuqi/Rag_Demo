@@ -160,6 +160,27 @@ class InjectionPolicy:
             reason_code="untrusted_retrieved_content",
         )
 
+    def assess_generated_output(self, text: object) -> InjectionAssessment:
+        """Reject model output that attempts to carry unsafe directives to a client."""
+
+        if not isinstance(text, str):
+            return InjectionAssessment(
+                InjectionAction.REFUSE,
+                reason_code="invalid_generated_output",
+                matched_rules=("invalid_input",),
+            )
+        actionable_text = _without_quoted_segments(text)
+        matched = tuple(
+            name for name, pattern in _RETRIEVED_DIRECTIVES if pattern.search(actionable_text)
+        )
+        if matched:
+            return InjectionAssessment(
+                InjectionAction.REFUSE,
+                reason_code="unsafe_generated_output",
+                matched_rules=matched,
+            )
+        return InjectionAssessment(InjectionAction.ALLOW)
+
 
 DEFAULT_INJECTION_POLICY = InjectionPolicy()
 
@@ -178,3 +199,11 @@ def check_retrieved_content(
     """Assess retrieved evidence with the default prompt-injection policy."""
 
     return policy.assess_retrieved_content(text)
+
+
+def check_generated_output(
+    text: str, *, policy: InjectionPolicy = DEFAULT_INJECTION_POLICY
+) -> InjectionAssessment:
+    """Assess complete generated output before redaction and transport."""
+
+    return policy.assess_generated_output(text)

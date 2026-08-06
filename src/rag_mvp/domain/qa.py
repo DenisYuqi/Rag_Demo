@@ -45,6 +45,7 @@ class QAErrorCode(StrEnum):
 
 
 class StreamEventKind(StrEnum):
+    ANSWER = "answer"
     SENTENCE = "sentence"
     REFUSAL = "refusal"
     ERROR = "error"
@@ -170,8 +171,10 @@ class ValidatedStreamEvent(DomainModel):
 
     @model_validator(mode="after")
     def validate_event_shape(self) -> ValidatedStreamEvent:
-        if self.kind is StreamEventKind.SENTENCE and not self.content:
-            raise ValueError("a sentence event requires content")
+        if self.kind in {StreamEventKind.ANSWER, StreamEventKind.SENTENCE} and not self.content:
+            raise ValueError("an answer or sentence event requires content")
+        if self.kind is StreamEventKind.ANSWER and (not self.terminal or not self.citations):
+            raise ValueError("an answer event must be terminal and include citations")
         if self.kind is StreamEventKind.DONE and self.content is not None:
             raise ValueError("a done event cannot contain dynamic content")
         if (

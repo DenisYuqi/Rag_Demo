@@ -148,13 +148,17 @@ The QA sequence is:
 2. Rewrite only contextual follow-ups into a standalone query.
 3. Bind an active index revision and retrieve evidence.
 4. Apply optional reranking and context/token limits.
-5. Refuse when evidence is absent or below a calibrated decision policy.
+5. Assess request facts through a replaceable, revision-bound evidence assessor and refuse when evidence is absent, conflicting, or below a calibrated decision policy.
 6. Generate a structured answer whose factual units reference retrieved chunk IDs.
 7. Resolve every cited ID through the request-scoped candidate registry and reject unknown, stale, or uncited factual units.
 8. Apply injection/output policy and PII redaction.
 9. Serialize a structured answer/refusal/error and safe diagnostics.
 
 Conversation history assists query interpretation but is never evidence. The generator prompt wraps chunks as explicitly untrusted context and prohibits outside knowledge. Runtime validation is deterministic and verifies response shape, citation membership, locators, and complete citation coverage. Semantic faithfulness is measured by the versioned offline evaluation instead of adding a second model call to every production request. If deterministic validation fails, the entire response is withheld or converted to a refusal; partial claim surgery is deferred.
+
+The orchestrator depends on a `FactEvidenceAssessor` protocol that emits content-minimized, normalized support and material-conflict signals bound to the current request candidates and index revision. Unit tests use a deterministic assessor fake, but production composition requires an explicit versioned implementation before end-to-end QA acceptance. Dense, BM25, RRF, and reranking scores are not interchangeable support probabilities and MUST NOT be silently converted into fact support. If no assessor is configured, QA remains unavailable rather than falling back to an uncalibrated heuristic or an undeclared model call.
+
+For a partial-evidence decision, generation receives only the policy-approved supporting chunks. After the generated supported portion passes complete citation and grounding validation, the orchestrator appends a fixed localized limitation indicating that part of the request is unsupported. The fixed text is application-authored rather than model-authored factual content, is never used as evidence, and passes the same later redaction/release gate. This preserves complete-response withholding while avoiding partial surgery on unvalidated model output.
 
 Rationale: explicit stages make failures diagnosable and enforce the grounding contract outside model instructions.
 
