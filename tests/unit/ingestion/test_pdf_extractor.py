@@ -4,6 +4,7 @@ import fitz
 import pytest
 
 from rag_mvp.domain.ingestion import ExtractionMethod
+from rag_mvp.ingestion import extractors
 from rag_mvp.ingestion.extractors import ExtractionError, extract_pdf
 
 
@@ -52,3 +53,24 @@ def test_encrypted_pdf_without_password_has_safe_error() -> None:
 
     with pytest.raises(ExtractionError, match="encrypted_pdf"):
         extract_pdf(content, ocr=FailingOcr())
+
+
+def test_pdf_page_failure_is_normalized_to_safe_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    class BrokenDocument:
+        needs_pass = False
+        is_repaired = False
+        page_count = 1
+
+        def load_page(self, page_index: int) -> object:
+            raise RuntimeError(f"sensitive page failure {page_index}")
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(extractors.fitz, "open", lambda **_kwargs: BrokenDocument())
+
+    with pytest.raises(ExtractionError) as caught:
+        extract_pdf(b"%PDF-1.7", ocr=FailingOcr())
+
+    assert caught.value.code == "pdf_page_failed"
+    assert str(caught.value) == "pdf_page_failed"

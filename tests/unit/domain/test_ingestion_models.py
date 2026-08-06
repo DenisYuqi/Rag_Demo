@@ -88,6 +88,30 @@ def test_active_index_revision_requires_publication_timestamp() -> None:
     assert revision.status is IndexRevisionStatus.ACTIVE
 
 
+def test_old_index_revision_payload_receives_additive_index_defaults() -> None:
+    revision = IndexRevision(
+        revision_id="revision-old",
+        active_sources={},
+        chunk_set_digest="empty-digest",
+        embedding_space=EmbeddingSpaceIdentity(
+            provider_alias="primary",
+            model="embedding-v1",
+            dimension=3,
+            normalization="none",
+            adapter_version="v1",
+        ),
+        extraction_version="v1",
+        chunking_version="v1",
+        tokenizer_version="jieba-cjk-ngram-v1",
+        dense_index_path="indexes/revisions/revision-old/chroma",
+        lexical_index_path="indexes/revisions/revision-old/bm25.json",
+    )
+
+    assert revision.chunk_count == 0
+    assert revision.dense_metric == "cosine"
+    assert revision.lexical_algorithm_version == "bm25-okapi-v1"
+
+
 def test_ingestion_terminal_states_are_validated() -> None:
     with pytest.raises(ValidationError):
         IngestionJob(

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import AwareDatetime, Field, model_validator
 
@@ -38,6 +38,12 @@ class IngestionJobStatus(StrEnum):
     FAILED = "failed"
 
 
+class IngestionOperation(StrEnum):
+    UPLOAD = "upload"
+    REINDEX = "reindex"
+    DELETE = "delete"
+
+
 class IngestionStage(StrEnum):
     QUEUED = "queued"
     VALIDATING = "validating"
@@ -49,6 +55,17 @@ class IngestionStage(StrEnum):
     PUBLISHING = "publishing"
     COMPLETE = "complete"
     FAILED = "failed"
+
+
+PROCESSING_INGESTION_STAGES: tuple[IngestionStage, ...] = (
+    IngestionStage.VALIDATING,
+    IngestionStage.EXTRACTING,
+    IngestionStage.NORMALIZING,
+    IngestionStage.CHUNKING,
+    IngestionStage.EMBEDDING,
+    IngestionStage.INDEXING,
+    IngestionStage.PUBLISHING,
+)
 
 
 class IndexRevisionStatus(StrEnum):
@@ -140,6 +157,15 @@ class IndexRevision(DomainModel):
     tokenizer_version: Identifier
     dense_index_path: NonEmptyText
     lexical_index_path: NonEmptyText
+    chunk_count: Annotated[int, Field(ge=0)] = 0
+    dense_schema_version: Identifier = "chroma-revision-v1"
+    dense_metric: Identifier = "cosine"
+    lexical_schema_version: Identifier = "bm25-snapshot-v2"
+    lexical_algorithm_version: Identifier = "bm25-okapi-v1"
+    lexical_k1: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 1.5
+    lexical_b: Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)] = 0.75
+    record_digest_algorithm: Identifier = "chunk-record-sha256-v1"
+    ingestion_job_id: Identifier | None = None
     created_at: AwareDatetime = Field(default_factory=utc_now)
     published_at: AwareDatetime | None = None
 
@@ -149,12 +175,15 @@ class IndexRevision(DomainModel):
             raise ValueError("active source IDs must be non-empty and versions must be positive")
         if self.status is IndexRevisionStatus.ACTIVE and self.published_at is None:
             raise ValueError("an active revision requires published_at")
+        if self.status is IndexRevisionStatus.STAGED and self.published_at is not None:
+            raise ValueError("a staged revision cannot have published_at")
         return self
 
 
 class IngestionJob(DomainModel):
     job_id: Identifier
     source_key: Identifier
+    operation: IngestionOperation = IngestionOperation.UPLOAD
     status: IngestionJobStatus = IngestionJobStatus.QUEUED
     stage: IngestionStage = IngestionStage.QUEUED
     source_id: str | None = None
@@ -162,22 +191,94 @@ class IngestionJob(DomainModel):
     ocr_page_count: Annotated[int, Field(ge=0)] = 0
     chunk_count: Annotated[int, Field(ge=0)] = 0
     active_index_revision: str | None = None
-    stage_timings_ms: dict[str, NonNegativeFiniteFloat] = Field(default_factory=dict)
-    warnings: tuple[str, ...] = ()
-    safe_error_code: str | None = None
+    stage_timings_ms: Annotated[
+        dict[str, NonNegativeFiniteFloat],
+        Field(max_length=len(IngestionStage)),
+    ] = Field(default_factory=dict)
+    warnings: Annotated[
+        tuple[
+            Annotated[
+                str,
+                Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_.-]*$"),
+            ],
+            ...,
+        ],
+        Field(max_length=32),
+    ] = ()
+    safe_error_code: (
+        Annotated[
+            str,
+            Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_.-]*$"),
+        ]
+        | None
+    ) = None
+    failed_stage: IngestionStage | None = None
     created_at: AwareDatetime = Field(default_factory=utc_now)
     updated_at: AwareDatetime = Field(default_factory=utc_now)
 
     @model_validator(mode="after")
     def validate_terminal_state(self) -> IngestionJob:
+        allowed_timing_keys = {stage.value for stage in IngestionStage}
+        if not self.stage_timings_ms.keys() <= allowed_timing_keys:
+            raise ValueError("stage timing keys must be known ingestion stages")
+        if self.updated_at < self.created_at:
+            raise ValueError("updated_at cannot precede created_at")
+
+        if self.status is IngestionJobStatus.QUEUED:
+            if self.stage is not IngestionStage.QUEUED:
+                raise ValueError("a queued ingestion job must be at the queued stage")
+        elif self.status is IngestionJobStatus.PROCESSING:
+            if self.stage not in PROCESSING_INGESTION_STAGES:
+                raise ValueError("a processing ingestion job must be at a processing stage")
+        elif self.status is IngestionJobStatus.SUCCEEDED:
+            if self.stage is not IngestionStage.COMPLETE:
+                raise ValueError("a succeeded ingestion job must be complete")
+        elif self.stage is not IngestionStage.FAILED:
+            raise ValueError("a failed ingestion job must be at the failed stage")
+
         if self.status is IngestionJobStatus.FAILED and not self.safe_error_code:
             raise ValueError("a failed ingestion job requires safe_error_code")
-        if (
-            self.status is IngestionJobStatus.SUCCEEDED
-            and self.stage is not IngestionStage.COMPLETE
-        ):
-            raise ValueError("a succeeded ingestion job must be complete")
+        if self.status is not IngestionJobStatus.FAILED and self.safe_error_code is not None:
+            raise ValueError("only a failed ingestion job may have safe_error_code")
+        if self.status is not IngestionJobStatus.FAILED and self.failed_stage is not None:
+            raise ValueError("only a failed ingestion job may have failed_stage")
+        if self.failed_stage in {IngestionStage.COMPLETE, IngestionStage.FAILED}:
+            raise ValueError("failed_stage must identify the originating stage")
         return self
+
+
+class _IngestionCommandBase(DomainModel):
+    schema_version: Literal["ingestion-command-v1"] = "ingestion-command-v1"
+    job_id: Identifier
+    source_key: Identifier
+    submitted_at: AwareDatetime = Field(default_factory=utc_now)
+
+
+class UploadCommand(_IngestionCommandBase):
+    operation: Literal[IngestionOperation.UPLOAD] = IngestionOperation.UPLOAD
+    filename: Identifier
+    display_title: Identifier
+    media_type: Identifier
+    kind: DocumentKind
+    payload_size: Annotated[int, Field(gt=0)]
+    payload_digest: Digest
+    derivation_config_digest: Digest
+
+
+class ReindexCommand(_IngestionCommandBase):
+    operation: Literal[IngestionOperation.REINDEX] = IngestionOperation.REINDEX
+    derivation_config_digest: Digest
+
+
+class DeleteCommand(_IngestionCommandBase):
+    operation: Literal[IngestionOperation.DELETE] = IngestionOperation.DELETE
+    source_id: Identifier
+
+
+type IngestionCommand = Annotated[
+    UploadCommand | ReindexCommand | DeleteCommand,
+    Field(discriminator="operation"),
+]
 
 
 def replace_timestamp(value: datetime | None = None) -> datetime:

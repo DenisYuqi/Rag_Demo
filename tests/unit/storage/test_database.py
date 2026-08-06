@@ -63,6 +63,48 @@ def test_initialize_upgrades_an_older_schema(tmp_path: Path) -> None:
     assert index_after is not None
 
 
+def test_latest_migration_preserves_versions_and_removes_historical_digest_uniqueness(
+    tmp_path: Path,
+) -> None:
+    database = Database(tmp_path / "metadata.sqlite3")
+    database.initialize(target_version=2)
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO documents(source_id, source_key, active_version, deleted_at, payload_json)
+            VALUES ('source-1', 'policy', NULL, NULL, '{}')
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO document_versions(
+                source_id, version, content_digest, derivation_config_digest, payload_json
+            ) VALUES ('source-1', 1, 'content-digest', 'config-digest', '{"version": 1}')
+            """
+        )
+
+    database.initialize()
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO document_versions(
+                source_id, version, content_digest, derivation_config_digest, payload_json
+            ) VALUES ('source-1', 2, 'content-digest', 'config-digest', '{"version": 2}')
+            """
+        )
+        rows = connection.execute(
+            "SELECT version, payload_json FROM document_versions ORDER BY version"
+        ).fetchall()
+        index_rows = connection.execute("PRAGMA index_list('document_versions')").fetchall()
+
+    assert [(int(row["version"]), str(row["payload_json"])) for row in rows] == [
+        (1, '{"version": 1}'),
+        (2, '{"version": 2}'),
+    ]
+    digest_index = next(row for row in index_rows if row["name"] == "idx_document_versions_digest")
+    assert int(digest_index["unique"]) == 0
+
+
 def test_initialize_refuses_downgrade(tmp_path: Path) -> None:
     database = Database(tmp_path / "metadata.sqlite3")
     database.initialize()

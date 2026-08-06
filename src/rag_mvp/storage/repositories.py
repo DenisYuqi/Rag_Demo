@@ -7,19 +7,21 @@ import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import ClassVar, cast
 
 from pydantic import BaseModel
 
 from rag_mvp.domain.evaluation import EvaluationRun, ModelAttempt, ReportManifest
 from rag_mvp.domain.ingestion import (
+    PROCESSING_INGESTION_STAGES,
     Document,
     DocumentVersion,
     IndexRevision,
     IndexRevisionStatus,
     IngestionJob,
     IngestionJobStatus,
+    IngestionStage,
 )
 from rag_mvp.domain.qa import (
     ConversationSession,
@@ -44,6 +46,9 @@ class RepositoryNotFound(RepositoryError):
 
 class SessionOwnershipError(RepositoryError):
     """Raised when an owner attempts to access another owner's session."""
+
+
+_EXPECTED_ACTIVE_REVISION_UNSET = object()
 
 
 def _now() -> datetime:
@@ -162,14 +167,56 @@ class DocumentRepository:
             ).fetchone()
         return None if row is None else _decode(Document, row)
 
-    def list(self, *, include_deleted: bool = False) -> list[Document]:
+    def list(
+        self,
+        *,
+        include_deleted: bool = False,
+        connection: sqlite3.Connection | None = None,
+    ) -> list[Document]:
         query = "SELECT payload_json FROM documents"
         if not include_deleted:
             query += " WHERE deleted_at IS NULL"
         query += " ORDER BY source_id"
-        with self._database.connection() as connection:
-            rows = connection.execute(query).fetchall()
+        with _read_connection(self._database, connection) as active:
+            rows = active.execute(query).fetchall()
         return [_decode(Document, row) for row in rows]
+
+    def list_active(
+        self,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> builtins.list[Document]:
+        with _read_connection(self._database, connection) as active:
+            rows = active.execute(
+                """
+                SELECT payload_json FROM documents
+                WHERE deleted_at IS NULL AND active_version IS NOT NULL
+                ORDER BY source_id
+                """
+            ).fetchall()
+        return [_decode(Document, row) for row in rows]
+
+    def get_active_mapping(
+        self,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> dict[str, int]:
+        with _read_connection(self._database, connection) as active:
+            rows = active.execute(
+                """
+                SELECT source_id, active_version FROM documents
+                WHERE deleted_at IS NULL AND active_version IS NOT NULL
+                ORDER BY source_id
+                """
+            ).fetchall()
+        mapping: dict[str, int] = {}
+        for row in rows:
+            source_id = row["source_id"]
+            version = row["active_version"]
+            if not isinstance(source_id, str) or not source_id or type(version) is not int:
+                raise RepositoryError("active document mapping is invalid")
+            mapping[source_id] = version
+        return mapping
 
     def add_version(
         self,
@@ -213,9 +260,14 @@ class DocumentRepository:
             ).fetchone()
         return None if row is None else _decode(DocumentVersion, row)
 
-    def list_versions(self, source_id: str) -> builtins.list[DocumentVersion]:
-        with self._database.connection() as connection:
-            rows = connection.execute(
+    def list_versions(
+        self,
+        source_id: str,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> builtins.list[DocumentVersion]:
+        with _read_connection(self._database, connection) as active:
+            rows = active.execute(
                 """
                 SELECT payload_json FROM document_versions
                 WHERE source_id = ? ORDER BY version
@@ -223,6 +275,46 @@ class DocumentRepository:
                 (source_id,),
             ).fetchall()
         return [_decode(DocumentVersion, row) for row in rows]
+
+    def get_latest_version(
+        self,
+        source_id: str,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> DocumentVersion | None:
+        with _read_connection(self._database, connection) as active:
+            row = active.execute(
+                """
+                SELECT payload_json FROM document_versions
+                WHERE source_id = ? ORDER BY version DESC LIMIT 1
+                """,
+                (source_id,),
+            ).fetchone()
+        return None if row is None else _decode(DocumentVersion, row)
+
+    def latest_version(
+        self,
+        source_id: str,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> DocumentVersion | None:
+        return self.get_latest_version(source_id, connection=connection)
+
+    def next_version(
+        self,
+        source_id: str,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> int:
+        with _read_connection(self._database, connection) as active:
+            row = active.execute(
+                """
+                SELECT COALESCE(MAX(version), 0) + 1 AS next_version
+                FROM document_versions WHERE source_id = ?
+                """,
+                (source_id,),
+            ).fetchone()
+        return 1 if row is None else int(row["next_version"])
 
     def set_active_version(
         self,
@@ -286,6 +378,9 @@ class IngestionJobRepository:
         IngestionJobStatus.SUCCEEDED: frozenset({IngestionJobStatus.SUCCEEDED}),
         IngestionJobStatus.FAILED: frozenset({IngestionJobStatus.FAILED}),
     }
+    _STAGE_ORDER: ClassVar[dict[IngestionStage, int]] = {
+        stage: index for index, stage in enumerate(PROCESSING_INGESTION_STAGES)
+    }
 
     def __init__(self, database: Database) -> None:
         self._database = database
@@ -296,6 +391,8 @@ class IngestionJobRepository:
         *,
         connection: sqlite3.Connection | None = None,
     ) -> None:
+        if job.status is not IngestionJobStatus.QUEUED:
+            raise RepositoryConflict("new ingestion jobs must be queued")
         try:
             with _write_connection(self._database, connection) as active:
                 active.execute(
@@ -331,32 +428,124 @@ class IngestionJobRepository:
         self,
         job: IngestionJob,
         *,
+        updated_at: datetime | None = None,
         connection: sqlite3.Connection | None = None,
-    ) -> None:
+    ) -> IngestionJob:
+        return self.transition(job, updated_at=updated_at, connection=connection)
+
+    def transition(
+        self,
+        job: IngestionJob,
+        *,
+        updated_at: datetime | None = None,
+        connection: sqlite3.Connection | None = None,
+    ) -> IngestionJob:
         with _write_connection(self._database, connection) as active:
             existing = self.get(job.job_id, connection=active)
             if existing is None:
                 raise RepositoryNotFound(f"ingestion job {job.job_id!r} was not found")
+            if job.source_key != existing.source_key or job.created_at != existing.created_at:
+                raise RepositoryConflict("ingestion job identity fields are immutable")
+            if job.operation is not existing.operation:
+                raise RepositoryConflict("ingestion job operation is immutable")
             if job.status not in self._ALLOWED_TRANSITIONS[existing.status]:
                 raise RepositoryConflict(
                     f"invalid ingestion transition {existing.status.value} -> {job.status.value}"
                 )
+            if (
+                existing.status is IngestionJobStatus.PROCESSING
+                and job.status is IngestionJobStatus.PROCESSING
+                and self._STAGE_ORDER[job.stage] < self._STAGE_ORDER[existing.stage]
+            ):
+                raise RepositoryConflict("ingestion stages cannot regress")
+
+            self._validate_result_fields(existing, job)
+            merged = self._merge_transition(existing, job)
+            if existing.status in {
+                IngestionJobStatus.SUCCEEDED,
+                IngestionJobStatus.FAILED,
+            }:
+                unchanged = IngestionJob.model_validate(
+                    {**merged.model_dump(), "updated_at": existing.updated_at}
+                )
+                if unchanged != existing:
+                    raise RepositoryConflict("terminal ingestion jobs are immutable")
+                return existing
+
+            timestamp = self._next_timestamp(existing, job, updated_at)
+            transitioned = IngestionJob.model_validate(
+                {**merged.model_dump(), "updated_at": timestamp}
+            )
             cursor = active.execute(
                 """
                 UPDATE ingestion_jobs
-                SET source_key = ?, source_id = ?, status = ?, payload_json = ?
+                SET source_id = ?, status = ?, payload_json = ?
                 WHERE job_id = ?
                 """,
                 (
-                    job.source_key,
-                    job.source_id,
-                    job.status.value,
-                    job.model_dump_json(),
-                    job.job_id,
+                    transitioned.source_id,
+                    transitioned.status.value,
+                    transitioned.model_dump_json(),
+                    transitioned.job_id,
                 ),
             )
             if cursor.rowcount != 1:
                 raise RepositoryNotFound(f"ingestion job {job.job_id!r} was not found")
+            return transitioned
+
+    @staticmethod
+    def _validate_result_fields(existing: IngestionJob, requested: IngestionJob) -> None:
+        for field_name in ("source_id", "document_version", "active_index_revision"):
+            current = getattr(existing, field_name)
+            replacement = getattr(requested, field_name)
+            if current is not None and replacement is None:
+                raise RepositoryConflict(f"ingestion job field {field_name} cannot be cleared")
+            if current is not None and replacement != current:
+                raise RepositoryConflict(f"ingestion job field {field_name} is already assigned")
+        for field_name in ("ocr_page_count", "chunk_count"):
+            if getattr(requested, field_name) < getattr(existing, field_name):
+                raise RepositoryConflict(f"ingestion job field {field_name} cannot decrease")
+
+    @staticmethod
+    def _merge_transition(existing: IngestionJob, requested: IngestionJob) -> IngestionJob:
+        timings = {**existing.stage_timings_ms, **requested.stage_timings_ms}
+        warnings = tuple(dict.fromkeys((*existing.warnings, *requested.warnings)))
+        failed_stage = requested.failed_stage
+        if requested.status is IngestionJobStatus.FAILED:
+            origin = existing.failed_stage
+            if origin is None and existing.status is not IngestionJobStatus.FAILED:
+                origin = existing.stage
+            if failed_stage is not None and failed_stage is not origin:
+                raise RepositoryConflict("failed_stage must match the originating stage")
+            failed_stage = origin
+        try:
+            return IngestionJob.model_validate(
+                {
+                    **requested.model_dump(),
+                    "stage_timings_ms": timings,
+                    "warnings": warnings,
+                    "failed_stage": failed_stage,
+                }
+            )
+        except ValueError as error:
+            raise RepositoryConflict("merged ingestion diagnostics exceed safe bounds") from error
+
+    @staticmethod
+    def _next_timestamp(
+        existing: IngestionJob,
+        requested: IngestionJob,
+        explicit: datetime | None,
+    ) -> datetime:
+        if explicit is not None:
+            if explicit.tzinfo is None or explicit.utcoffset() is None:
+                raise RepositoryConflict("updated_at must be timezone-aware")
+            if explicit <= existing.updated_at:
+                raise RepositoryConflict("updated_at must advance")
+            return explicit
+        if requested.updated_at > existing.updated_at:
+            return requested.updated_at
+        current = _now()
+        return max(current, existing.updated_at + timedelta(microseconds=1))
 
     def list_for_source(self, source_key: str) -> list[IngestionJob]:
         with self._database.connection() as connection:
@@ -369,10 +558,95 @@ class IngestionJobRepository:
             ).fetchall()
         return [_decode(IngestionJob, row) for row in rows]
 
+    def list(self) -> list[IngestionJob]:
+        with self._database.connection() as connection:
+            rows = connection.execute(
+                "SELECT payload_json FROM ingestion_jobs ORDER BY rowid"
+            ).fetchall()
+        return [_decode(IngestionJob, row) for row in rows]
+
+    def list_nonterminal(
+        self,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> builtins.list[IngestionJob]:
+        with _read_connection(self._database, connection) as active:
+            rows = active.execute(
+                """
+                SELECT payload_json FROM ingestion_jobs
+                WHERE status IN (?, ?) ORDER BY rowid
+                """,
+                (IngestionJobStatus.QUEUED.value, IngestionJobStatus.PROCESSING.value),
+            ).fetchall()
+        return [_decode(IngestionJob, row) for row in rows]
+
+    def list_nonterminal_through(
+        self,
+        job_id: str,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> builtins.list[IngestionJob]:
+        with _read_connection(self._database, connection) as active:
+            target = active.execute(
+                "SELECT rowid FROM ingestion_jobs WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+            if target is None:
+                raise RepositoryNotFound(f"ingestion job {job_id!r} was not found")
+            rows = active.execute(
+                """
+                SELECT payload_json FROM ingestion_jobs
+                WHERE status IN (?, ?) AND rowid <= ? ORDER BY rowid
+                """,
+                (
+                    IngestionJobStatus.QUEUED.value,
+                    IngestionJobStatus.PROCESSING.value,
+                    int(target["rowid"]),
+                ),
+            ).fetchall()
+        return [_decode(IngestionJob, row) for row in rows]
+
+    def requeue_interrupted(
+        self,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> int:
+        """Reset processing jobs for replay while retaining durable result assignments."""
+
+        with _write_connection(self._database, connection) as active:
+            rows = active.execute(
+                """
+                SELECT payload_json FROM ingestion_jobs
+                WHERE status = ? ORDER BY rowid
+                """,
+                (IngestionJobStatus.PROCESSING.value,),
+            ).fetchall()
+            for row in rows:
+                job = _decode(IngestionJob, row)
+                requeued = IngestionJob.model_validate(
+                    {
+                        **job.model_dump(),
+                        "status": IngestionJobStatus.QUEUED,
+                        "stage": IngestionStage.QUEUED,
+                        "updated_at": max(_now(), job.updated_at + timedelta(microseconds=1)),
+                    }
+                )
+                active.execute(
+                    """
+                    UPDATE ingestion_jobs SET status = ?, payload_json = ? WHERE job_id = ?
+                    """,
+                    (requeued.status.value, requeued.model_dump_json(), requeued.job_id),
+                )
+            return len(rows)
+
 
 class IndexRevisionRepository:
     def __init__(self, database: Database) -> None:
         self._database = database
+
+    @property
+    def database(self) -> Database:
+        return self._database
 
     def create(
         self,
@@ -412,6 +686,62 @@ class IndexRevisionRepository:
             ).fetchall()
         return [_decode(IndexRevision, row) for row in rows]
 
+    def mark_staged_failed(
+        self,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> int:
+        """Abandon staged rows without deleting evidence or changing the active pointer."""
+
+        with _write_connection(self._database, connection) as active:
+            rows = active.execute(
+                "SELECT payload_json FROM index_revisions WHERE status = ? ORDER BY rowid",
+                (IndexRevisionStatus.STAGED.value,),
+            ).fetchall()
+            for row in rows:
+                revision = _decode(IndexRevision, row)
+                failed = IndexRevision.model_validate(
+                    {**revision.model_dump(), "status": IndexRevisionStatus.FAILED}
+                )
+                active.execute(
+                    """
+                    UPDATE index_revisions SET status = ?, payload_json = ?
+                    WHERE revision_id = ? AND status = ?
+                    """,
+                    (
+                        failed.status.value,
+                        failed.model_dump_json(),
+                        failed.revision_id,
+                        IndexRevisionStatus.STAGED.value,
+                    ),
+                )
+            return len(rows)
+
+    def mark_failed(
+        self,
+        revision_id: str,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> IndexRevision:
+        with _write_connection(self._database, connection) as active:
+            revision = self.get(revision_id, connection=active)
+            if revision is None:
+                raise RepositoryNotFound(f"index revision {revision_id!r} was not found")
+            if revision.status is IndexRevisionStatus.FAILED:
+                return revision
+            if revision.status is not IndexRevisionStatus.STAGED:
+                raise RepositoryConflict("only a staged index revision can be failed")
+            failed = IndexRevision.model_validate(
+                {**revision.model_dump(), "status": IndexRevisionStatus.FAILED}
+            )
+            active.execute(
+                """
+                UPDATE index_revisions SET status = ?, payload_json = ? WHERE revision_id = ?
+                """,
+                (failed.status.value, failed.model_dump_json(), failed.revision_id),
+            )
+            return failed
+
     def get_active(
         self,
         *,
@@ -424,16 +754,46 @@ class IndexRevisionRepository:
                 FROM active_index_manifest AS manifest
                 JOIN index_revisions AS revision
                     ON revision.revision_id = manifest.revision_id
-                WHERE manifest.singleton_id = 1
-                """
+                WHERE manifest.singleton_id = 1 AND revision.status = ?
+                """,
+                (IndexRevisionStatus.ACTIVE.value,),
             ).fetchone()
         return None if row is None else _decode(IndexRevision, row)
+
+    def get_active_revision_id(
+        self,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> str | None:
+        with _read_connection(self._database, connection) as active:
+            row = active.execute(
+                """
+                SELECT revision_id FROM active_index_manifest WHERE singleton_id = 1
+                """
+            ).fetchone()
+        return None if row is None else str(row["revision_id"])
+
+    def list_active_status_ids(
+        self,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> builtins.list[str]:
+        with _read_connection(self._database, connection) as active:
+            rows = active.execute(
+                "SELECT revision_id FROM index_revisions WHERE status = ? ORDER BY rowid",
+                (IndexRevisionStatus.ACTIVE.value,),
+            ).fetchall()
+        return [str(row["revision_id"]) for row in rows]
 
     def publish(
         self,
         revision_id: str,
         *,
         published_at: datetime | None = None,
+        expected_active_revision_id: str | object | None = _EXPECTED_ACTIVE_REVISION_UNSET,
+        ingestion_job_id: str | None = None,
+        job_ocr_page_count: int | None = None,
+        job_chunk_count: int | None = None,
         connection: sqlite3.Connection | None = None,
     ) -> IndexRevision:
         with _write_connection(self._database, connection) as active:
@@ -441,12 +801,40 @@ class IndexRevisionRepository:
             if revision is None:
                 raise RepositoryNotFound(f"index revision {revision_id!r} was not found")
             current = self.get_active(connection=active)
+            current_id = None if current is None else current.revision_id
+            if expected_active_revision_id is not _EXPECTED_ACTIVE_REVISION_UNSET:
+                expected = cast(str | None, expected_active_revision_id)
+                if expected is not None and (not isinstance(expected, str) or not expected):
+                    raise ValueError("expected_active_revision_id must be non-empty or None")
+                if current_id != expected:
+                    raise RepositoryConflict("active index revision changed")
             if current is not None and current.revision_id == revision_id:
                 return current
             if revision.status is not IndexRevisionStatus.STAGED:
                 raise RepositoryConflict(
                     f"only a staged index revision can be published, got {revision.status.value}"
                 )
+
+            documents = DocumentRepository(self._database)
+            all_documents = {
+                document.source_id: document
+                for document in documents.list(include_deleted=True, connection=active)
+            }
+            for source_id, version in revision.active_sources.items():
+                if source_id not in all_documents:
+                    raise RepositoryNotFound(f"document {source_id!r} was not found")
+                if documents.get_version(source_id, version, connection=active) is None:
+                    raise RepositoryNotFound(
+                        f"document version {source_id!r}/{version} was not found"
+                    )
+
+            previously_active = documents.list_active(connection=active)
+            for source_id, version in sorted(revision.active_sources.items()):
+                documents.set_active_version(source_id, version, connection=active)
+            retained_source_ids = set(revision.active_sources)
+            for document in previously_active:
+                if document.source_id not in retained_source_ids:
+                    documents.mark_deleted(document.source_id, connection=active)
 
             timestamp = published_at or _now()
             if current is not None:
@@ -489,6 +877,29 @@ class IndexRevisionRepository:
                 """,
                 (published.revision_id, timestamp.isoformat()),
             )
+
+            if ingestion_job_id is not None:
+                jobs = IngestionJobRepository(self._database)
+                job = jobs.get(ingestion_job_id, connection=active)
+                if job is None:
+                    raise RepositoryNotFound(f"ingestion job {ingestion_job_id!r} was not found")
+                completed = IngestionJob.model_validate(
+                    {
+                        **job.model_dump(),
+                        "status": IngestionJobStatus.SUCCEEDED,
+                        "stage": IngestionStage.COMPLETE,
+                        "ocr_page_count": (
+                            job.ocr_page_count if job_ocr_page_count is None else job_ocr_page_count
+                        ),
+                        "chunk_count": (
+                            revision.chunk_count if job_chunk_count is None else job_chunk_count
+                        ),
+                        "active_index_revision": published.revision_id,
+                    }
+                )
+                jobs.transition(completed, connection=active)
+            elif job_ocr_page_count is not None or job_chunk_count is not None:
+                raise ValueError("job counts require ingestion_job_id")
             return published
 
 

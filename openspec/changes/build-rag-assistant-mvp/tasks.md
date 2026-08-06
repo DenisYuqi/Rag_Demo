@@ -52,19 +52,19 @@ Implement and integrate in vertical gates. A gate is complete only when its end-
 
 ## 5. Knowledge Ingestion
 
-- [ ] 5.1 Implement upload size, extension, MIME, filename, emptiness, and safe-storage validation; verify rejected uploads leave no artifacts with `uv run pytest tests/unit/ingestion/test_upload_validation.py -q`.
-- [ ] 5.2 Implement persistent ingestion-job state transitions and safe stage diagnostics; verify terminal state survives repository reopen with `uv run pytest tests/unit/ingestion/test_jobs.py -q`.
-- [ ] 5.3 Implement deterministic UTF-8 text extraction and Markdown heading locators; verify Chinese/English preservation with `uv run pytest tests/unit/ingestion/test_text_extractors.py -q`.
-- [ ] 5.4 Implement page-level PyMuPDF native extraction, page metadata, and encrypted/corrupt PDF errors; verify generated PDF fixtures with `uv run pytest tests/unit/ingestion/test_pdf_extractor.py -q`.
-- [ ] 5.5 Implement the versioned page-usability decision and Tesseract Chinese/English OCR adapter; verify OCR is requested only for insufficient pages with `uv run pytest tests/unit/ingestion/test_ocr.py -q`.
-- [ ] 5.6 Implement mixed digital/scanned PDF orchestration and all-pages-empty failure; verify page order and extraction-method diagnostics with `uv run pytest tests/unit/ingestion/test_pdf_pipeline.py -q`.
-- [ ] 5.7 Implement Unicode NFC normalization, header/footer cleanup, and stable canonical content digest; verify idempotence with `uv run pytest tests/unit/ingestion/test_normalization.py -q`.
-- [ ] 5.8 Implement bounded page/structure-aware chunking with overlap and stable chunk IDs; verify deterministic locators and no lost content with `uv run pytest tests/unit/ingestion/test_chunking.py -q`.
-- [ ] 5.9 Implement source-key deduplication, monotonically increasing versions, and retained canonical source artifacts; verify duplicate and update behavior with `uv run pytest tests/unit/ingestion/test_versioning.py -q`.
-- [ ] 5.10 Implement batched document embedding plus content-digest embedding cache; verify duplicate chunks avoid provider calls with `uv run pytest tests/unit/ingestion/test_embedding_stage.py -q`.
-- [ ] 5.11 Implement immutable Chroma revision staging and persistent BM25 snapshot creation with bilingual tokenization; verify restart persistence with `uv run pytest tests/integration/test_index_staging.py -q`.
-- [ ] 5.12 Implement dense/lexical chunk-parity validation and atomic active-manifest publication; verify partial failures preserve the prior revision with `uv run pytest tests/integration/test_index_publication.py -q`.
-- [ ] 5.13 Implement full ingestion orchestration, same-source update ordering, reindex, deletion, and startup recovery; verify end-to-end state transitions with `uv run pytest tests/integration/test_ingestion_service.py -q`.
+- [x] 5.1 Implement upload size, extension, MIME, filename, emptiness, and safe-storage validation; verify rejected uploads leave no artifacts with `uv run pytest tests/unit/ingestion/test_upload_validation.py -q`.
+- [x] 5.2 Implement persistent ingestion-job state transitions and safe stage diagnostics; verify terminal state survives repository reopen with `uv run pytest tests/unit/ingestion/test_jobs.py -q`.
+- [x] 5.3 Implement deterministic UTF-8 text extraction and Markdown heading locators; verify Chinese/English preservation with `uv run pytest tests/unit/ingestion/test_text_extractors.py -q`.
+- [x] 5.4 Implement page-level PyMuPDF native extraction, page metadata, and encrypted/corrupt PDF errors; verify generated PDF fixtures with `uv run pytest tests/unit/ingestion/test_pdf_extractor.py -q`.
+- [x] 5.5 Implement the versioned page-usability decision and Tesseract Chinese/English OCR adapter; verify OCR is requested only for insufficient pages with `uv run pytest tests/unit/ingestion/test_ocr.py -q`.
+- [x] 5.6 Implement mixed digital/scanned PDF orchestration and all-pages-empty failure; verify page order and extraction-method diagnostics with `uv run pytest tests/unit/ingestion/test_pdf_pipeline.py -q`.
+- [x] 5.7 Implement Unicode NFC normalization, header/footer cleanup, and stable canonical content digest; verify idempotence with `uv run pytest tests/unit/ingestion/test_normalization.py -q`.
+- [x] 5.8 Implement bounded page/structure-aware chunking with overlap and stable chunk IDs; verify deterministic locators and no lost content with `uv run pytest tests/unit/ingestion/test_chunking.py -q`.
+- [x] 5.9 Implement source-key deduplication, monotonically increasing versions, and retained canonical source artifacts; verify duplicate and update behavior with `uv run pytest tests/unit/ingestion/test_versioning.py -q`.
+- [x] 5.10 Implement batched document embedding plus content-digest embedding cache; verify duplicate chunks avoid provider calls with `uv run pytest tests/unit/ingestion/test_embedding_stage.py -q`.
+- [x] 5.11 Implement immutable Chroma revision staging and persistent BM25 snapshot creation with bilingual tokenization; verify restart persistence with `uv run pytest tests/integration/test_index_staging.py -q`.
+- [x] 5.12 Implement dense/lexical chunk-parity validation and atomic active-manifest publication; verify partial failures preserve the prior revision with `uv run pytest tests/integration/test_index_publication.py -q`.
+- [x] 5.13 Implement full ingestion orchestration, same-source update ordering, reindex, deletion, and startup recovery; verify end-to-end state transitions with `uv run pytest tests/integration/test_ingestion_service.py -q`.
 
 ## 6. Retrieval and Ranking
 

@@ -32,6 +32,14 @@ def _mixed_pdf() -> bytes:
     return content
 
 
+def _short_native_pdf() -> bytes:
+    document = fitz.open()
+    document.new_page().insert_text((72, 72), "Note")
+    content = document.tobytes()
+    document.close()
+    return content
+
+
 def test_mixed_pdf_keeps_page_order_and_ocr_diagnostics() -> None:
     ocr = RecordingOcr(["扫描页 recovered policy content"])
 
@@ -54,3 +62,34 @@ def test_all_pages_empty_fails_without_publication_payload() -> None:
 
     with pytest.raises(ExtractionError, match="no_usable_text"):
         extract_pdf(content, ocr=RecordingOcr([" "]))
+
+
+def test_unusable_ocr_output_is_not_accepted() -> None:
+    document = fitz.open()
+    document.new_page()
+    content = document.tobytes()
+    document.close()
+
+    with pytest.raises(ExtractionError, match="no_usable_text"):
+        extract_pdf(content, ocr=RecordingOcr(["readable but too short"]))
+
+
+def test_usable_native_fallback_is_preserved_when_ocr_is_unusable() -> None:
+    ocr = RecordingOcr(["?"])
+
+    result = extract_pdf(_short_native_pdf(), ocr=ocr)
+
+    assert [block.page_number for block in result.blocks] == [1]
+    assert result.blocks[0].text.strip() == "Note"
+    assert result.blocks[0].extraction_method is ExtractionMethod.NATIVE
+    assert result.ocr_page_count == 1
+
+
+def test_all_pages_with_only_nonsemantic_native_and_ocr_text_fail() -> None:
+    document = fitz.open()
+    document.new_page().insert_text((72, 72), "---")
+    content = document.tobytes()
+    document.close()
+
+    with pytest.raises(ExtractionError, match="no_usable_text"):
+        extract_pdf(content, ocr=RecordingOcr(["?"]))

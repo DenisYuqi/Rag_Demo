@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import mimetypes
+import unicodedata
+from contextlib import suppress
 from pathlib import Path
 
+import fitz
 from pydantic import BaseModel, ConfigDict
 
 from rag_mvp.domain.ingestion import DocumentKind
@@ -40,15 +43,69 @@ _EXTENSIONS: dict[str, tuple[DocumentKind, frozenset[str]]] = {
     ".txt": (DocumentKind.TEXT, frozenset({"text/plain"})),
 }
 
+_WINDOWS_INVALID_FILENAME_CHARACTERS = frozenset('<>:"/\\|?*')
+_WINDOWS_RESERVED_FILENAMES = frozenset(
+    {
+        "aux",
+        "clock$",
+        "con",
+        "conin$",
+        "conout$",
+        "nul",
+        "prn",
+        *(f"com{number}" for number in range(1, 10)),
+        *(f"com{number}" for number in "¹²³"),
+        *(f"lpt{number}" for number in range(1, 10)),
+        *(f"lpt{number}" for number in "¹²³"),
+    }
+)
+_ALLOWED_TEXT_CONTROL_BYTES = frozenset({9, 10, 13})
+
 
 def _validate_filename(filename: str) -> str:
-    if not filename or len(filename.encode("utf-8")) > 255:
+    if not filename:
         raise UploadValidationError("invalid_filename")
-    if Path(filename).name != filename or filename in {".", ".."}:
+    try:
+        encoded_filename = filename.encode("utf-8")
+    except UnicodeEncodeError as error:
+        raise UploadValidationError("invalid_filename") from error
+    if len(encoded_filename) > 255:
         raise UploadValidationError("invalid_filename")
-    if any(ord(character) < 32 or character == "\x7f" for character in filename):
+    if filename in {".", ".."} or filename[-1] in {" ", "."}:
+        raise UploadValidationError("invalid_filename")
+    if any(unicodedata.category(character) == "Cc" for character in filename):
+        raise UploadValidationError("invalid_filename")
+    if any(character in _WINDOWS_INVALID_FILENAME_CHARACTERS for character in filename):
+        raise UploadValidationError("invalid_filename")
+    windows_stem = filename.split(".", maxsplit=1)[0].rstrip(" .").casefold()
+    if windows_stem in _WINDOWS_RESERVED_FILENAMES:
         raise UploadValidationError("invalid_filename")
     return filename
+
+
+def _validate_pdf_structure(content: bytes) -> None:
+    try:
+        document = fitz.open(stream=content, filetype="pdf")
+    except Exception as error:
+        raise UploadValidationError("malformed_pdf") from error
+
+    try:
+        if document.needs_pass:
+            raise UploadValidationError("encrypted_pdf")
+        if document.is_repaired:
+            raise UploadValidationError("malformed_pdf")
+        page_count = document.page_count
+        if page_count < 1:
+            raise UploadValidationError("malformed_pdf")
+        for page_index in range(page_count):
+            document.load_page(page_index)
+    except UploadValidationError:
+        raise
+    except Exception as error:
+        raise UploadValidationError("malformed_pdf") from error
+    finally:
+        with suppress(Exception):
+            document.close()
 
 
 def _detect_media_type(content: bytes, kind: DocumentKind) -> str:
@@ -62,6 +119,15 @@ def _detect_media_type(content: bytes, kind: DocumentKind) -> str:
         raise UploadValidationError("invalid_utf8") from error
     if not decoded.strip():
         raise UploadValidationError("empty_document")
+    if any(
+        (byte < 32 and byte not in _ALLOWED_TEXT_CONTROL_BYTES) or byte == 127 for byte in content
+    ):
+        raise UploadValidationError("media_type_mismatch")
+    if any(
+        character not in "\t\n\r" and unicodedata.category(character) == "Cc"
+        for character in decoded
+    ):
+        raise UploadValidationError("media_type_mismatch")
     return "text/plain"
 
 
@@ -93,6 +159,8 @@ def validate_upload(
         raise UploadValidationError("media_type_mismatch")
     if kind is DocumentKind.PDF and guessed_media_type != "application/pdf":
         raise UploadValidationError("media_type_mismatch")
+    if kind is DocumentKind.PDF:
+        _validate_pdf_structure(content)
 
     media_type = "application/pdf" if kind is DocumentKind.PDF else normalized_declared
     if not media_type or media_type not in accepted_media_types:

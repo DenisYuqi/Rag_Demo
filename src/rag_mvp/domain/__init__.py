@@ -13,8 +13,10 @@ from rag_mvp.domain.evaluation import (
     TokenUsage,
 )
 from rag_mvp.domain.ingestion import (
+    PROCESSING_INGESTION_STAGES,
     Chunk,
     ChunkLocator,
+    DeleteCommand,
     Document,
     DocumentKind,
     DocumentVersion,
@@ -22,9 +24,13 @@ from rag_mvp.domain.ingestion import (
     ExtractionMethod,
     IndexRevision,
     IndexRevisionStatus,
+    IngestionCommand,
     IngestionJob,
     IngestionJobStatus,
+    IngestionOperation,
     IngestionStage,
+    ReindexCommand,
+    UploadCommand,
 )
 from rag_mvp.domain.qa import (
     AnswerClaim,
@@ -54,6 +60,7 @@ from rag_mvp.domain.retrieval import (
 )
 
 __all__ = [
+    "PROCESSING_INGESTION_STAGES",
     "AnswerClaim",
     "CacheOutcome",
     "Chunk",
@@ -62,6 +69,7 @@ __all__ = [
     "ConversationRole",
     "ConversationSession",
     "ConversationTurn",
+    "DeleteCommand",
     "Document",
     "DocumentKind",
     "DocumentVersion",
@@ -71,8 +79,10 @@ __all__ = [
     "ExtractionMethod",
     "IndexRevision",
     "IndexRevisionStatus",
+    "IngestionCommand",
     "IngestionJob",
     "IngestionJobStatus",
+    "IngestionOperation",
     "IngestionStage",
     "IssueClassification",
     "IssueEvidence",
@@ -87,6 +97,7 @@ __all__ = [
     "QAResponse",
     "RankingEvidence",
     "RefusalReason",
+    "ReindexCommand",
     "ReportManifest",
     "RequestDiagnostic",
     "RetrievalCandidate",
@@ -97,5 +108,6 @@ __all__ = [
     "SessionStatus",
     "StreamEventKind",
     "TokenUsage",
+    "UploadCommand",
     "ValidatedStreamEvent",
 ]

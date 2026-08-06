@@ -35,14 +35,88 @@ def test_repeated_page_headers_and_footers_are_removed_conservatively() -> None:
     ]
 
 
+def test_document_normalization_is_idempotent_without_losing_inner_content() -> None:
+    document = ExtractedDocument(
+        kind=DocumentKind.PDF,
+        blocks=tuple(
+            ExtractedBlock(
+                text=f"OUTER HEADER\nKeep this header-like line\nBody {page}\n"
+                "Keep this footer-like line\nOUTER FOOTER",
+                page_number=page,
+            )
+            for page in range(1, 4)
+        ),
+    )
+
+    first = normalize_document(document)
+    second = normalize_document(first)
+
+    assert second is first
+    assert all("Keep this header-like line" in block.text for block in first.blocks)
+    assert all("Keep this footer-like line" in block.text for block in first.blocks)
+
+
+def test_normalization_preserves_ambiguous_single_line_page_content() -> None:
+    document = ExtractedDocument(
+        kind=DocumentKind.PDF,
+        blocks=tuple(ExtractedBlock(text="Policy", page_number=page) for page in range(1, 4)),
+    )
+
+    normalized = normalize_document(document)
+
+    assert [block.text for block in normalized.blocks] == ["Policy", "Policy", "Policy"]
+
+
+def test_header_footer_cleanup_does_not_erase_edge_only_pages() -> None:
+    document = ExtractedDocument(
+        kind=DocumentKind.PDF,
+        blocks=tuple(
+            ExtractedBlock(text="Policy title\nRequired notice", page_number=page)
+            for page in range(1, 4)
+        ),
+    )
+
+    normalized = normalize_document(document)
+
+    assert [block.text for block in normalized.blocks] == [
+        "Policy title\nRequired notice",
+        "Policy title\nRequired notice",
+        "Policy title\nRequired notice",
+    ]
+
+
+def test_section_paths_are_normalized_to_nfc() -> None:
+    document = ExtractedDocument(
+        kind=DocumentKind.MARKDOWN,
+        blocks=(ExtractedBlock(text="Policy", section_path=("Cafe\u0301", "制度")),),
+    )
+
+    normalized = normalize_document(document)
+
+    assert normalized.blocks[0].section_path == ("Café", "制度")
+
+
 def test_canonical_digest_is_stable_for_equivalent_unicode() -> None:
     first = ExtractedDocument(
         kind=DocumentKind.TEXT,
-        blocks=(ExtractedBlock(text=normalize_text("Cafe\u0301\r\nPolicy")),),
+        blocks=(ExtractedBlock(text="Cafe\u0301\r\nPolicy"),),
     )
     second = ExtractedDocument(
         kind=DocumentKind.TEXT,
-        blocks=(ExtractedBlock(text=normalize_text("Café\nPolicy")),),
+        blocks=(ExtractedBlock(text="Café\nPolicy"),),
     )
 
     assert canonical_document_digest(first) == canonical_document_digest(second)
+
+
+def test_canonical_digest_uses_unambiguous_section_serialization() -> None:
+    joined_section = ExtractedDocument(
+        kind=DocumentKind.MARKDOWN,
+        blocks=(ExtractedBlock(text="Policy", section_path=("a/b",)),),
+    )
+    nested_section = ExtractedDocument(
+        kind=DocumentKind.MARKDOWN,
+        blocks=(ExtractedBlock(text="Policy", section_path=("a", "b")),),
+    )
+
+    assert canonical_document_digest(joined_section) != canonical_document_digest(nested_section)

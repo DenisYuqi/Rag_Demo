@@ -30,6 +30,22 @@ def test_unknown_directory_is_rejected(tmp_path: Path) -> None:
         layout.directory("../escape")
 
 
+def test_revision_paths_are_isolated_and_reject_non_opaque_ids(tmp_path: Path) -> None:
+    layout = DataLayout.from_root(tmp_path / "rag-data")
+
+    assert layout.index_revision_path("revision_123") == (
+        layout.root / "indexes" / "revisions" / "revision_123"
+    )
+    assert layout.dense_index_relative_path("revision_123") == (
+        "indexes/revisions/revision_123/chroma"
+    )
+    assert layout.lexical_index_relative_path("revision_123") == (
+        "indexes/revisions/revision_123/bm25.json"
+    )
+    with pytest.raises(UnsafeDataPathError):
+        layout.index_revision_path("../escape")
+
+
 def test_filesystem_root_is_rejected() -> None:
     with pytest.raises(UnsafeDataPathError):
         DataLayout.from_root(Path("/"))

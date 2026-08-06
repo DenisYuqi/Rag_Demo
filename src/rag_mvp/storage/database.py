@@ -118,6 +118,29 @@ _MIGRATIONS: tuple[str, ...] = (
     CREATE INDEX idx_provider_usage_run ON provider_usage(run_id, created_at);
     CREATE INDEX idx_evaluation_runs_status ON evaluation_runs(status, created_at);
     """,
+    """
+    CREATE TABLE document_versions_v3 (
+        source_id TEXT NOT NULL,
+        version INTEGER NOT NULL CHECK (version > 0),
+        content_digest TEXT NOT NULL,
+        derivation_config_digest TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        PRIMARY KEY (source_id, version),
+        FOREIGN KEY (source_id) REFERENCES documents(source_id) ON DELETE RESTRICT
+    );
+
+    INSERT INTO document_versions_v3(
+        source_id, version, content_digest, derivation_config_digest, payload_json
+    )
+    SELECT source_id, version, content_digest, derivation_config_digest, payload_json
+    FROM document_versions;
+
+    DROP TABLE document_versions;
+    ALTER TABLE document_versions_v3 RENAME TO document_versions;
+
+    CREATE INDEX idx_document_versions_digest
+        ON document_versions(source_id, content_digest, derivation_config_digest);
+    """,
 )
 
 SCHEMA_VERSION = len(_MIGRATIONS)

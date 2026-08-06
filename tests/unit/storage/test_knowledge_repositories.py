@@ -86,6 +86,12 @@ def test_document_versions_crud_and_soft_delete(database: Database) -> None:
     assert repositories.documents.get_version("source-1", 1) == version
     assert repositories.documents.list_versions("source-1") == [version]
     assert repositories.documents.list() == [updated]
+    with database.transaction() as connection:
+        assert (
+            repositories.documents.get_latest_version("source-1", connection=connection) == version
+        )
+        assert repositories.documents.next_version("source-1", connection=connection) == 2
+        assert repositories.documents.list_active(connection=connection) == [updated]
 
     deleted = repositories.documents.mark_deleted("source-1")
     assert deleted.deleted_at is not None
@@ -94,10 +100,13 @@ def test_document_versions_crud_and_soft_delete(database: Database) -> None:
     assert repositories.documents.list(include_deleted=True) == [deleted]
 
 
-def test_duplicate_document_or_content_derivation_is_rejected(database: Database) -> None:
+def test_duplicate_document_key_is_rejected_but_historical_content_can_repeat(
+    database: Database,
+) -> None:
     repositories = KnowledgeRepositories.from_database(database)
     repositories.documents.create(_document())
-    repositories.documents.add_version(_version())
+    initial = _version()
+    repositories.documents.add_version(initial)
 
     with pytest.raises(RepositoryConflict):
         repositories.documents.create(
@@ -110,8 +119,9 @@ def test_duplicate_document_or_content_derivation_is_rejected(database: Database
             )
         )
 
-    with pytest.raises(RepositoryConflict):
-        repositories.documents.add_version(_version(version=2))
+    repeated = _version(version=2)
+    repositories.documents.add_version(repeated)
+    assert repositories.documents.list_versions("source-1") == [initial, repeated]
 
 
 def test_multi_repository_transaction_rolls_back(database: Database) -> None:
@@ -164,7 +174,7 @@ def test_terminal_ingestion_job_survives_repository_reopen(database: Database) -
             "stage": IngestionStage.EXTRACTING,
         }
     )
-    repositories.ingestion_jobs.update(processing)
+    processing = repositories.ingestion_jobs.update(processing)
     failed = IngestionJob.model_validate(
         {
             **processing.model_dump(),
@@ -173,7 +183,7 @@ def test_terminal_ingestion_job_survives_repository_reopen(database: Database) -
             "safe_error_code": "pdf-corrupt",
         }
     )
-    repositories.ingestion_jobs.update(failed)
+    failed = repositories.ingestion_jobs.update(failed)
 
     reopened = KnowledgeRepositories.from_database(Database(database.path))
 
