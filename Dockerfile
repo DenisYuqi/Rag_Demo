@@ -40,6 +40,7 @@ LABEL org.opencontainers.image.title="rag-mvp" \
 RUN sed -i \
         -e "s|URIs: http://deb.debian.org/debian-security|URIs: http://snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT}|" \
         -e "s|URIs: http://deb.debian.org/debian|URIs: http://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}|" \
+        -e "s|^Suites: trixie trixie-updates$|Suites: trixie|" \
         /etc/apt/sources.list.d/debian.sources \
     && apt-get -o Acquire::Retries=3 -o Acquire::Check-Valid-Until=false update \
     && install_attempt=1 \

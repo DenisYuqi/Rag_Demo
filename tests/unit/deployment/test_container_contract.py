@@ -81,6 +81,7 @@ def test_dockerfile_is_pinned_multistage_nonroot_and_revision_labeled() -> None:
     assert "uv sync --frozen --no-dev" in dockerfile
     assert 'ARG DEBIAN_SNAPSHOT="20260803T000000Z"' in dockerfile
     assert "snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}" in dockerfile
+    assert "s|^Suites: trixie trixie-updates$|Suites: trixie|" in dockerfile
     assert 'if [ "${install_attempt}" -ge 5 ]; then exit 1; fi' in dockerfile
     assert "tesseract-ocr=5.5.0-1+b1" in dockerfile
     assert re.search(r'(?m)^ARG SOURCE_REVISION="unknown"$', dockerfile)
