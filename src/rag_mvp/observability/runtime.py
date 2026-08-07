@@ -423,6 +423,19 @@ def _diagnostic_metadata(
         count = source.get(key)
         if isinstance(count, int) and not isinstance(count, bool):
             metadata[key] = count
+    for key in (
+        "refusal_reason_code",
+        "refusal_guidance_reason_code",
+        "refusal_guidance_template_id",
+        "refusal_guidance_catalog_version",
+        "refusal_guidance_language",
+    ):
+        value = source.get(key)
+        if isinstance(value, str):
+            metadata[key] = value
+    guidance_present = source.get("refusal_guidance_present")
+    if type(guidance_present) is bool:
+        metadata["refusal_guidance_present"] = guidance_present
     return metadata
 
 

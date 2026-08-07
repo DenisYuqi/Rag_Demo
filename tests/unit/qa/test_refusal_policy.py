@@ -73,7 +73,7 @@ def test_mixed_support_produces_a_partial_answer_decision() -> None:
     assert decision.citation_chunk_ids == ("chunk-1",)
 
 
-def test_absent_evidence_returns_stable_insufficient_refusal() -> None:
+def test_absent_evidence_returns_stable_low_confidence_refusal() -> None:
     decision = RefusalPolicy().decide(
         (FactEvidence("fact-absent", 0),),
         candidates=(),
@@ -81,8 +81,8 @@ def test_absent_evidence_returns_stable_insufficient_refusal() -> None:
     )
 
     assert decision.kind is EvidenceDecisionKind.REFUSAL
-    assert decision.code is EvidenceDecisionCode.INSUFFICIENT_EVIDENCE
-    assert decision.reason is RefusalReason.INSUFFICIENT_EVIDENCE
+    assert decision.code is EvidenceDecisionCode.LOW_CONFIDENCE
+    assert decision.reason is RefusalReason.LOW_CONFIDENCE
     assert decision.requires_refusal
     assert decision.citation_chunk_ids == ()
 
@@ -118,7 +118,7 @@ def test_below_threshold_evidence_is_insufficient_at_a_stable_boundary() -> None
         revision_id="revision-current",
     )
 
-    assert below.reason is RefusalReason.INSUFFICIENT_EVIDENCE
+    assert below.reason is RefusalReason.LOW_CONFIDENCE
     assert boundary.kind is EvidenceDecisionKind.ANSWER
 
 

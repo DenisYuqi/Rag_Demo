@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Literal, Self
+from typing import TYPE_CHECKING, Annotated, Literal, Self
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
 
@@ -18,6 +18,17 @@ from rag_mvp.domain.ingestion import (
 from rag_mvp.domain.qa import RequestDiagnostic
 from rag_mvp.domain.retrieval import RetrievalMode
 from rag_mvp.retrieval.request import DEFAULT_MAXIMUM_QUERY_CHARACTERS
+
+if TYPE_CHECKING:
+    from rag_mvp.evaluation.application import (
+        EvaluationArtifactDescriptor,
+        EvaluationArtifactManifest,
+        EvaluationDatasetCatalogEntry,
+        EvaluationPlanCatalogEntry,
+        EvaluationRunSummary,
+        FailedCaseDiagnostic,
+        FailedMetricContribution,
+    )
 
 SafeApiCode = Annotated[
     str,
@@ -135,6 +146,7 @@ class DocumentListResponse(ApiSchema):
 class EvaluationStartRequest(ApiSchema):
     dataset_id: OpaqueApiId
     dataset_version: VersionApiId
+    plan_id: OpaqueApiId | None = None
 
 
 class EvaluationRunResponse(ApiSchema):
@@ -164,6 +176,149 @@ class EvaluationRunResponse(ApiSchema):
             safe_error_code=run.safe_error_code,
             created_at=run.created_at,
             updated_at=run.updated_at,
+        )
+
+
+class EvaluationRunListResponse(ApiSchema):
+    runs: tuple[EvaluationRunResponse, ...]
+
+
+class EvaluationDatasetCatalogEntryResponse(ApiSchema):
+    dataset_id: OpaqueApiId
+    dataset_version: VersionApiId
+    schema_version: VersionApiId
+    content_hash: str
+    corpus_version: VersionApiId
+    corpus_hash: str
+    case_count: Annotated[int, Field(gt=0)]
+    languages: tuple[VersionApiId, ...]
+
+    @classmethod
+    def from_domain(cls, item: EvaluationDatasetCatalogEntry) -> Self:
+        return cls(**item.model_dump())
+
+
+class EvaluationDatasetCatalogResponse(ApiSchema):
+    datasets: tuple[EvaluationDatasetCatalogEntryResponse, ...]
+
+
+class EvaluationPlanCatalogEntryResponse(ApiSchema):
+    plan_id: OpaqueApiId
+    plan_version: VersionApiId
+    kind: OpaqueApiId
+    dataset_id: OpaqueApiId
+    dataset_version: VersionApiId
+    planned_case_count: Annotated[int, Field(gt=0)]
+    candidate_count: Literal[1]
+    maximum_logical_calls: Annotated[int, Field(gt=0)]
+    maximum_provider_calls: Annotated[int, Field(gt=0)]
+    cache_policy: OpaqueApiId
+    cost_estimate_status: Literal["unavailable"]
+    cost_estimate: None
+    cost_cap: None
+    maximum_active_jobs: Annotated[int, Field(gt=0)]
+
+    @classmethod
+    def from_domain(cls, item: EvaluationPlanCatalogEntry) -> Self:
+        return cls(**item.model_dump())
+
+
+class EvaluationPlanCatalogResponse(ApiSchema):
+    plans: tuple[EvaluationPlanCatalogEntryResponse, ...]
+
+
+class EvaluationRunSummaryResponse(ApiSchema):
+    run_id: OpaqueApiId
+    status: EvaluationRunStatus
+    dataset_id: OpaqueApiId
+    dataset_version: VersionApiId
+    dataset_hash: str
+    corpus_version: VersionApiId
+    corpus_hash: str | None
+    plan_id: OpaqueApiId
+    plan_version: VersionApiId
+    configuration_id: str
+    code_revision: str
+    cache_policy: OpaqueApiId
+    total_cases: Annotated[int, Field(ge=0)]
+    completed_cases: Annotated[int, Field(ge=0)]
+    failed_cases: Annotated[int, Field(ge=0)]
+    remaining_cases: Annotated[int, Field(ge=0)]
+    safe_error_code: SafeApiCode | None = None
+    evidence_status: Literal["available", "incomplete", "unavailable"]
+    gate_status: Literal["passed", "failed", "unavailable"]
+    completed_at: AwareDatetime | None
+    created_at: AwareDatetime
+    updated_at: AwareDatetime
+
+    @classmethod
+    def from_domain(cls, item: EvaluationRunSummary) -> Self:
+        return cls(**item.model_dump())
+
+
+class FailedMetricContributionResponse(ApiSchema):
+    metric_id: OpaqueApiId
+    status: Literal["passed", "failed", "unavailable"]
+    value: Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)] | None = None
+    numerator: Annotated[float, Field(ge=0, allow_inf_nan=False)] | None = None
+    denominator: Annotated[int, Field(gt=0)] | None = None
+
+    @classmethod
+    def from_domain(cls, item: FailedMetricContribution) -> Self:
+        return cls(**item.model_dump())
+
+
+class FailedCaseDiagnosticResponse(ApiSchema):
+    case_id: OpaqueApiId
+    safe_error_code: SafeApiCode
+    request_id: OpaqueApiId | None = None
+    trace_id: OpaqueApiId | None = None
+    outcome: OpaqueApiId | None = None
+    refusal_reason: OpaqueApiId | None = None
+    citation_chunk_ids: tuple[OpaqueApiId, ...] = ()
+    tags: tuple[OpaqueApiId, ...] = ()
+    metric_contributions: tuple[FailedMetricContributionResponse, ...] = ()
+
+    @classmethod
+    def from_domain(cls, item: FailedCaseDiagnostic) -> Self:
+        return cls(**item.model_dump())
+
+
+class FailedCaseListResponse(ApiSchema):
+    run_id: OpaqueApiId
+    cases: tuple[FailedCaseDiagnosticResponse, ...]
+
+
+class EvaluationArtifactDescriptorResponse(ApiSchema):
+    artifact_id: OpaqueApiId
+    schema_version: VersionApiId
+    format: OpaqueApiId
+    media_type: str
+    sha256_digest: str
+    byte_size: Annotated[int, Field(ge=0)]
+    created_at: AwareDatetime
+
+    @classmethod
+    def from_domain(cls, item: EvaluationArtifactDescriptor) -> Self:
+        return cls(**item.model_dump())
+
+
+class EvaluationArtifactManifestResponse(ApiSchema):
+    run_id: OpaqueApiId
+    configuration_id: str
+    manifest_content_hash: str
+    artifacts: tuple[EvaluationArtifactDescriptorResponse, ...]
+
+    @classmethod
+    def from_domain(cls, item: EvaluationArtifactManifest) -> Self:
+        return cls(
+            run_id=item.run_id,
+            configuration_id=item.configuration_id,
+            manifest_content_hash=item.manifest_content_hash,
+            artifacts=tuple(
+                EvaluationArtifactDescriptorResponse.from_domain(descriptor)
+                for descriptor in item.artifacts
+            ),
         )
 
 

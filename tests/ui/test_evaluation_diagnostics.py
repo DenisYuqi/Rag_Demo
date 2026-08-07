@@ -7,7 +7,7 @@ import pytest
 from rag_mvp.domain.evaluation import EvaluationRun, EvaluationRunStatus
 from rag_mvp.domain.qa import RequestDiagnostic
 from rag_mvp.ui.callbacks import WorkbenchCallbacks
-from rag_mvp.ui.models import BrowserSessionState, ReportDownload
+from rag_mvp.ui.models import BrowserSessionState
 from rag_mvp.ui.services import (
     EvaluationCompatibilityError,
     HealthComponent,
@@ -46,12 +46,7 @@ class FakeEvaluationGateway:
             ),
         }
         self.starts: list[tuple[str, str | None]] = []
-        self.report_paths = {
-            "json": root / "run_candidate.json",
-            "html": root / "run_candidate.html",
-        }
-        self.report_paths["json"].write_text('{"safe": true}', encoding="utf-8")
-        self.report_paths["html"].write_text("<p>safe</p>", encoding="utf-8")
+        del root
 
     async def start(
         self,
@@ -95,11 +90,6 @@ class FakeEvaluationGateway:
             "note": "Reviewed by person@example.com",
         }
 
-    def get_report(self, run_id: str, format: str) -> ReportDownload | None:
-        if run_id != "run_candidate" or format not in self.report_paths:
-            return None
-        return ReportDownload(run_id=run_id, format=format, path=self.report_paths[format])
-
 
 class FakeDiagnosticsGateway:
     def __init__(self, diagnostic: RequestDiagnostic) -> None:
@@ -118,7 +108,7 @@ class FakeDiagnosticsGateway:
 
 
 @pytest.mark.asyncio
-async def test_evaluation_run_failures_compare_and_downloads_are_redacted(tmp_path: Path) -> None:
+async def test_legacy_evaluation_callbacks_are_redacted(tmp_path: Path) -> None:
     gateway = FakeEvaluationGateway(tmp_path)
     callbacks = WorkbenchCallbacks(WorkbenchServices(evaluations=gateway))
     state = BrowserSessionState.create()
@@ -142,10 +132,6 @@ async def test_evaluation_run_failures_compare_and_downloads_are_redacted(tmp_pa
     incompatible = callbacks.compare_evaluations("run_baseline", "run_incompatible", state)
     assert incompatible.metrics_markdown == ""
     assert "Runs are incompatible" in incompatible.status_markdown
-
-    assert callbacks.report_path("run_candidate", "json") == str(gateway.report_paths["json"])
-    assert callbacks.report_path("run_candidate", "html") == str(gateway.report_paths["html"])
-    assert callbacks.report_path("run_missing", "json") is None
 
 
 def test_diagnostics_health_and_request_trace_are_allowlisted_and_redacted() -> None:

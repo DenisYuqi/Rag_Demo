@@ -646,7 +646,9 @@ async def test_empty_evidence_refuses_without_assessment_or_generation(tmp_path:
     )
 
     assert isinstance(response, QARefusal)
-    assert response.reason.value == "insufficient-evidence"
+    assert response.reason.value == "out-of-scope"
+    assert response.diagnostics.metadata["refusal_guidance_reason_code"] == "out-of-scope"
+    assert response.diagnostics.metadata["refusal_guidance_present"] is True
     assert assessor.calls == generation.calls == 0
 
 
@@ -738,7 +740,9 @@ async def test_unsafe_request_is_not_persisted_or_sent_downstream(tmp_path: Path
     )
 
     assert isinstance(response, QARefusal)
-    assert response.reason.value == "unsafe-request"
+    assert response.reason.value == "prompt-injection"
+    assert response.diagnostics.metadata["refusal_guidance_reason_code"] == "prompt-injection"
+    assert "input_policy" not in response.diagnostics.metadata
     assert conversations.list_turns(session_id, "owner-1") == ()
     assert retrieval.calls == assessor.calls == generation.calls == 0
 

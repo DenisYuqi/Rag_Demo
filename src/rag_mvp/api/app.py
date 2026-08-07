@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from collections.abc import AsyncIterator, Coroutine
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field, replace
@@ -52,7 +53,7 @@ from rag_mvp.storage.layout import DataLayout
 from rag_mvp.storage.writer_lock import DataRootWriterLock
 
 if TYPE_CHECKING:
-    from rag_mvp.ui.services import WorkbenchServices
+    from rag_mvp.ui.services import EvaluationGateway, WorkbenchServices
 
 
 @dataclass(slots=True)
@@ -67,6 +68,7 @@ class RuntimeState:
     qa_services: QARuntimeServices | None = None
     owns_qa_services: bool = False
     evaluation_service: EvaluationOperations | None = None
+    owns_evaluation_service: bool = False
     diagnostics_service: DiagnosticOperations | None = None
     workbench_services: WorkbenchServices | None = None
     metrics: RAGMetrics = field(default_factory=RAGMetrics)
@@ -135,6 +137,13 @@ class RuntimeState:
                 admission.close(),
                 deadline=min(hard_deadline, started + (grace * 0.1)),
                 task_name="shutdown-admission-close",
+            )
+
+        if self.owns_evaluation_service and self.evaluation_service is not None:
+            await self._attempt_async(
+                self._close_evaluation_service(),
+                deadline=min(hard_deadline, started + (grace * 0.3)),
+                task_name="shutdown-evaluation-close",
             )
 
         await self._drain_or_cancel(
@@ -230,6 +239,16 @@ class RuntimeState:
             # Exporter shutdown is isolated from the event loop and remains
             # bounded by the RuntimeState cleanup deadline that owns this task.
             await asyncio.to_thread(telemetry.tracer.shutdown)
+
+    async def _close_evaluation_service(self) -> None:
+        service = self.evaluation_service
+        close = None if service is None else getattr(service, "close", None)
+        if not callable(close):
+            raise RuntimeError("evaluation_close_unavailable")
+        operation = close()
+        if not inspect.isawaitable(operation):
+            raise RuntimeError("evaluation_close_invalid")
+        await operation
 
     async def _drain_or_cancel(
         self,
@@ -341,6 +360,7 @@ def _build_runtime(
     qa_services: QARuntimeServices | None,
     owns_qa_services: bool,
     evaluation_service: EvaluationOperations | None,
+    owns_evaluation_service: bool,
     diagnostics_service: DiagnosticOperations | None,
     workbench_services: WorkbenchServices | None,
     redactor: Redactor | None,
@@ -442,6 +462,7 @@ def _build_runtime(
         qa_services=qa_services,
         owns_qa_services=owns_qa_services,
         evaluation_service=evaluation_service,
+        owns_evaluation_service=owns_evaluation_service,
         diagnostics_service=diagnostics_service,
         workbench_services=workbench_services,
         metrics=metrics,
@@ -459,6 +480,7 @@ def create_app(
     qa_services: QARuntimeServices | None = None,
     owns_qa_services: bool = False,
     evaluation_service: EvaluationOperations | None = None,
+    owns_evaluation_service: bool = False,
     diagnostics_service: DiagnosticOperations | None = None,
     workbench_services: WorkbenchServices | None = None,
     redactor: Redactor | None = DEFAULT_REDACTOR,
@@ -469,6 +491,8 @@ def create_app(
         raise ValueError("owned_ingestion_service_missing")
     if owns_qa_services and qa_services is None:
         raise ValueError("owned_qa_services_missing")
+    if owns_evaluation_service and evaluation_service is None:
+        raise ValueError("owned_evaluation_service_missing")
     resolved_settings = settings or get_settings()
     identity_error = _runtime_identity_error(resolved_settings)
     configure_logging(
@@ -486,6 +510,7 @@ def create_app(
         qa_services=qa_services,
         owns_qa_services=owns_qa_services,
         evaluation_service=evaluation_service,
+        owns_evaluation_service=owns_evaluation_service,
         diagnostics_service=diagnostics_service,
         workbench_services=workbench_services,
         redactor=redactor,
@@ -507,6 +532,7 @@ def create_app(
             qa=runtime.qa_services,
             ingestion=ingestion_service,
             diagnostics=diagnostics_gateway,
+            evaluations=cast("EvaluationGateway", evaluation_service),
             redactor=redactor,
         )
 
@@ -545,6 +571,19 @@ def create_app(
                     if isinstance(ingestion_check, StaticReadinessCheck):
                         ingestion_check.ready = False
                         ingestion_check.reason = "ingestion_recovery_failed"
+            if runtime.evaluation_service is not None:
+                start_evaluations = getattr(runtime.evaluation_service, "startup", None)
+                if callable(start_evaluations):
+                    try:
+                        operation = start_evaluations()
+                        if not inspect.isawaitable(operation):
+                            raise RuntimeError("evaluation_startup_invalid")
+                        await operation
+                    except Exception:
+                        get_logger("lifecycle").warning(
+                            "evaluation.startup.failed",
+                            error_category="evaluation_startup_failed",
+                        )
             runtime.accepting_traffic = storage_writable
             yield
         finally:
@@ -654,6 +693,8 @@ def create_executable_app(settings: Settings | None = None) -> FastAPI:
                 owns_ingestion_service=True,
                 qa_services=composition.qa,
                 owns_qa_services=True,
+                evaluation_service=composition.evaluation,
+                owns_evaluation_service=composition.evaluation is not None,
                 diagnostics_service=composition.diagnostics,
                 redactor=DEFAULT_REDACTOR,
                 writer_lock=writer_lock,

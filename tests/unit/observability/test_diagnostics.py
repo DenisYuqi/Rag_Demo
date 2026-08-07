@@ -60,6 +60,41 @@ def test_diagnostics_are_redacted_allowlisted_and_persisted(database: Database) 
     assert reopened.get("person@example.com", now=now) is None
 
 
+def test_refusal_guidance_telemetry_keeps_only_stable_safe_fields(
+    database: Database,
+) -> None:
+    now = datetime(2026, 8, 7, tzinfo=UTC)
+    unsafe_fixture = "person@example.com"
+    diagnostic = _diagnostic("request-guided-refusal", now).model_copy(
+        update={
+            "outcome": "refusal",
+            "metadata": {
+                "refusal_reason_code": "prompt-injection",
+                "refusal_guidance_reason_code": "prompt-injection",
+                "refusal_guidance_template_id": ("refusal-guidance-v1.prompt-injection.en"),
+                "refusal_guidance_catalog_version": "refusal-guidance-v1",
+                "refusal_guidance_present": True,
+                "refusal_guidance_language": "en",
+                "input_policy": "override_policy",
+                "question": f"raw trigger {unsafe_fixture}",
+            },
+        }
+    )
+
+    saved = SafeRequestDiagnosticStore(database).save(diagnostic, now=now)
+
+    assert saved.metadata == {
+        "refusal_reason_code": "prompt-injection",
+        "refusal_guidance_reason_code": "prompt-injection",
+        "refusal_guidance_template_id": "refusal-guidance-v1.prompt-injection.en",
+        "refusal_guidance_catalog_version": "refusal-guidance-v1",
+        "refusal_guidance_present": True,
+        "refusal_guidance_language": "en",
+    }
+    assert "input_policy" not in saved.metadata
+    assert unsafe_fixture not in saved.model_dump_json()
+
+
 def test_retention_bounds_count_and_expiry(database: Database) -> None:
     now = datetime(2026, 8, 7, tzinfo=UTC)
     store = SafeRequestDiagnosticStore(

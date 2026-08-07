@@ -14,20 +14,20 @@
 
 ## 2. Phase 14 — Runtime Gaps and Operational UI
 
-- [ ] 2.1 Inject the bounded TTL/LRU retrieval cache into production composition and implement `USE` hit/miss/write plus `BYPASS` behavior using the complete revision/configuration identity.
-- [ ] 2.2 Add fail-open cache handling and privacy-safe eligible/hit/miss/bypass/expiry/eviction/error counters with correct cache-rate denominators.
-- [ ] 2.3 Add unit and integration tests proving provider-call elimination on hits, output equivalence, version/configuration isolation, expiry/eviction, non-caching of failures/degradation, bypass behavior, and cache-error fallback.
-- [ ] 2.4 Add a versioned Chinese/English refusal-guidance catalog for low-confidence, out-of-scope, conflicting-evidence, prompt-injection, and safety reason codes.
-- [ ] 2.5 Integrate deterministic guidance into terminal QA refusals and add first-turn, multi-turn, language, grounding, injection, PII, telemetry, Refusal Appropriateness, and Answer Compliance tests.
-- [ ] 2.6 Implement the canonical operations model plus deterministic TXT and CSV renderers with identity, p50/p95, token, cache, refusal, compliance, cost, denominator, unknown-value, parity, and privacy validation.
-- [ ] 2.7 Implement immutable multi-format artifact publication and manifest verification for JSON, HTML, TXT, and CSV, including safe filenames, media-type allowlists, hashes, sizes, relative paths, and no-overwrite behavior.
-- [ ] 2.8 Add the structured-log field dictionary, privacy-safe JSONL sample, and automated checks for field coverage, units/types, redaction rules, prohibited fields, secrets, paths, and supported PII.
-- [ ] 2.9 Extract a shared evaluation application service from the CLI and add a bounded background supervisor, persisted catalog/progress, safe terminal errors, active-job limits, and startup reconciliation of interrupted work.
-- [ ] 2.10 Implement production API schemas/routes for dataset and plan catalogs, evaluation list/start/get/summary/failed cases, artifact manifests/downloads, stable conflict/capacity errors, and validated no-store/nosniff responses.
-- [ ] 2.11 Wire the concrete evaluation service through application composition and lifespan shutdown, and make the CLI use the same service without changing normal QA readiness or the active online index.
-- [ ] 2.12 Replace the placeholder Evaluation UI with typed Run, Overview, Operations, and Artifacts secondary views showing bilingual progress, quality/performance/cost/operations denominators, gate explanations, safe failed cases, and API-backed downloads.
-- [ ] 2.13 Add API, UI, integration, restart, concurrency, privacy, and download tests proving explicit start is non-blocking, refresh is read-only, production evaluation is wired, missing evidence is not shown as success, and no filesystem path is exposed.
-- [ ] 2.14 Run the complete Phase 14 focused and repository-wide tests, static analysis, privacy scans, and OpenSpec validation, then commit the completed phase as `phase 14: implement PDF requirement gaps and evaluation UI`.
+- [x] 2.1 Inject the bounded TTL/LRU retrieval cache into production composition and implement `USE` hit/miss/write plus `BYPASS` behavior using the complete revision/configuration identity.
+- [x] 2.2 Add fail-open cache handling and privacy-safe eligible/hit/miss/bypass/expiry/eviction/error counters with correct cache-rate denominators.
+- [x] 2.3 Add unit and integration tests proving provider-call elimination on hits, output equivalence, version/configuration isolation, expiry/eviction, non-caching of failures/degradation, bypass behavior, and cache-error fallback.
+- [x] 2.4 Add a versioned Chinese/English refusal-guidance catalog for low-confidence, out-of-scope, conflicting-evidence, prompt-injection, and safety reason codes.
+- [x] 2.5 Integrate deterministic guidance into terminal QA refusals and add first-turn, multi-turn, language, grounding, injection, PII, telemetry, Refusal Appropriateness, and Answer Compliance tests.
+- [x] 2.6 Implement the canonical operations model plus deterministic TXT and CSV renderers with identity, p50/p95, token, cache, refusal, compliance, cost, denominator, unknown-value, parity, and privacy validation.
+- [x] 2.7 Implement immutable multi-format artifact publication and manifest verification for JSON, HTML, TXT, and CSV, including safe filenames, media-type allowlists, hashes, sizes, relative paths, and no-overwrite behavior.
+- [x] 2.8 Add the structured-log field dictionary, privacy-safe JSONL sample, and automated checks for field coverage, units/types, redaction rules, prohibited fields, secrets, paths, and supported PII.
+- [x] 2.9 Extract a shared evaluation application service from the CLI and add a bounded background supervisor, persisted catalog/progress, safe terminal errors, active-job limits, and startup reconciliation of interrupted work.
+- [x] 2.10 Implement production API schemas/routes for dataset and plan catalogs, evaluation list/start/get/summary/failed cases, artifact manifests/downloads, stable conflict/capacity errors, and validated no-store/nosniff responses.
+- [x] 2.11 Wire the concrete evaluation service through application composition and lifespan shutdown, and make the CLI use the same service without changing normal QA readiness or the active online index.
+- [x] 2.12 Replace the placeholder Evaluation UI with typed Run, Overview, Operations, and Artifacts secondary views showing bilingual progress, quality/performance/cost/operations denominators, gate explanations, safe failed cases, and API-backed downloads.
+- [x] 2.13 Add API, UI, integration, restart, concurrency, privacy, and download tests proving explicit start is non-blocking, refresh is read-only, production evaluation is wired, missing evidence is not shown as success, and no filesystem path is exposed.
+- [x] 2.14 Run the complete Phase 14 focused and repository-wide tests, static analysis, privacy scans, and OpenSpec validation, then commit the completed phase as `phase 14: implement PDF requirement gaps and evaluation UI`.
 
 ## 3. Phase 15 — Controlled Comparisons and Comparison UI
 

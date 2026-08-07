@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -81,13 +80,25 @@ class EvaluationRender:
     metrics_markdown: str
     status_markdown: str
     state: BrowserSessionState
-
-
-@dataclass(frozen=True, slots=True)
-class ReportDownload:
-    run_id: str
-    format: str
-    path: Path
+    dataset_choices: tuple[tuple[str, str], ...] = ()
+    plan_choices: tuple[tuple[str, str], ...] = ()
+    run_choices: tuple[tuple[str, str], ...] = ()
+    selected_dataset_key: str | None = None
+    selected_plan_key: str | None = None
+    selected_run_id: str | None = None
+    identity_rows: tuple[tuple[Any, ...], ...] = ()
+    plan_rows: tuple[tuple[Any, ...], ...] = ()
+    overview_rows: tuple[tuple[Any, ...], ...] = ()
+    category_rows: tuple[tuple[Any, ...], ...] = ()
+    operations_rows: tuple[tuple[Any, ...], ...] = ()
+    artifact_rows: tuple[tuple[Any, ...], ...] = ()
+    gate_markdown: str = ""
+    progress_markdown: str = ""
+    operations_preview: str = ""
+    operations_links_markdown: str = ""
+    artifact_links_markdown: str = ""
+    poll_active: bool = False
+    start_enabled: bool = False
 
 
 @dataclass(frozen=True, slots=True)

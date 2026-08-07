@@ -150,6 +150,30 @@ class EvidenceAssembler:
             )
         return tuple(evidence)
 
+    def validate_cached_evidence(
+        self,
+        evidence: object,
+    ) -> tuple[RankingEvidence, ...]:
+        """Validate cached final evidence against this snapshot's record registry."""
+
+        if self._snapshot.is_closed:
+            raise EvidenceIntegrityError("snapshot_closed")
+        if isinstance(evidence, (str, bytes, bytearray)) or not isinstance(evidence, Sequence):
+            raise EvidenceIntegrityError("cached_evidence_sequence_invalid")
+        raw_values = cast(Sequence[object], evidence)
+        if len(raw_values) > self.final_limit:
+            raise EvidenceIntegrityError("final_limit_exceeded")
+        if any(not isinstance(item, RankingEvidence) for item in raw_values):
+            raise EvidenceIntegrityError("cached_evidence_invalid")
+        values = tuple(cast(RankingEvidence, item) for item in raw_values)
+        if len({item.chunk_id for item in values}) != len(values):
+            raise EvidenceIntegrityError("duplicate_final_candidate")
+        if tuple(item.final_rank for item in values) != tuple(range(1, len(values) + 1)):
+            raise EvidenceIntegrityError("cached_evidence_ranks_invalid")
+        for item in values:
+            self._validate_snapshot_record(item)
+        return values
+
     def _validated_channel(
         self,
         candidates: Sequence[RetrievalCandidate],

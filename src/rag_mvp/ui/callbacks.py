@@ -6,7 +6,7 @@ import json
 import mimetypes
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Literal, cast
+from typing import cast
 from uuid import uuid4
 
 import anyio
@@ -18,6 +18,13 @@ from rag_mvp.domain.retrieval import RetrievalMode
 from rag_mvp.safety.output import redact_output
 from rag_mvp.safety.redactor import Redactor
 
+from .evaluation_dashboard import (
+    EvaluationDashboardError,
+    render_evaluation_dashboard,
+    resolve_registered_plan,
+    supports_typed_dashboard,
+    with_status,
+)
 from .models import (
     BrowserSessionState,
     ChatRender,
@@ -301,20 +308,144 @@ class WorkbenchCallbacks:
         try:
             run = await service.start(dataset_id, dataset_version or None)
             return self.refresh_evaluations(current.with_evaluation(run.run_id))
-        except Exception:
+        except Exception as error:
+            code = getattr(error, "code", None)
+            if code == "evaluation_duplicate":
+                return EvaluationRender(
+                    (),
+                    (),
+                    "",
+                    "This plan is already active. / 此计划已在运行。",
+                    current,
+                )
+            if code == "evaluation_capacity":
+                return EvaluationRender(
+                    (),
+                    (),
+                    "",
+                    "Evaluation capacity is full; retry after an active run finishes. / "
+                    "评估容量已满, 请等待当前运行结束后重试。",
+                    current,
+                )
             return EvaluationRender((), (), "", SAFE_UI_ERROR, current)
 
-    def refresh_evaluations(self, state: BrowserSessionState | None) -> EvaluationRender:
+    async def start_registered_evaluation(
+        self,
+        selected_dataset_key: str | None,
+        selected_plan_key: str | None,
+        state: BrowserSessionState | None,
+    ) -> EvaluationRender:
+        """Launch only a current registry-backed selection on an explicit click."""
+
         current = _state(state)
         service = self.services.evaluations
         if service is None:
             return EvaluationRender((), (), "", SAFE_UNAVAILABLE, current)
         try:
+            dataset, _ = resolve_registered_plan(
+                service,
+                selected_dataset_key,
+                selected_plan_key,
+            )
+            run = await service.start(dataset.dataset_id, dataset.dataset_version)
+            rendered = render_evaluation_dashboard(
+                service,
+                redactor=cast(Redactor, self.services.redactor),
+                state=current.with_evaluation(run.run_id),
+                selected_dataset_key=selected_dataset_key,
+                selected_plan_key=selected_plan_key,
+                selected_run_id=run.run_id,
+            )
+            return with_status(
+                rendered,
+                f"Evaluation queued in the background. / 评估已进入后台队列。 Run: `{run.run_id}`",
+            )
+        except EvaluationDashboardError:
+            status = (
+                "Select a compatible registered dataset and plan. / "
+                "请选择兼容的已注册数据集和计划。"
+            )
+            try:
+                rendered = render_evaluation_dashboard(
+                    service,
+                    redactor=cast(Redactor, self.services.redactor),
+                    state=current,
+                    selected_dataset_key=selected_dataset_key,
+                    selected_plan_key=selected_plan_key,
+                )
+            except Exception:
+                return EvaluationRender((), (), "", status, current)
+            return with_status(rendered, status)
+        except Exception as error:
+            code = getattr(error, "code", None)
+            if code == "evaluation_duplicate":
+                status = "This plan is already active. / 此计划已在运行。"
+            elif code == "evaluation_capacity":
+                status = (
+                    "Evaluation capacity is full; retry after an active run finishes. / "
+                    "评估容量已满, 请等待当前运行结束后重试。"
+                )
+            else:
+                status = SAFE_UI_ERROR
+            try:
+                rendered = render_evaluation_dashboard(
+                    service,
+                    redactor=cast(Redactor, self.services.redactor),
+                    state=current,
+                    selected_dataset_key=selected_dataset_key,
+                    selected_plan_key=selected_plan_key,
+                )
+            except Exception:
+                return EvaluationRender((), (), "", status, current)
+            return with_status(rendered, status)
+
+    def preview_evaluation_plan(
+        self,
+        selected_dataset_key: str | None,
+        selected_plan_key: str | None,
+        selected_run_id: str | None,
+        state: BrowserSessionState | None,
+    ) -> EvaluationRender:
+        return self.refresh_evaluations(
+            state,
+            selected_dataset_key=selected_dataset_key,
+            selected_plan_key=selected_plan_key,
+            selected_run_id=selected_run_id,
+        )
+
+    def refresh_evaluations(
+        self,
+        state: BrowserSessionState | None,
+        *,
+        selected_dataset_key: str | None = None,
+        selected_plan_key: str | None = None,
+        selected_run_id: str | None = None,
+    ) -> EvaluationRender:
+        current = _state(state)
+        service = self.services.evaluations
+        if service is None:
+            return EvaluationRender((), (), "", SAFE_UNAVAILABLE, current)
+        try:
+            if supports_typed_dashboard(service):
+                redactor = self.services.redactor
+                if redactor is None:
+                    raise EvaluationDashboardError("evaluation_redaction_unavailable")
+                return render_evaluation_dashboard(
+                    service,
+                    redactor=redactor,
+                    state=current,
+                    selected_dataset_key=selected_dataset_key,
+                    selected_plan_key=selected_plan_key,
+                    selected_run_id=selected_run_id,
+                )
             runs = tuple(service.list_runs())
             selected = current.evaluation_run_id
-            failures: Sequence[Mapping[str, object]] = ()
+            failures: tuple[Mapping[str, object], ...] = ()
             if selected:
-                failures = service.failed_cases(selected)
+                raw_failures = tuple(service.failed_cases(selected))
+                if any(not isinstance(item, Mapping) for item in raw_failures):
+                    raise ValueError("evaluation_failed_cases_invalid")
+                failures = cast(tuple[Mapping[str, object], ...], raw_failures)
             rows = tuple(self._run_row(run) for run in runs)
             failure_rows = tuple(
                 tuple(_safe_text(value, self.services.redactor) for value in row.values())
@@ -357,18 +488,6 @@ class WorkbenchCallbacks:
             return EvaluationRender((), (), "", "Runs are incompatible. / 运行不兼容。", current)
         except Exception:
             return EvaluationRender((), (), "", SAFE_UI_ERROR, current)
-
-    def report_path(self, run_id: str, report_format: Literal["json", "html"]) -> str | None:
-        service = self.services.evaluations
-        if service is None:
-            return None
-        try:
-            report = service.get_report(run_id, report_format)
-            if report is None or not report.path.is_file():
-                return None
-            return str(report.path)
-        except Exception:
-            return None
 
     def refresh_health(self) -> DiagnosticsRender:
         service = self.services.diagnostics

@@ -240,7 +240,13 @@ class CompleteResponseEmitter:
         owner_id: str,
     ) -> None:
         should_persist = isinstance(response, QAAnswer) or (
-            isinstance(response, QARefusal) and response.reason is not RefusalReason.UNSAFE_REQUEST
+            isinstance(response, QARefusal)
+            and response.reason
+            not in {
+                RefusalReason.UNSAFE_REQUEST,
+                RefusalReason.PROMPT_INJECTION,
+                RefusalReason.SAFETY,
+            }
         )
         if not should_persist:
             return

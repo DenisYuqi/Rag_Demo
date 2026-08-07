@@ -35,6 +35,7 @@ class CacheOutcome(StrEnum):
     HIT = "hit"
     MISS = "miss"
     BYPASS = "bypass"
+    ERROR = "error"
     NOT_APPLICABLE = "not-applicable"
 
 

@@ -8,8 +8,9 @@ from pathlib import Path
 
 import pytest
 
+from rag_mvp.config.settings import Settings
 from rag_mvp.domain.ingestion import ChunkLocator, IndexRevisionStatus, IngestionJobStatus
-from rag_mvp.domain.retrieval import CacheOutcome, RetrievalMode, RetrievalResult
+from rag_mvp.domain.retrieval import CacheOutcome, CachePolicy, RetrievalMode, RetrievalResult
 from rag_mvp.ingestion.chunking import ChunkingConfig
 from rag_mvp.ingestion.service import IngestionService
 from rag_mvp.providers.models import (
@@ -21,8 +22,10 @@ from rag_mvp.providers.models import (
     ProviderCallContext,
     TokenUsage,
 )
+from rag_mvp.qa.orchestrator import SnapshotRetrievalGateway
 from rag_mvp.retrieval.binding import BoundRetrievalSnapshot, BoundRetrievalSnapshotFactory
 from rag_mvp.retrieval.bm25 import LexicalIndexError
+from rag_mvp.retrieval.cache import RetrievalResultCache
 from rag_mvp.retrieval.collection import BoundBm25Retriever
 from rag_mvp.retrieval.dense import DenseIndexError
 from rag_mvp.retrieval.query_dense import BoundDenseRetriever, DenseSearchResult
@@ -683,3 +686,78 @@ def test_concept_vectors_are_finite_unit_vectors_with_explicit_bilingual_pairs()
         assert english_vector == chinese_vector
         assert all(math.isfinite(value) for value in english_vector)
         assert math.sqrt(sum(value * value for value in english_vector)) == pytest.approx(1.0)
+
+
+async def test_production_snapshot_gateway_reuses_cache_and_isolates_new_revision(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "production-cache"
+    provider = ConceptEmbeddingProvider()
+    ingestion = _ingestion(root, provider)
+    await _publish_text(
+        ingestion,
+        source_key="cache-first",
+        title="First policy",
+        text="sabbatical benefit is available after five years",
+    )
+    settings = Settings(
+        data_root=root,
+        retrieval_cache_enabled=True,
+        retrieval_cache_max_entries=4,
+        retrieval_cache_ttl_seconds=60,
+        _env_file=None,
+    )
+    cache = RetrievalResultCache(
+        configuration_id=settings.configuration_identity,
+        maximum_entries=settings.retrieval_cache_max_entries,
+        ttl_seconds=settings.retrieval_cache_ttl_seconds,
+    )
+    gateway = SnapshotRetrievalGateway(
+        _factory(root, ingestion),
+        provider,
+        settings=settings,
+        cache=cache,
+    )
+    calls_before_requests = provider.call_count
+
+    first = await gateway.retrieve(
+        request_id="cache-request-one",
+        query="sabbatical benefit",
+        mode=RetrievalMode.HYBRID,
+        cache_policy=CachePolicy.USE,
+        deadline=Deadline.after(30),
+    )
+    second = await gateway.retrieve(
+        request_id="cache-request-two",
+        query="sabbatical   benefit",
+        mode=RetrievalMode.HYBRID,
+        cache_policy=CachePolicy.USE,
+        deadline=Deadline.after(30),
+    )
+
+    assert provider.call_count == calls_before_requests + 1
+    assert first.evidence == second.evidence
+    assert first.diagnostics.cache_status["retrieval"] is CacheOutcome.MISS
+    assert second.diagnostics.cache_status["retrieval"] is CacheOutcome.HIT
+
+    await _publish_text(
+        ingestion,
+        source_key="cache-second",
+        title="Second policy",
+        text="multifactor authentication is required",
+    )
+    calls_after_publication = provider.call_count
+    after_revision_change = await gateway.retrieve(
+        request_id="cache-request-three",
+        query="sabbatical benefit",
+        mode=RetrievalMode.HYBRID,
+        cache_policy=CachePolicy.USE,
+        deadline=Deadline.after(30),
+    )
+
+    assert provider.call_count == calls_after_publication + 1
+    assert after_revision_change.diagnostics.cache_status["retrieval"] is CacheOutcome.MISS
+    assert after_revision_change.diagnostics.index_revision != first.diagnostics.index_revision
+    assert gateway.cache_metrics is cache.metrics
+    assert cache.metrics.snapshot().eligible_lookups == 3
+    ingestion.close()

@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Literal, Protocol
+from typing import TYPE_CHECKING, Protocol
 from uuid import uuid4
 
 from pydantic import ValidationError
@@ -21,7 +20,17 @@ from rag_mvp.ingestion.service import IngestionService
 from rag_mvp.qa.query_rewrite import select_response_language
 from rag_mvp.safety.redactor import DEFAULT_REDACTOR, Redactor
 
-from .models import ChatServiceResult, ReportDownload, SourcePreview, UploadPayload
+from .models import ChatServiceResult, SourcePreview, UploadPayload
+
+if TYPE_CHECKING:
+    from rag_mvp.evaluation.application import (
+        EvaluationArtifactManifest,
+        EvaluationDatasetCatalogEntry,
+        EvaluationPlanCatalogEntry,
+        EvaluationRunSummary,
+        FailedCaseDiagnostic,
+        ResolvedEvaluationArtifact,
+    )
 
 
 class SourcePreviewLookup(Protocol):
@@ -78,19 +87,30 @@ class EvaluationGateway(Protocol):
 
     def list_runs(self) -> Sequence[EvaluationRun]: ...
 
-    def failed_cases(self, run_id: str) -> Sequence[Mapping[str, object]]: ...
+    def datasets(self) -> Sequence[EvaluationDatasetCatalogEntry]: ...
+
+    def plans(self) -> Sequence[EvaluationPlanCatalogEntry]: ...
+
+    def summary(self, run_id: str) -> EvaluationRunSummary | None: ...
+
+    def failed_cases(
+        self,
+        run_id: str,
+    ) -> Sequence[FailedCaseDiagnostic | Mapping[str, object]]: ...
+
+    def artifact_manifest(self, run_id: str) -> EvaluationArtifactManifest | None: ...
+
+    def artifact(
+        self,
+        run_id: str,
+        artifact_id: str,
+    ) -> ResolvedEvaluationArtifact | None: ...
 
     def compare_runs(
         self,
         baseline_run_id: str,
         candidate_run_id: str,
     ) -> Mapping[str, object]: ...
-
-    def get_report(
-        self,
-        run_id: str,
-        format: Literal["json", "html"],
-    ) -> ReportDownload | None: ...
 
 
 class RequestDiagnosticsLookup(Protocol):
@@ -261,7 +281,3 @@ def configured_workbench_services(
         diagnostics=diagnostics,
         redactor=redactor,
     )
-
-
-type AsyncRunStarter = Callable[[str, str | None], Awaitable[EvaluationRun]]
-type ReportPathResolver = Callable[[str, Literal["json", "html"]], Path | None]

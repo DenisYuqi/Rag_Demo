@@ -17,11 +17,51 @@ def test_defaults_are_safe_and_offline_ready(tmp_path: object) -> None:
     assert len(settings.configuration_identity) == 16
     assert not settings.allow_single_retriever_degradation
     assert not settings.retrieval_cache_enabled
+    assert settings.retrieval_cache_max_entries == 256
+    assert settings.retrieval_cache_ttl_seconds == 300
+    assert settings.evaluation_max_active_jobs == 1
+    assert settings.evaluation_shutdown_grace_seconds == 2
     assert settings.reranking_model is None
     assert settings.server_shutdown_grace_seconds == 4
     assert settings.app_shutdown_grace_seconds == 15
     assert settings.total_shutdown_budget_seconds == 19
     assert settings.total_shutdown_budget_seconds < settings.CONTAINER_STOP_GRACE_SECONDS
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("retrieval_cache_max_entries", 0),
+        ("retrieval_cache_max_entries", 10_001),
+        ("retrieval_cache_ttl_seconds", 0),
+        ("retrieval_cache_ttl_seconds", 86_401),
+    ],
+)
+def test_retrieval_cache_bounds_are_validated(
+    tmp_path: object,
+    field: str,
+    value: int,
+) -> None:
+    with pytest.raises(ValidationError):
+        Settings(data_root=tmp_path, _env_file=None, **{field: value})
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("evaluation_max_active_jobs", 0),
+        ("evaluation_max_active_jobs", 5),
+        ("evaluation_shutdown_grace_seconds", -1),
+        ("evaluation_shutdown_grace_seconds", 11),
+    ],
+)
+def test_evaluation_supervisor_bounds_are_validated(
+    tmp_path: object,
+    field: str,
+    value: int,
+) -> None:
+    with pytest.raises(ValidationError):
+        Settings(data_root=tmp_path, _env_file=None, **{field: value})
 
 
 def test_server_and_application_shutdown_budgets_must_fit_container_grace(

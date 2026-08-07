@@ -68,6 +68,12 @@ class Settings(BaseSettings):
     lexical_weight: float = Field(default=1.0, gt=0, le=10)
     allow_single_retriever_degradation: bool = False
     retrieval_cache_enabled: bool = False
+    retrieval_cache_max_entries: int = Field(default=256, ge=1, le=10_000)
+    retrieval_cache_ttl_seconds: float = Field(default=300.0, gt=0, le=86_400)
+
+    evaluation_dataset_root: Path = Path("evaluations/datasets")
+    evaluation_max_active_jobs: int = Field(default=1, ge=1, le=4)
+    evaluation_shutdown_grace_seconds: float = Field(default=2.0, ge=0, le=10)
 
     upload_max_bytes: int = Field(default=25 * 1024 * 1024, ge=1)
     chunk_target_tokens: int = Field(default=500, ge=64, le=4096)

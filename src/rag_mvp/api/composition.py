@@ -5,15 +5,25 @@ from __future__ import annotations
 import asyncio
 import hashlib
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from openai import AsyncOpenAI
 
 from rag_mvp.api.qa import QARuntimeServices
 from rag_mvp.config.settings import Settings
+from rag_mvp.evaluation.application import (
+    EvaluationApplicationService,
+    VerifiedEvaluationArtifactStore,
+)
+from rag_mvp.evaluation.artifacts_v2 import ArtifactCatalogV2
+from rag_mvp.evaluation.plan import EvaluationDatasetRegistry
 from rag_mvp.evaluation.pricing import (
     OPENAI_STANDARD_PRICING_VERSION,
     openai_standard_pricing_catalog,
+)
+from rag_mvp.evaluation.production import (
+    ProductionEvaluationJobExecutor,
+    VerifiedLegacyReportStore,
 )
 from rag_mvp.ingestion.chunking import ChunkingConfig
 from rag_mvp.ingestion.extractors import OcrAdapter
@@ -52,6 +62,7 @@ from rag_mvp.qa.refusal import RefusalPolicy
 from rag_mvp.qa.sessions import ConversationService
 from rag_mvp.qa.streaming import CompleteResponseEmitter
 from rag_mvp.retrieval.binding import BoundRetrievalSnapshotFactory
+from rag_mvp.retrieval.cache import RetrievalResultCache
 from rag_mvp.retrieval.identity import provider_embedding_identity
 from rag_mvp.retrieval.request import RetrievalRequestError
 from rag_mvp.safety.injection import InjectionPolicy
@@ -69,6 +80,8 @@ class ExecutableComposition:
     ingestion: IngestionService
     qa: QARuntimeServices
     diagnostics: SafeRequestDiagnosticStore
+    retrieval_cache: RetrievalResultCache | None = None
+    evaluation: EvaluationApplicationService | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,7 +107,22 @@ class _DisabledOcrAdapter:
         raise RuntimeError("ocr_disabled")
 
 
-def compose_openai_services(settings: Settings, redactor: Redactor) -> ExecutableComposition:
+def _compose_retrieval_cache(settings: Settings) -> RetrievalResultCache | None:
+    if not settings.retrieval_cache_enabled:
+        return None
+    return RetrievalResultCache(
+        configuration_id=settings.configuration_identity,
+        maximum_entries=settings.retrieval_cache_max_entries,
+        ttl_seconds=settings.retrieval_cache_ttl_seconds,
+    )
+
+
+def compose_openai_services(
+    settings: Settings,
+    redactor: Redactor,
+    *,
+    include_evaluation: bool = True,
+) -> ExecutableComposition:
     """Build the shared persistent object graph for a configured executable."""
 
     if settings.provider_backend != "openai" or settings.provider_readiness_errors():
@@ -129,7 +157,7 @@ def compose_openai_services(settings: Settings, redactor: Redactor) -> Executabl
     )
     worker_pools = RagWorkerPools()
     try:
-        return _compose_with_client(
+        composition = _compose_with_client(
             settings,
             redactor,
             layout,
@@ -139,6 +167,41 @@ def compose_openai_services(settings: Settings, redactor: Redactor) -> Executabl
             client,
             worker_pools,
         )
+        if not include_evaluation:
+            return composition
+        run_root = layout.ensure_within_root(layout.directory("evaluations") / "runs")
+        published_root = layout.ensure_within_root(layout.directory("evaluations") / "published")
+        artifact_catalog = ArtifactCatalogV2(published_root)
+        evaluation_settings = settings.model_copy(
+            update={
+                "pricing_version": OPENAI_STANDARD_PRICING_VERSION,
+                "workbench_enabled": False,
+                "retrieval_cache_enabled": False,
+            }
+        )
+        evaluation_executor = ProductionEvaluationJobExecutor(
+            settings=evaluation_settings,
+            repository=runtime_repositories.evaluation_runs,
+            report_repository=runtime_repositories.report_manifests,
+            run_artifacts_root=run_root,
+            redactor=redactor,
+        )
+        evaluation = EvaluationApplicationService(
+            registry=EvaluationDatasetRegistry(settings.evaluation_dataset_root),
+            settings=evaluation_settings,
+            repository=runtime_repositories.evaluation_runs,
+            run_artifacts_root=run_root,
+            executor=evaluation_executor,
+            maximum_active_jobs=settings.evaluation_max_active_jobs,
+            shutdown_grace_seconds=settings.evaluation_shutdown_grace_seconds,
+            artifact_store=VerifiedEvaluationArtifactStore(artifact_catalog),
+            legacy_report_store=VerifiedLegacyReportStore(
+                runtime_repositories.report_manifests,
+                run_root,
+            ),
+            plan_settings_factory=evaluation_executor.isolated_settings,
+        )
+        return replace(composition, evaluation=evaluation)
     except Exception:
         _close_failed_client(client)
         _close_failed_worker_pools(worker_pools)
@@ -252,6 +315,7 @@ def _compose_qa(
 ) -> ExecutableComposition:
     conversations = ConversationService(runtime_repositories.sessions)
     snapshots = BoundRetrievalSnapshotFactory(layout, ingestion.repositories.index_revisions)
+    retrieval_cache = _compose_retrieval_cache(settings)
     injection_policy = InjectionPolicy()
     orchestrator = QAOrchestrator(
         conversations=conversations,
@@ -261,6 +325,7 @@ def _compose_qa(
             reranker=router if reranking_routes else None,
             settings=settings,
             worker_pools=worker_pools,
+            cache=retrieval_cache,
         ),
         generation=router,
         fact_assessor=SemanticFactEvidenceAssessor(
@@ -325,7 +390,12 @@ def _compose_qa(
         readiness_probe=readiness_probe,
         close_callback=close_runtime_resources,
     )
-    return ExecutableComposition(ingestion=ingestion, qa=qa, diagnostics=diagnostics)
+    return ExecutableComposition(
+        ingestion=ingestion,
+        qa=qa,
+        diagnostics=diagnostics,
+        retrieval_cache=retrieval_cache,
+    )
 
 
 def _close_failed_client(client: AsyncOpenAI) -> None:

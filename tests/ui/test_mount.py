@@ -59,12 +59,25 @@ def test_workbench_exposes_four_primary_tabs_and_bilingual_controls(tmp_path: Pa
         if dependency.get("api_name")
     }
 
-    assert tabs == ["Chat", "Documents", "Evaluation", "Diagnostics"]
+    assert tabs == [
+        "Chat",
+        "Documents",
+        "Evaluation",
+        "Run / 运行",
+        "Overview / 结果总览",
+        "Operations / 运维",
+        "Artifacts / 报告下载",
+        "Diagnostics",
+    ]
+    assert sum(component["type"] == "chatbot" for component in components) == 1
     assert labels >= {
         "Question / 问题",
         "Retrieval mode / 检索模式",
         "Active documents / 活跃文档",
-        "Evaluation runs / 评估运行",
+        "Run history / 运行历史",
+        "Canonical operations measures / 规范运维指标",
+        "TXT/CSV download status / TXT/CSV 下载状态",
+        "Same-origin API downloads / 同源 API 下载",
         "Request trace / 请求跟踪",
     }
     assert button_values >= {
@@ -72,7 +85,7 @@ def test_workbench_exposes_four_primary_tabs_and_bilingual_controls(tmp_path: Pa
         "Reset / 重置",
         "Cancel / 取消",
         "Upload and index / 上传并索引",
-        "Run evaluation / 运行评估",
+        "Start evaluation / 启动评估",
         "Refresh health / 刷新健康状态",
     }
     assert api_names >= {

@@ -328,7 +328,7 @@ class ProductionQAExecutor:
 class EvaluationRunner:
     repository: EvaluationRunRepository
     artifacts_root: Path
-    executor: EvaluationCaseExecutor
+    executor: EvaluationCaseExecutor | None
     clock: Callable[[], datetime] = field(default=utc_now, repr=False)
 
     def queue(self, plan: EvaluationRunPlan) -> EvaluationRun:
@@ -339,6 +339,7 @@ class EvaluationRunner:
         run_directory = self._create_run_directory(plan.run_id)
         try:
             self._write_exclusive(run_directory / "manifest.json", manifest)
+            self._write_exclusive(run_directory / "plan.json", plan)
             (run_directory / "cases").mkdir(mode=0o700)
             run = EvaluationRun(
                 run_id=plan.run_id,
@@ -369,6 +370,8 @@ class EvaluationRunner:
             raise EvaluationRunnerError("evaluation_run_not_queued")
         if current.status is not EvaluationRunStatus.QUEUED:
             raise EvaluationRunnerError("evaluation_run_not_queued")
+        if self.executor is None:
+            raise EvaluationRunnerError("evaluation_executor_unavailable")
         current = self._updated(current, status=EvaluationRunStatus.RUNNING)
         self.repository.update(current)
         for case in plan.cases:
@@ -411,6 +414,11 @@ class EvaluationRunner:
     def load_manifest(self, run_id: str) -> EvaluationRunManifest:
         return EvaluationRunManifest.model_validate_json(
             self._manifest_path(run_id).read_text(encoding="utf-8")
+        )
+
+    def load_plan(self, run_id: str) -> EvaluationRunPlan:
+        return EvaluationRunPlan.model_validate_json(
+            (self._run_path(run_id) / "plan.json").read_text(encoding="utf-8")
         )
 
     def load_case_results(self, run_id: str) -> tuple[PersistedCaseResult, ...]:

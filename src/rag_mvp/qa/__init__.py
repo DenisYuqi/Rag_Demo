@@ -58,6 +58,7 @@ from rag_mvp.qa.query_rewrite import (
 )
 from rag_mvp.qa.refusal import (
     DEFAULT_MINIMUM_SUPPORT_SCORE,
+    LEGACY_REFUSAL_POLICY_VERSION,
     REFUSAL_POLICY_VERSION,
     EvidenceDecision,
     EvidenceDecisionCode,
@@ -65,6 +66,16 @@ from rag_mvp.qa.refusal import (
     FactEvidence,
     RefusalPolicy,
     RefusalPolicyError,
+)
+from rag_mvp.qa.refusal_guidance import (
+    DEFAULT_REFUSAL_GUIDANCE_CATALOG,
+    MAX_REFUSAL_GUIDANCE_MESSAGE_CHARACTERS,
+    REFUSAL_GUIDANCE_CATALOG_VERSION,
+    RefusalGuidanceCatalog,
+    RefusalGuidanceLanguage,
+    RefusalGuidanceReason,
+    RefusalGuidanceTemplate,
+    canonical_guidance_reason,
 )
 from rag_mvp.qa.sessions import ConversationService
 from rag_mvp.qa.streaming import CompleteResponseEmitter, ResponseReleaseError
@@ -74,15 +85,19 @@ __all__ = [
     "CONTEXT_SELECTION_VERSION",
     "CONTEXT_TOKENIZER_VERSION",
     "DEFAULT_MINIMUM_SUPPORT_SCORE",
+    "DEFAULT_REFUSAL_GUIDANCE_CATALOG",
     "ENGLISH_RESPONSE_LANGUAGE",
     "FACT_EVIDENCE_ASSESSOR_VERSION",
     "GENERATOR_OUTPUT_SCHEMA_VERSION",
     "GENERATOR_PROMPT_VERSION",
     "GROUNDING_VALIDATOR_VERSION",
+    "LEGACY_REFUSAL_POLICY_VERSION",
     "MAX_CITATIONS_PER_CLAIM",
     "MAX_GENERATED_CLAIMS",
+    "MAX_REFUSAL_GUIDANCE_MESSAGE_CHARACTERS",
     "MAX_STRUCTURED_ANSWER_CHARACTERS",
     "QUERY_REWRITE_VERSION",
+    "REFUSAL_GUIDANCE_CATALOG_VERSION",
     "REFUSAL_POLICY_VERSION",
     "UNTRUSTED_CONTEXT_LABEL",
     "CompleteResponseEmitter",
@@ -113,6 +128,10 @@ __all__ = [
     "QueryRewriteError",
     "QueryRewriteResult",
     "QueryRewriter",
+    "RefusalGuidanceCatalog",
+    "RefusalGuidanceLanguage",
+    "RefusalGuidanceReason",
+    "RefusalGuidanceTemplate",
     "RefusalPolicy",
     "RefusalPolicyError",
     "ResponseReleaseError",
@@ -122,6 +141,7 @@ __all__ = [
     "StructuredAnswerError",
     "StructuredAnswerParser",
     "ValidatedGroundedAnswer",
+    "canonical_guidance_reason",
     "is_contextual_follow_up",
     "select_response_language",
 ]

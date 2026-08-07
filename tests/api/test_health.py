@@ -106,6 +106,7 @@ def test_configured_executable_composes_services_and_waits_for_an_index(tmp_path
     with TestClient(app, raise_server_exceptions=False) as client:
         readiness = client.get("/readyz")
         documents = client.get("/api/v1/documents")
+        evaluation_catalog = client.get("/api/v1/evaluation-datasets")
         qa = client.post(
             "/api/v1/qa",
             json={"owner_id": "owner-1", "question": "Question"},
@@ -113,6 +114,9 @@ def test_configured_executable_composes_services_and_waits_for_an_index(tmp_path
 
     assert app.state.runtime.ingestion_service is not None
     assert app.state.runtime.qa_services is not None
+    assert app.state.runtime.evaluation_service is not None
+    assert app.state.runtime.workbench_services is not None
+    assert app.state.runtime.workbench_services.evaluations is app.state.runtime.evaluation_service
     assert readiness.status_code == 503
     assert {
         "name": "qa",
@@ -121,6 +125,8 @@ def test_configured_executable_composes_services_and_waits_for_an_index(tmp_path
     } in readiness.json()["components"]
     assert documents.status_code == 200
     assert documents.json() == {"active_index_revision": None, "documents": []}
+    assert evaluation_catalog.status_code == 200
+    assert evaluation_catalog.json()["datasets"]
     assert qa.status_code == 503
     assert qa.json() == {"error": {"code": "qa_unavailable"}}
 

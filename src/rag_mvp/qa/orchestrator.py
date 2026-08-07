@@ -74,14 +74,19 @@ from rag_mvp.qa.prompt import GeneratorPromptBuilder, PromptBuildError
 from rag_mvp.qa.query_rewrite import QueryRewriteError, QueryRewriter, select_response_language
 from rag_mvp.qa.refusal import (
     EvidenceDecision,
-    EvidenceDecisionCode,
     EvidenceDecisionKind,
     FactEvidence,
     RefusalPolicy,
     RefusalPolicyError,
 )
+from rag_mvp.qa.refusal_guidance import (
+    DEFAULT_REFUSAL_GUIDANCE_CATALOG,
+    RefusalGuidanceCatalog,
+    RefusalGuidanceReason,
+)
 from rag_mvp.qa.sessions import ConversationService
 from rag_mvp.retrieval.binding import BoundRetrievalSnapshotFactory
+from rag_mvp.retrieval.cache import RetrievalCacheMetrics, RetrievalResultCache
 from rag_mvp.retrieval.request import (
     RetrievalRequestContext,
     RetrievalRequestError,
@@ -94,22 +99,6 @@ from rag_mvp.storage.repositories import RepositoryError
 _OPAQUE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,254}$")
 _ORCHESTRATION_PROOF = object()
 
-_REFUSAL_MESSAGES = {
-    "en": {
-        RefusalReason.INSUFFICIENT_EVIDENCE: (
-            "The available evidence does not support an answer to this request."
-        ),
-        RefusalReason.CONFLICTING_EVIDENCE: (
-            "The available evidence conflicts, so no unsupported conclusion was selected."
-        ),
-        RefusalReason.UNSAFE_REQUEST: "This request cannot be completed safely.",
-    },
-    "zh-CN": {
-        RefusalReason.INSUFFICIENT_EVIDENCE: "现有证据不足以支持对此请求的回答.",
-        RefusalReason.CONFLICTING_EVIDENCE: "现有证据存在冲突, 因此未选择缺乏支持的结论.",
-        RefusalReason.UNSAFE_REQUEST: "无法安全地完成此请求.",
-    },
-}
 _ERROR_MESSAGES = {
     "en": {
         QAErrorCode.INDEX_NOT_READY: "The knowledge index is not ready.",
@@ -243,14 +232,24 @@ class SnapshotRetrievalGateway:
         reranker: RerankingProvider | ModelProviderRouter | None = None,
         settings: Settings | None = None,
         worker_pools: RagWorkerPools | None = None,
+        cache: RetrievalResultCache | None = None,
     ) -> None:
         if worker_pools is not None and not isinstance(worker_pools, RagWorkerPools):
             raise TypeError("worker_pools must be RagWorkerPools")
+        if cache is not None and not isinstance(cache, RetrievalResultCache):
+            raise TypeError("cache must be a RetrievalResultCache")
+        if settings is not None and settings.retrieval_cache_enabled != (cache is not None):
+            raise ValueError("retrieval_cache_configuration_mismatch")
         self._snapshots = snapshots
         self._embedding = embedding
         self._reranker = reranker
         self._settings = settings
         self._worker_pools = worker_pools
+        self._cache = cache
+
+    @property
+    def cache_metrics(self) -> RetrievalCacheMetrics | None:
+        return self._cache.metrics if self._cache is not None else None
 
     async def retrieve(
         self,
@@ -278,6 +277,7 @@ class SnapshotRetrievalGateway:
                 reranker=self._reranker,
                 settings=self._settings,
                 worker_pools=self._worker_pools,
+                cache=self._cache,
             )
             try:
                 return await service.retrieve(request)
@@ -301,6 +301,7 @@ class QAOrchestrator:
         answer_parser: StructuredAnswerParser | None = None,
         grounding_validator: GroundingValidator | None = None,
         refusal_policy: RefusalPolicy | None = None,
+        refusal_guidance_catalog: RefusalGuidanceCatalog | None = None,
         injection_policy: InjectionPolicy | None = None,
         budgets: QAStageBudgets | None = None,
         deadline_runner: DeadlineRunner | None = None,
@@ -313,6 +314,11 @@ class QAOrchestrator:
             raise ValueError("maximum_provider_attempts must be a positive integer")
         if not callable(clock):
             raise TypeError("clock must be callable")
+        if refusal_guidance_catalog is not None and not isinstance(
+            refusal_guidance_catalog,
+            RefusalGuidanceCatalog,
+        ):
+            raise TypeError("refusal_guidance_catalog must be a RefusalGuidanceCatalog")
         self._conversations = conversations
         self._retrieval = retrieval
         self._generation = generation
@@ -323,6 +329,7 @@ class QAOrchestrator:
         self._answer_parser = answer_parser or StructuredAnswerParser()
         self._grounding_validator = grounding_validator or GroundingValidator()
         self._refusal_policy = refusal_policy or RefusalPolicy()
+        self._refusal_guidance = refusal_guidance_catalog or DEFAULT_REFUSAL_GUIDANCE_CATALOG
         self._injection_policy = injection_policy or InjectionPolicy()
         self._budgets = budgets or QAStageBudgets()
         self._deadline_runner = deadline_runner or DeadlineRunner()
@@ -434,13 +441,11 @@ class QAOrchestrator:
                                 request_id,
                                 session_id,
                                 language,
-                                RefusalReason.UNSAFE_REQUEST,
+                                RefusalReason.PROMPT_INJECTION,
                                 (),
                                 timings,
                                 started,
-                                metadata={
-                                    "input_policy": injection.reason_code or "unsafe_request"
-                                },
+                                guidance_reason=RefusalGuidanceReason.PROMPT_INJECTION,
                             )
                         )
                     try:
@@ -516,14 +521,13 @@ class QAOrchestrator:
                         request_id,
                         session_id,
                         language,
-                        RefusalReason.INSUFFICIENT_EVIDENCE,
+                        RefusalReason.OUT_OF_SCOPE,
                         (),
                         timings,
                         started,
                         retrieval=retrieval_result,
-                        metadata={
-                            "decision_code": EvidenceDecisionCode.INSUFFICIENT_EVIDENCE.value
-                        },
+                        guidance_reason=RefusalGuidanceReason.OUT_OF_SCOPE,
+                        metadata={"decision_code": RefusalReason.OUT_OF_SCOPE.value},
                     )
                 )
 
@@ -574,7 +578,7 @@ class QAOrchestrator:
                 raise _PipelineFailure(QAErrorCode.INTERNAL) from None
 
             if decision.requires_refusal:
-                reason = decision.reason or RefusalReason.INSUFFICIENT_EVIDENCE
+                reason = decision.reason or RefusalReason.LOW_CONFIDENCE
                 citations = self._resolve_citations(
                     decision.citation_chunk_ids,
                     retrieval_result.evidence,
@@ -1000,13 +1004,24 @@ class QAOrchestrator:
         fact_assessment: FactAssessmentResult | None = None,
         decision: EvidenceDecision | None = None,
         extra_degradation: Sequence[str] = (),
+        guidance_reason: RefusalGuidanceReason | None = None,
         metadata: dict[str, str | int | float | bool | None] | None = None,
     ) -> QARefusal:
+        guidance = self._refusal_guidance.select(guidance_reason or reason, language)
+        guidance_metadata: dict[str, str | int | float | bool | None] = {
+            **(metadata or {}),
+            "refusal_reason_code": reason.value,
+            "refusal_guidance_reason_code": guidance.reason_code.value,
+            "refusal_guidance_template_id": guidance.template_id,
+            "refusal_guidance_catalog_version": guidance.catalog_version,
+            "refusal_guidance_present": True,
+            "refusal_guidance_language": guidance.response_language.value,
+        }
         return QARefusal(
             request_id=request_id,
             session_id=session_id,
             response_language=language,
-            message=_REFUSAL_MESSAGES[language][reason],
+            message=guidance.message,
             reason=reason,
             citations=tuple(citations),
             diagnostics=self._diagnostics(
@@ -1017,7 +1032,7 @@ class QAOrchestrator:
                 fact_assessment=fact_assessment,
                 decision=decision,
                 extra_degradation=extra_degradation,
-                extra_metadata=metadata,
+                extra_metadata=guidance_metadata,
             ),
         )
 

@@ -101,7 +101,12 @@ _METADATA_KEYS: Final[frozenset[str]] = frozenset(
         "generation_fallback",
         "decision_code",
         "refusal_policy_version",
-        "input_policy",
+        "refusal_reason_code",
+        "refusal_guidance_reason_code",
+        "refusal_guidance_template_id",
+        "refusal_guidance_catalog_version",
+        "refusal_guidance_present",
+        "refusal_guidance_language",
     }
 )
 

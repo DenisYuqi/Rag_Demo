@@ -30,9 +30,15 @@ class SessionStatus(StrEnum):
 
 
 class RefusalReason(StrEnum):
+    """Stable refusal taxonomy; legacy codes remain valid for v1 consumers."""
+
     INSUFFICIENT_EVIDENCE = "insufficient-evidence"
     CONFLICTING_EVIDENCE = "conflicting-evidence"
     UNSAFE_REQUEST = "unsafe-request"
+    LOW_CONFIDENCE = "low-confidence"
+    OUT_OF_SCOPE = "out-of-scope"
+    PROMPT_INJECTION = "prompt-injection"
+    SAFETY = "safety"
 
 
 class QAErrorCode(StrEnum):

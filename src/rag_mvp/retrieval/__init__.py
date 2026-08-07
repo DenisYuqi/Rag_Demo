@@ -6,7 +6,10 @@ from rag_mvp.retrieval.bm25 import LexicalIndexError, PersistentBm25Index
 from rag_mvp.retrieval.cache import (
     RETRIEVAL_CACHE_IDENTITY_VERSION,
     BoundedTtlCache,
+    RetrievalCacheCounterSnapshot,
     RetrievalCacheIdentity,
+    RetrievalCacheMetrics,
+    RetrievalResultCache,
 )
 from rag_mvp.retrieval.collection import (
     BoundBm25Retriever,
@@ -93,10 +96,13 @@ __all__ = [
     "RerankStage",
     "RerankStageResult",
     "RerankTruncationPolicy",
+    "RetrievalCacheCounterSnapshot",
     "RetrievalCacheIdentity",
+    "RetrievalCacheMetrics",
     "RetrievalLimits",
     "RetrievalRequestContext",
     "RetrievalRequestError",
+    "RetrievalResultCache",
     "RetrievalService",
     "RetrievalUnavailableError",
     "RevisionBoundRetriever",

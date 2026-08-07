@@ -100,6 +100,11 @@ class EvaluationDatasetRegistry:
             raise EvaluationPlanError("evaluation_dataset_ambiguous")
         return matches[0]
 
+    def list(self) -> tuple[EvaluationDataset, ...]:
+        """Return the validated, immutable catalog without selecting or upgrading a version."""
+
+        return self._scan()
+
     def _scan(self) -> tuple[EvaluationDataset, ...]:
         if self.root.is_symlink():
             raise EvaluationPlanError("evaluation_dataset_registry_unsafe")

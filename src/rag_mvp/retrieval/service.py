@@ -26,7 +26,10 @@ from rag_mvp.domain.evaluation import (
 )
 from rag_mvp.domain.ingestion import DocumentKind
 from rag_mvp.domain.retrieval import (
+    RETRIEVAL_EVIDENCE_SCHEMA_VERSION,
+    RETRIEVAL_RESULT_SCHEMA_VERSION,
     CacheOutcome,
+    CachePolicy,
     RankingEvidence,
     RetrievalCandidate,
     RetrievalDiagnostics,
@@ -37,6 +40,7 @@ from rag_mvp.performance.worker_pools import RagWorkerPools
 from rag_mvp.providers.models import (
     AttemptStatus,
     ModelAttempt,
+    ModelIdentity,
     ProviderCallContext,
     ProviderErrorCategory,
     TokenUsage,
@@ -44,6 +48,13 @@ from rag_mvp.providers.models import (
 from rag_mvp.providers.protocols import EmbeddingProvider, RerankingProvider
 from rag_mvp.providers.routing import ModelProviderRouter
 from rag_mvp.retrieval.binding import BoundRetrievalSnapshot
+from rag_mvp.retrieval.cache import (
+    RetrievalCacheIdentity,
+    RetrievalCachePayload,
+    RetrievalCacheReadStatus,
+    RetrievalCacheWriteStatus,
+    RetrievalResultCache,
+)
 from rag_mvp.retrieval.collection import (
     BoundBm25Retriever,
     HybridCollectionError,
@@ -58,16 +69,18 @@ from rag_mvp.retrieval.fusion import (
     weighted_rrf,
 )
 from rag_mvp.retrieval.query_dense import BoundDenseRetriever
-from rag_mvp.retrieval.request import RetrievalRequestContext
+from rag_mvp.retrieval.request import QUERY_CANONICALIZATION_VERSION, RetrievalRequestContext
 from rag_mvp.retrieval.rerank import (
     RerankIntegrityError,
     RerankStage,
     RerankStageResult,
     validate_rerank_stage_result,
 )
+from rag_mvp.retrieval.snapshot import CHUNK_SET_DIGEST_ALGORITHM
 
 RRF_TIE_POLICY_VERSION = "rrf-score-best-rank-chunk-id-v1"
 DEGRADATION_POLICY_VERSION = "single-normalized-retriever-v1"
+RETRIEVAL_CACHE_SAFETY_VERSION = "authenticated-snapshot-validated-payload-v2"
 
 
 class CandidateRetriever(Protocol):
@@ -196,6 +209,8 @@ class RetrievalService:
         self._provider_context: ProviderCallContext | None = None
         self._rerank_stage: RerankStage | None = None
         self._evidence_assembler: EvidenceAssembler | None = None
+        self._cache: RetrievalResultCache | None = None
+        self._configured_reranker_identity: ModelIdentity | None = None
         self._owns_snapshot = False
         self._closed = False
 
@@ -215,6 +230,7 @@ class RetrievalService:
         allow_single_retriever_degradation: bool | None = None,
         owns_snapshot: bool = False,
         worker_pools: RagWorkerPools | None = None,
+        cache: RetrievalResultCache | None = None,
     ) -> RetrievalService:
         """Compose the production service around one validated immutable snapshot."""
 
@@ -228,8 +244,10 @@ class RetrievalService:
             raise TypeError("settings must be Settings")
         if worker_pools is not None and not isinstance(worker_pools, RagWorkerPools):
             raise TypeError("worker_pools must be RagWorkerPools")
-        if settings is not None and settings.retrieval_cache_enabled:
-            raise ValueError("retrieval_cache_not_implemented")
+        if cache is not None and not isinstance(cache, RetrievalResultCache):
+            raise TypeError("cache must be a RetrievalResultCache")
+        if settings is not None and settings.retrieval_cache_enabled != (cache is not None):
+            raise ValueError("retrieval_cache_configuration_mismatch")
         if settings is not None and reranker is not None and settings.reranking_model is None:
             raise ValueError("reranking_model_not_configured")
         resolved_source_kinds: Mapping[str, DocumentKind | str] = snapshot.source_kinds
@@ -311,6 +329,26 @@ class RetrievalService:
             final_limit=resolved_limits.final,
             rrf=resolved_rrf,
         )
+        if cache is not None:
+            published_at = snapshot.revision.published_at
+            if published_at is None:
+                cache.metrics.record_error()
+                cache = None
+            else:
+                try:
+                    cache.activate_revision(
+                        snapshot.revision_id,
+                        published_at=published_at,
+                    )
+                except (TypeError, ValueError):
+                    cache.metrics.record_error()
+                    cache = None
+        service._cache = cache
+        service._configured_reranker_identity = _configured_reranker_identity(
+            reranker,
+            settings=settings,
+            snapshot=snapshot,
+        )
         service._owns_snapshot = owns_snapshot
         return service
 
@@ -338,6 +376,38 @@ class RetrievalService:
                 raise RetrievalUnavailableError("provider_context_mismatch")
         mode = RetrievalMode(context.mode)
         started = time.monotonic()
+        cache_key: str | None = None
+        cache_outcome = CacheOutcome.NOT_APPLICABLE
+        if self._cache is not None:
+            if context.cache_policy is CachePolicy.BYPASS:
+                self._cache.record_bypass()
+                cache_outcome = CacheOutcome.BYPASS
+            else:
+                try:
+                    cache_key = self._cache_identity(context).key
+                    cached = self._cache.lookup(
+                        cache_key,
+                        revision_id=context.revision_id,
+                        requested_mode=mode,
+                        validator=self._validate_cached_payload,
+                    )
+                except Exception:
+                    self._cache.record_lookup_error()
+                    cache_outcome = CacheOutcome.ERROR
+                else:
+                    if cached.status is RetrievalCacheReadStatus.HIT:
+                        if cached.payload is None:
+                            raise AssertionError("cache hit is missing its validated payload")
+                        return _render_cached_result(
+                            context,
+                            cached.payload,
+                            elapsed_ms=max(0.0, (time.monotonic() - started) * 1_000),
+                        )
+                    cache_outcome = (
+                        CacheOutcome.ERROR
+                        if cached.status is RetrievalCacheReadStatus.ERROR
+                        else CacheOutcome.MISS
+                    )
         try:
             stages = (
                 await self._retrieve_bound(context)
@@ -465,7 +535,7 @@ class RetrievalService:
             index_revision=context.revision_id,
             candidate_counts=counts,
             stage_timings_ms=timings,
-            cache_status=_absent_cache_status(),
+            cache_status=_cache_status(cache_outcome),
             provider_identities=identities,
             provider_usage=usage,
             provider_attempt_counts=attempt_counts,
@@ -475,7 +545,141 @@ class RetrievalService:
             degradation_reasons=stages.degradation_reasons,
             failed_stages=stages.failed_stages,
         )
-        return RetrievalResult(evidence=evidence, diagnostics=diagnostics)
+        result = RetrievalResult(evidence=evidence, diagnostics=diagnostics)
+        if (
+            self._cache is not None
+            and cache_key is not None
+            and context.cache_policy is CachePolicy.USE
+            and not stages.degradation_reasons
+            and not stages.failed_stages
+        ):
+            try:
+                payload = RetrievalCachePayload.from_result(result)
+                write_status = self._cache.store(cache_key, payload)
+            except (TypeError, ValueError):
+                write_status = RetrievalCacheWriteStatus.ERROR
+                self._cache.metrics.record_error()
+            if write_status is RetrievalCacheWriteStatus.ERROR:
+                result = result.model_copy(
+                    update={
+                        "diagnostics": result.diagnostics.model_copy(
+                            update={"cache_status": _cache_status(CacheOutcome.ERROR)}
+                        )
+                    }
+                )
+        return result
+
+    def _validate_cached_payload(self, payload: RetrievalCachePayload) -> None:
+        if self._snapshot is None or self._evidence_assembler is None:
+            raise ValueError("cached retrieval requires a bound snapshot")
+        if payload.effective_mode is not payload.requested_mode:
+            raise ValueError("cached retrieval effective mode is invalid")
+        expected_count_keys = {"dense", "bm25", "fused", "reranked", "final"}
+        if set(payload.candidate_counts) != expected_count_keys:
+            raise ValueError("cached retrieval candidate counts are invalid")
+        counts = payload.candidate_counts
+        if (
+            counts["dense"] > self._limits.dense
+            or counts["bm25"] > self._limits.lexical
+            or counts["fused"] > counts["dense"] + counts["bm25"]
+            or counts["reranked"] > self._limits.rerank
+            or counts["final"] > self._limits.final
+            or counts["final"] != len(payload.evidence)
+        ):
+            raise ValueError("cached retrieval candidate counts exceed bounds")
+        if payload.requested_mode is RetrievalMode.DENSE:
+            if any(counts[name] for name in ("bm25", "fused", "reranked")):
+                raise ValueError("cached dense retrieval contains other stages")
+            if counts["final"] > counts["dense"]:
+                raise ValueError("cached dense final count is invalid")
+        else:
+            if counts["final"] > counts["fused"]:
+                raise ValueError("cached hybrid final count is invalid")
+            if payload.requested_mode is RetrievalMode.HYBRID and counts["reranked"]:
+                raise ValueError("cached hybrid retrieval contains reranking")
+        expected_identities = self._provider_identities(payload.requested_mode, None)
+        if any(
+            payload.provider_identities.get(name) != identity
+            for name, identity in expected_identities.items()
+        ):
+            raise ValueError("cached retrieval provider identities are invalid")
+        allowed_identity_keys = set(expected_identities)
+        if payload.requested_mode is RetrievalMode.HYBRID_RERANK:
+            allowed_identity_keys.add("reranker")
+        if not set(payload.provider_identities).issubset(allowed_identity_keys):
+            raise ValueError("cached retrieval provider identities are invalid")
+        self._evidence_assembler.validate_cached_evidence(payload.evidence)
+
+    def _cache_identity(self, context: RetrievalRequestContext) -> RetrievalCacheIdentity:
+        if self._snapshot is None or self._cache is None:
+            raise ValueError("retrieval cache requires a bound snapshot")
+        revision = self._snapshot.revision
+        mode = RetrievalMode(context.mode)
+        rerank_stage = self._rerank_stage if mode is RetrievalMode.HYBRID_RERANK else None
+        reranker = self._configured_reranker_identity if rerank_stage is not None else None
+        if rerank_stage is not None and reranker is None:
+            raise ValueError("reranker cache identity is unavailable")
+        truncation = rerank_stage.truncation if rerank_stage is not None else None
+        return RetrievalCacheIdentity(
+            canonical_query=context.query,
+            canonicalization_version=QUERY_CANONICALIZATION_VERSION,
+            configuration_id=self._cache.configuration_id,
+            revision_id=revision.revision_id,
+            chunk_set_digest=revision.chunk_set_digest,
+            chunk_set_digest_algorithm=CHUNK_SET_DIGEST_ALGORITHM,
+            record_digest_algorithm=revision.record_digest_algorithm,
+            extraction_version=revision.extraction_version,
+            chunking_version=revision.chunking_version,
+            mode=mode,
+            embedding_identity=revision.embedding_space,
+            dense_schema_version=revision.dense_schema_version,
+            dense_metric=revision.dense_metric,
+            bm25_tokenizer_identity=revision.tokenizer_version,
+            bm25_schema_version=revision.lexical_schema_version,
+            bm25_algorithm_version=revision.lexical_algorithm_version,
+            bm25_k1=revision.lexical_k1,
+            bm25_b=revision.lexical_b,
+            rrf_version=self._rrf.version,
+            rrf_k=self._rrf.k,
+            dense_weight=self._rrf.dense_weight,
+            lexical_weight=self._rrf.lexical_weight,
+            rrf_tie_policy=RRF_TIE_POLICY_VERSION,
+            reranker_route_id=None,
+            reranker_provider=reranker.provider if reranker is not None else None,
+            reranker_model=reranker.model if reranker is not None else None,
+            reranker_adapter_version=(reranker.adapter_version if reranker is not None else None),
+            reranker_prompt_version=(
+                rerank_stage.prompt_version if rerank_stage is not None else None
+            ),
+            reranker_truncation_version=(truncation.version if truncation is not None else None),
+            reranker_parser_version=(
+                rerank_stage.PARSER_VERSION if rerank_stage is not None else None
+            ),
+            reranker_maximum_query_characters=(
+                truncation.maximum_query_characters if truncation is not None else None
+            ),
+            reranker_maximum_query_tokens=(
+                truncation.maximum_query_tokens if truncation is not None else None
+            ),
+            reranker_maximum_candidate_characters=(
+                truncation.maximum_candidate_characters if truncation is not None else None
+            ),
+            reranker_maximum_candidate_tokens=(
+                truncation.maximum_candidate_tokens if truncation is not None else None
+            ),
+            reranker_budget_seconds=(
+                rerank_stage.budget_seconds if rerank_stage is not None else None
+            ),
+            allow_single_retriever_degradation=self._allow_degradation,
+            degradation_policy_version=DEGRADATION_POLICY_VERSION,
+            dense_limit=self._limits.dense,
+            lexical_limit=self._limits.lexical,
+            rerank_limit=self._limits.rerank,
+            final_limit=self._limits.final,
+            evidence_schema_version=RETRIEVAL_EVIDENCE_SCHEMA_VERSION,
+            result_schema_version=RETRIEVAL_RESULT_SCHEMA_VERSION,
+            safety_version=RETRIEVAL_CACHE_SAFETY_VERSION,
+        )
 
     async def _retrieve_bound(self, context: RetrievalRequestContext) -> _RetrievalStages:
         mode = RetrievalMode(context.mode)
@@ -1022,10 +1226,70 @@ def _direct_provider_attempt_evidence(
     )
 
 
+def _configured_reranker_identity(
+    reranker: RerankingProvider | ModelProviderRouter | None,
+    *,
+    settings: Settings | None,
+    snapshot: BoundRetrievalSnapshot,
+) -> ModelIdentity | None:
+    if reranker is None:
+        return None
+    identity = getattr(reranker, "identity", None)
+    if isinstance(identity, ModelIdentity):
+        return identity
+    if settings is None or settings.reranking_model is None:
+        return None
+    embedding = snapshot.revision.embedding_space
+    return ModelIdentity(
+        provider=embedding.provider_alias,
+        model=settings.reranking_model,
+        adapter_version=embedding.adapter_version,
+    )
+
+
+def _render_cached_result(
+    context: RetrievalRequestContext,
+    payload: RetrievalCachePayload,
+    *,
+    elapsed_ms: float,
+) -> RetrievalResult:
+    if payload.index_revision != context.revision_id:
+        raise ValueError("cached retrieval revision mismatch")
+    if payload.requested_mode is not RetrievalMode(context.mode):
+        raise ValueError("cached retrieval mode mismatch")
+    timings = {
+        "query_embedding": 0.0,
+        "dense": 0.0,
+        "bm25": 0.0,
+        "fusion": 0.0,
+        "rerank": 0.0,
+        "retrieval": elapsed_ms,
+        "cache_lookup": elapsed_ms,
+        "total": elapsed_ms,
+    }
+    return RetrievalResult(
+        evidence=payload.evidence,
+        diagnostics=RetrievalDiagnostics(
+            request_id=context.request_id,
+            requested_mode=payload.requested_mode,
+            effective_mode=payload.effective_mode,
+            index_revision=payload.index_revision,
+            candidate_counts=dict(payload.candidate_counts),
+            stage_timings_ms=timings,
+            cache_status=_cache_status(CacheOutcome.HIT),
+            provider_identities=dict(payload.provider_identities),
+        ),
+    )
+
+
 def _absent_cache_status() -> dict[str, CacheOutcome]:
+    return _cache_status(CacheOutcome.NOT_APPLICABLE)
+
+
+def _cache_status(retrieval: CacheOutcome) -> dict[str, CacheOutcome]:
     return {
         "query_embedding": CacheOutcome.NOT_APPLICABLE,
-        "retrieval": CacheOutcome.NOT_APPLICABLE,
+        "retrieval": retrieval,
         "rerank": CacheOutcome.NOT_APPLICABLE,
         "final": CacheOutcome.NOT_APPLICABLE,
     }

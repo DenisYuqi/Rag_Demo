@@ -10,26 +10,21 @@ from pathlib import Path
 from typing import Literal, cast
 from uuid import uuid4
 
-from rag_mvp.api.app import RuntimeState, create_app
-from rag_mvp.api.composition import compose_openai_services
 from rag_mvp.config.settings import Settings
-from rag_mvp.domain.evaluation import ReportManifest
-from rag_mvp.evaluation.corpus import EvaluationCorpusInstaller
+from rag_mvp.evaluation.application import (
+    EvaluationApplicationService,
+    EvaluationRunSummary,
+)
 from rag_mvp.evaluation.dataset import load_dataset
-from rag_mvp.evaluation.html_report import write_html_report
-from rag_mvp.evaluation.json_report import (
-    report_content_hash,
-    write_json_report,
+from rag_mvp.evaluation.plan import EvaluationDatasetRegistry
+from rag_mvp.evaluation.pricing import OPENAI_STANDARD_PRICING_VERSION
+from rag_mvp.evaluation.production import (
+    ProductionEvaluationJobExecutor,
+    VerifiedLegacyReportStore,
 )
-from rag_mvp.evaluation.plan import build_evaluation_plan
-from rag_mvp.evaluation.pricing import (
-    OPENAI_STANDARD_PRICING_VERSION,
-    openai_standard_pricing_catalog,
-)
-from rag_mvp.evaluation.report_builder import build_evaluation_report
-from rag_mvp.evaluation.runner import EvaluationRunner, ProductionQAExecutor
-from rag_mvp.evaluation.scoring import score_evaluation
 from rag_mvp.safety.redactor import DEFAULT_REDACTOR
+from rag_mvp.storage.database import Database
+from rag_mvp.storage.layout import DataLayout
 from rag_mvp.storage.repositories import RuntimeRepositories
 
 type EvaluationProfile = Literal["accepted", "controlled-retrieval", "controlled-refusal"]
@@ -93,124 +88,64 @@ async def run_real_evaluation(
     settings = _settings(data_root, profile)
     if settings.provider_backend != "openai" or settings.provider_readiness_errors():
         raise RuntimeError("evaluation_provider_unavailable")
-    run_directory = (output_root / run_id).resolve()
-    run_directory.mkdir(mode=0o700, parents=True, exist_ok=False)
-    composition = compose_openai_services(settings, DEFAULT_REDACTOR)
-    runtime: RuntimeState | None = None
+    layout = DataLayout.from_root(settings.data_root)
+    layout.initialize()
+    database = Database(layout.metadata_db)
+    database.initialize()
+    repositories = RuntimeRepositories.from_database(database)
+    run_root = _resolved_path(output_root)
+    issues = _load_issues(issues_path)
+    executor = ProductionEvaluationJobExecutor(
+        settings=settings,
+        repository=repositories.evaluation_runs,
+        report_repository=repositories.report_manifests,
+        run_artifacts_root=run_root,
+        redactor=DEFAULT_REDACTOR,
+        issues=issues,
+    )
+    service = EvaluationApplicationService(
+        registry=EvaluationDatasetRegistry(dataset.root.parent),
+        settings=settings,
+        repository=repositories.evaluation_runs,
+        run_artifacts_root=run_root,
+        executor=executor,
+        maximum_active_jobs=1,
+        shutdown_grace_seconds=settings.evaluation_shutdown_grace_seconds,
+        legacy_report_store=VerifiedLegacyReportStore(
+            repositories.report_manifests,
+            run_root,
+        ),
+        run_id_factory=lambda: run_id,
+        plan_settings_factory=executor.isolated_settings,
+    )
     try:
-        await EvaluationCorpusInstaller(composition.ingestion).install(dataset)
-        app = create_app(
-            settings,
-            ingestion_service=composition.ingestion,
-            qa_services=composition.qa,
-            diagnostics_service=composition.diagnostics,
-            redactor=DEFAULT_REDACTOR,
+        await service.startup()
+        queued = await service.start(
+            dataset.manifest.dataset_id,
+            dataset.manifest.version,
         )
-        runtime = cast(RuntimeState, app.state.runtime)
-        services = runtime.qa_services
-        if services is None:
-            raise RuntimeError("evaluation_qa_unavailable")
-        database = composition.ingestion.repositories.index_revisions.database
-        repositories = RuntimeRepositories.from_database(database)
-        plan = build_evaluation_plan(dataset, settings, run_id)
-        runner = EvaluationRunner(
-            repositories.evaluation_runs,
-            run_directory / "runs",
-            ProductionQAExecutor(services, DEFAULT_REDACTOR),
-        )
-        runner.queue(plan)
-        completed = await runner.execute(plan)
-        results = runner.load_case_results(run_id)
-        scorecard = score_evaluation(dataset, results, redactor=DEFAULT_REDACTOR)
-        attempts = tuple(
-            attempt
-            for result in results
-            if result.execution is not None
-            for attempt in repositories.provider_usage.list_for_request(result.execution.request_id)
-        )
-        provider = plan.identity.provider_identities["generation"]
-        models = tuple(
-            model
-            for model in (
-                settings.generation_model,
-                settings.embedding_model,
-                settings.reranking_model,
-            )
-            if model is not None
-        )
-        pricing = openai_standard_pricing_catalog(provider=provider, models=models)
-        issues = _load_issues(issues_path)
-        manifest = runner.load_manifest(run_id)
-        report = build_evaluation_report(
-            dataset=dataset,
-            manifest=manifest,
-            results=results,
-            scorecard=scorecard,
-            attempts=attempts,
-            pricing_catalog=pricing,
-            issues=issues,
-            redactor=DEFAULT_REDACTOR,
-        )
-        json_path = write_json_report(report, run_directory / "report.json")
-        html_path = write_html_report(report, run_directory / "report.html")
-        _write_json_exclusive(run_directory / "configuration.json", settings.safe_dump())
-        _write_json_exclusive(
-            run_directory / "diagnostics.json",
-            {
-                "run_id": run_id,
-                "requests": [
-                    {
-                        "case_id": result.case_id,
-                        "request_id": result.execution.request_id,
-                        "trace_id": result.execution.event.diagnostics.trace_id,
-                        "stage_timings_ms": (result.execution.event.diagnostics.stage_timings_ms),
-                        "cache_status": result.execution.event.diagnostics.cache_status,
-                        "model_identities": (result.execution.event.diagnostics.model_identities),
-                        "token_counts": result.execution.event.diagnostics.token_counts,
-                        "safe_error_code": result.safe_error_code,
-                    }
-                    for result in results
-                    if result.execution is not None
-                ],
-            },
-        )
-        _write_json_exclusive(
-            run_directory / "provider-attempts.json",
-            {"run_id": run_id, "attempts": [item.model_dump(mode="json") for item in attempts]},
-        )
-        repositories.report_manifests.save(
-            ReportManifest(
-                run_id=run_id,
-                schema_version=str(report["schema_version"]),
-                json_report_path=str(json_path),
-                html_report_path=str(html_path),
-                content_hash=report_content_hash(report),
-                metadata={
-                    "profile": profile,
-                    "quality_passed": scorecard.quality_gate.passed,
-                    "final_passed": cast(dict[str, object], report["gate"])["final_passed"],
-                },
-            )
-        )
-        summary = {
+        completed = await service.wait(queued.run_id)
+        if completed is None or completed.status.value != "completed":
+            code = None if completed is None else completed.safe_error_code
+            raise RuntimeError(code or "evaluation_execution_failed")
+        summary_model = cast(EvaluationRunSummary, service.summary(run_id))
+        report_path = run_root / run_id / "evaluation-report.json"
+        report = service.report(run_id, "json")
+        if report is None or not report_path.is_file():
+            raise RuntimeError("evaluation_report_unavailable")
+        summary: dict[str, object] = {
             "run_id": run_id,
             "status": completed.status.value,
-            "dataset_hash": dataset.manifest.content_hash,
-            "corpus_hash": dataset.corpus.manifest.content_hash,
-            "configuration_id": settings.configuration_identity,
-            "quality_passed": scorecard.quality_gate.passed,
-            "final_passed": cast(dict[str, object], report["gate"])["final_passed"],
-            "report": str(json_path),
+            "dataset_hash": completed.dataset_hash,
+            "corpus_hash": summary_model.corpus_hash,
+            "configuration_id": completed.configuration_id,
+            "quality_passed": summary_model.gate_status == "passed",
+            "final_passed": summary_model.gate_status == "passed",
+            "report": str(report_path),
         }
-        _write_json_exclusive(run_directory / "summary.json", summary)
-        return json_path, summary
+        return report_path, summary
     finally:
-        if runtime is not None and runtime.owns_qa_admission and runtime.qa_services is not None:
-            admission = runtime.qa_services.admission
-            if admission is not None:
-                await admission.close()
-        composition.ingestion.close()
-        await composition.qa.close()
+        await service.close()
 
 
 def _load_issues(path: Path | None) -> tuple[dict[str, object], ...]:
@@ -220,6 +155,10 @@ def _load_issues(path: Path | None) -> tuple[dict[str, object], ...]:
     if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
         raise ValueError("evaluation_issues_invalid")
     return tuple(cast(dict[str, object], item) for item in value)
+
+
+def _resolved_path(path: Path) -> Path:
+    return path.resolve()
 
 
 def _write_json_exclusive(path: Path, value: object) -> None:

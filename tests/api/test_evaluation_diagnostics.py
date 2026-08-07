@@ -10,6 +10,18 @@ from rag_mvp.api.evaluation_diagnostics import ReportArtifact, ReportFormat
 from rag_mvp.config.settings import Settings
 from rag_mvp.domain.evaluation import EvaluationRun
 from rag_mvp.domain.qa import RequestDiagnostic
+from rag_mvp.evaluation.application import (
+    EvaluationArtifactDescriptor,
+    EvaluationArtifactManifest,
+    EvaluationCapacityError,
+    EvaluationConflictError,
+    EvaluationDatasetCatalogEntry,
+    EvaluationPlanCatalogEntry,
+    EvaluationRunSummary,
+    FailedCaseDiagnostic,
+    FailedMetricContribution,
+    ResolvedEvaluationArtifact,
+)
 
 
 def _run(run_id: str = "run_test") -> EvaluationRun:
@@ -32,8 +44,13 @@ class FakeEvaluationService:
     runs: dict[str, EvaluationRun] = field(default_factory=dict)
     reports: dict[tuple[str, str], ReportArtifact] = field(default_factory=dict)
     starts: list[tuple[str, str]] = field(default_factory=list)
+    start_error: RuntimeError | None = None
+    artifact_manifest_value: EvaluationArtifactManifest | None = None
+    artifacts: dict[str, ResolvedEvaluationArtifact] = field(default_factory=dict)
 
     async def start(self, *, dataset_id: str, dataset_version: str) -> EvaluationRun:
+        if self.start_error is not None:
+            raise self.start_error
         self.starts.append((dataset_id, dataset_version))
         run = _run()
         self.runs[run.run_id] = run
@@ -41,6 +58,76 @@ class FakeEvaluationService:
 
     def get(self, run_id: str) -> EvaluationRun | None:
         return self.runs.get(run_id)
+
+    def list(self) -> tuple[EvaluationRun, ...]:
+        return tuple(self.runs.values())
+
+    def datasets(self) -> tuple[EvaluationDatasetCatalogEntry, ...]:
+        return (
+            EvaluationDatasetCatalogEntry(
+                dataset_id="mvp-v1",
+                dataset_version="1.0.0",
+                schema_version="rag-evaluation-dataset-v1",
+                content_hash="sha256:" + "1" * 64,
+                corpus_version="1.0.0",
+                corpus_hash="sha256:" + "2" * 64,
+                case_count=7,
+                languages=("en", "zh"),
+            ),
+        )
+
+    def plans(self) -> tuple[EvaluationPlanCatalogEntry, ...]:
+        return (
+            EvaluationPlanCatalogEntry(
+                dataset_id="mvp-v1",
+                dataset_version="1.0.0",
+                planned_case_count=7,
+                maximum_logical_calls=7,
+                maximum_provider_calls=70,
+                maximum_active_jobs=1,
+            ),
+        )
+
+    def summary(self, run_id: str) -> EvaluationRunSummary | None:
+        run = self.get(run_id)
+        if run is None:
+            return None
+        return EvaluationRunSummary.from_run(
+            run,
+            corpus_hash="sha256:" + "2" * 64,
+            evidence_status="unavailable",
+            gate_status="unavailable",
+        )
+
+    def failed_cases(self, run_id: str) -> tuple[FailedCaseDiagnostic, ...]:
+        if self.get(run_id) is None:
+            return ()
+        return (
+            FailedCaseDiagnostic(
+                case_id="case-safe",
+                safe_error_code="case_execution_failed",
+                request_id="request-safe",
+                trace_id="trace-safe",
+                outcome="error",
+                citation_chunk_ids=("chunk-safe",),
+                tags=("rerank-sensitive",),
+                metric_contributions=(
+                    FailedMetricContribution(
+                        metric_id="answer-compliance",
+                        status="failed",
+                        value=0.5,
+                        numerator=1,
+                        denominator=2,
+                    ),
+                ),
+            ),
+        )
+
+    def artifact_manifest(self, run_id: str) -> EvaluationArtifactManifest | None:
+        return self.artifact_manifest_value if self.get(run_id) is not None else None
+
+    def artifact(self, run_id: str, artifact_id: str) -> ResolvedEvaluationArtifact | None:
+        return self.artifacts.get(artifact_id) if self.get(run_id) is not None else None
 
     def report(self, run_id: str, report_format: ReportFormat) -> ReportArtifact | None:
         return self.reports.get((run_id, report_format))
@@ -108,8 +195,121 @@ def test_evaluation_routes_fail_safely_when_unavailable_or_missing(tmp_path: obj
     assert missing.json() == {"error": {"code": "evaluation_not_found"}}
 
 
+def test_catalog_list_summary_and_failed_cases_are_typed_no_store_and_path_free(
+    tmp_path: object,
+) -> None:
+    service = FakeEvaluationService(runs={"run_test": _run()})
+    with _client(tmp_path, evaluations=service) as client:
+        datasets = client.get("/api/v1/evaluation-datasets")
+        plans = client.get("/api/v1/evaluation-plans")
+        runs = client.get("/api/v1/evaluations")
+        summary = client.get("/api/v1/evaluations/run_test/summary")
+        failed = client.get("/api/v1/evaluations/run_test/failed-cases")
+
+    for response in (datasets, plans, runs, summary, failed):
+        assert response.status_code == 200
+        assert response.headers["cache-control"] == "no-store"
+        assert response.headers["x-content-type-options"] == "nosniff"
+        assert "relative_path" not in response.text
+        assert str(tmp_path) not in response.text
+    assert plans.json()["plans"][0]["maximum_logical_calls"] == 7
+    assert plans.json()["plans"][0]["cost_estimate_status"] == "unavailable"
+    assert summary.json()["evidence_status"] == "unavailable"
+    assert summary.json()["gate_status"] == "unavailable"
+    assert failed.json()["cases"][0]["tags"] == ["rerank-sensitive"]
+    assert failed.json()["cases"][0]["metric_contributions"][0]["metric_id"] == (
+        "answer-compliance"
+    )
+
+
+def test_start_maps_duplicate_and_capacity_to_stable_errors(tmp_path: object) -> None:
+    duplicate = FakeEvaluationService(start_error=EvaluationConflictError("evaluation_duplicate"))
+    capacity = FakeEvaluationService(start_error=EvaluationCapacityError("evaluation_capacity"))
+    payload = {"dataset_id": "mvp-v1", "dataset_version": "1.0.0"}
+
+    with _client(tmp_path, evaluations=duplicate) as client:
+        duplicate_response = client.post("/api/v1/evaluations", json=payload)
+    with _client(tmp_path, evaluations=capacity) as client:
+        capacity_response = client.post("/api/v1/evaluations", json=payload)
+
+    assert duplicate_response.status_code == 409
+    assert duplicate_response.json() == {"error": {"code": "evaluation_duplicate"}}
+    assert capacity_response.status_code == 429
+    assert capacity_response.json() == {"error": {"code": "evaluation_capacity"}}
+
+
+def test_opaque_artifact_manifest_and_jsonl_download_never_expose_path(
+    tmp_path: object,
+) -> None:
+    now = datetime.now(UTC)
+    descriptor = EvaluationArtifactDescriptor(
+        artifact_id="privacy-safe-log-sample",
+        schema_version="privacy-safe-log-sample-v1",
+        format="jsonl",
+        media_type="application/x-ndjson",
+        sha256_digest="sha256:" + "a" * 64,
+        byte_size=17,
+        created_at=now,
+    )
+    service = FakeEvaluationService(
+        runs={"run_test": _run()},
+        artifact_manifest_value=EvaluationArtifactManifest(
+            run_id="run_test",
+            configuration_id="config_test",
+            manifest_content_hash="sha256:" + "b" * 64,
+            artifacts=(descriptor,),
+        ),
+        artifacts={
+            descriptor.artifact_id: ResolvedEvaluationArtifact(
+                artifact_id=descriptor.artifact_id,
+                content=b'{"event":"safe"}\n',
+                media_type=descriptor.media_type,
+                filename="privacy-safe-sample-v1.jsonl",
+            )
+        },
+    )
+    with _client(tmp_path, evaluations=service) as client:
+        manifest = client.get("/api/v1/evaluations/run_test/artifacts")
+        download = client.get("/api/v1/evaluations/run_test/artifacts/privacy-safe-log-sample")
+
+    assert manifest.status_code == 200
+    assert "relative_path" not in manifest.text
+    assert str(tmp_path) not in manifest.text
+    assert download.status_code == 200
+    assert download.headers["cache-control"] == "no-store"
+    assert download.headers["x-content-type-options"] == "nosniff"
+    assert download.headers["content-type"].startswith("application/x-ndjson")
+    assert download.headers["content-disposition"] == (
+        'attachment; filename="privacy-safe-sample-v1.jsonl"'
+    )
+
+
+def test_artifact_download_rejects_media_type_valid_for_a_different_artifact(
+    tmp_path: object,
+) -> None:
+    artifact_id = "privacy-safe-log-sample"
+    service = FakeEvaluationService(
+        runs={"run_test": _run()},
+        artifacts={
+            artifact_id: ResolvedEvaluationArtifact(
+                artifact_id=artifact_id,
+                content=b"<!doctype html><title>wrong contract</title>",
+                media_type="text/html",
+                filename="privacy-safe-sample-v1.jsonl",
+            )
+        },
+    )
+
+    with _client(tmp_path, evaluations=service) as client:
+        response = client.get("/api/v1/evaluations/run_test/artifacts/privacy-safe-log-sample")
+
+    assert response.status_code == 503
+    assert response.json() == {"error": {"code": "evaluation_artifact_unavailable"}}
+
+
 def test_download_reports_uses_validated_content_contract(tmp_path: object) -> None:
     service = FakeEvaluationService(
+        runs={"run_test": _run()},
         reports={
             ("run_test", "json"): ReportArtifact(
                 b'{"run_id":"run_test"}',
@@ -121,12 +321,13 @@ def test_download_reports_uses_validated_content_contract(tmp_path: object) -> N
                 "text/html",
                 "run_test.html",
             ),
-        }
+        },
     )
     with _client(tmp_path, evaluations=service) as client:
         json_response = client.get("/api/v1/reports/run_test.json")
         html_response = client.get("/api/v1/reports/run_test.html")
         invalid = client.get("/api/v1/reports/run_test.xml")
+        v2_manifest = client.get("/api/v1/evaluations/run_test/artifacts")
 
     assert json_response.status_code == 200
     assert json_response.json() == {"run_id": "run_test"}
@@ -135,6 +336,8 @@ def test_download_reports_uses_validated_content_contract(tmp_path: object) -> N
     assert html_response.headers["content-type"].startswith("text/html")
     assert invalid.status_code == 422
     assert invalid.json() == {"error": {"code": "request_invalid"}}
+    assert v2_manifest.status_code == 404
+    assert v2_manifest.json() == {"error": {"code": "evaluation_artifact_manifest_not_found"}}
 
 
 def test_diagnostic_is_allowlisted_redacted_and_not_cached(tmp_path: object) -> None:

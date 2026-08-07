@@ -12,6 +12,7 @@ from fastapi import FastAPI
 
 import rag_mvp.api.app as app_module
 from rag_mvp.api.app import create_app
+from rag_mvp.api.evaluation_diagnostics import EvaluationOperations
 from rag_mvp.api.qa import QARuntimeServices
 from rag_mvp.config.settings import Settings
 from rag_mvp.ingestion.service import IngestionService
@@ -164,6 +165,53 @@ async def test_shutdown_stops_admission_cancels_work_and_closes_in_order(
     if release_task is not None:
         await asyncio.wait_for(asyncio.shield(release_task), timeout=1)
     assert not app.state.runtime.writer_lock.acquired
+
+
+@pytest.mark.asyncio
+async def test_owned_evaluation_drains_before_qa_and_ingestion_close(tmp_path: Path) -> None:
+    events: list[str] = []
+    evaluation_closed = threading.Event()
+
+    class TrackedEvaluation:
+        async def startup(self) -> None:
+            events.append("evaluation_startup")
+
+        async def close(self) -> None:
+            events.append("evaluation_close")
+            evaluation_closed.set()
+
+    class OrderedIngestion(_CloseTrackedIngestion):
+        def close(self) -> None:
+            assert evaluation_closed.is_set()
+            super().close()
+
+    async def close_qa() -> None:
+        assert evaluation_closed.is_set()
+        events.append("qa_close")
+
+    qa = QARuntimeServices(
+        conversations=cast(ConversationService, object()),
+        orchestrator=_UnusedOrchestrator(),  # type: ignore[arg-type]
+        emitter=_ReadyEmitter(),
+        close_callback=close_qa,
+    )
+    settings = _settings(tmp_path)
+    ingestion = OrderedIngestion(tmp_path, settings.upload_max_bytes, events)
+    app = create_app(
+        settings,
+        ingestion_service=cast(IngestionService, ingestion),
+        owns_ingestion_service=True,
+        qa_services=qa,
+        owns_qa_services=True,
+        evaluation_service=cast(EvaluationOperations, TrackedEvaluation()),
+        owns_evaluation_service=True,
+    )
+
+    async with app.router.lifespan_context(app):
+        assert events == ["evaluation_startup"]
+
+    assert events.index("evaluation_close") < events.index("qa_close")
+    assert events.index("evaluation_close") < events.index("ingestion_close")
 
 
 @pytest.mark.asyncio

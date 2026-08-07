@@ -46,12 +46,39 @@ def _document_outputs(
 
 def _evaluation_outputs(
     render: EvaluationRender,
-) -> tuple[list[list[Any]], list[list[Any]], str, str, BrowserSessionState]:
+) -> tuple[Any, ...]:
     return (
+        gr.update(
+            choices=list(render.dataset_choices),
+            value=render.selected_dataset_key,
+            interactive=bool(render.dataset_choices),
+        ),
+        gr.update(
+            choices=list(render.plan_choices),
+            value=render.selected_plan_key,
+            interactive=bool(render.plan_choices),
+        ),
+        gr.update(
+            choices=list(render.run_choices),
+            value=render.selected_run_id,
+            interactive=bool(render.run_choices),
+        ),
+        [list(row) for row in render.identity_rows],
+        [list(row) for row in render.plan_rows],
         [list(row) for row in render.run_rows],
+        render.progress_markdown,
+        render.gate_markdown,
+        [list(row) for row in render.overview_rows],
+        [list(row) for row in render.category_rows],
         [list(row) for row in render.failure_rows],
-        render.metrics_markdown,
+        [list(row) for row in render.operations_rows],
+        render.operations_preview,
+        render.operations_links_markdown,
+        [list(row) for row in render.artifact_rows],
+        render.artifact_links_markdown,
         render.status_markdown,
+        gr.update(interactive=render.start_enabled),
+        gr.update(active=render.poll_active),
         render.state,
     )
 
@@ -75,6 +102,7 @@ def create_workbench(
     """Create one workbench using the same in-process services as the HTTP API."""
 
     controller = callbacks or WorkbenchCallbacks(services)
+    initial_evaluation = controller.refresh_evaluations(None)
     with gr.Blocks(title="RAG Assistant Workbench") as demo:
         # Gradio deep-copies the state factory.  A controller-bound method would
         # recursively copy the production service graph, including non-copyable
@@ -140,37 +168,197 @@ def create_workbench(
                 document_status = gr.Markdown(label="Document status / 文档状态")
 
             with gr.Tab("Evaluation", id="evaluation-tab"):
-                dataset_id = gr.Textbox(label="Dataset ID / 数据集 ID", value="mvp-v1")
-                dataset_version = gr.Textbox(label="Dataset version / 数据集版本", value="1.0.0")
-                with gr.Row():
-                    start_evaluation = gr.Button("Run evaluation / 运行评估", variant="primary")
-                    refresh_evaluation = gr.Button("Refresh runs / 刷新运行")
-                runs_table = gr.Dataframe(
-                    headers=[
-                        "run_id",
-                        "status",
-                        "dataset",
-                        "version",
-                        "complete",
-                        "failed",
-                        "total",
-                    ],
-                    label="Evaluation runs / 评估运行",
-                    interactive=False,
-                    type="array",
+                evaluation_timer = gr.Timer(
+                    value=2.0,
+                    active=initial_evaluation.poll_active,
                 )
-                failures_table = gr.Dataframe(
-                    label="Failed cases / 失败用例", interactive=False, type="array"
-                )
-                baseline_run = gr.Textbox(label="Baseline run ID / 基线运行 ID")
-                candidate_run = gr.Textbox(label="Candidate run ID / 候选运行 ID")
-                compare = gr.Button("Compare compatible runs / 比较兼容运行")
-                metrics = gr.Markdown(label="Metrics / 指标")
-                evaluation_status = gr.Markdown(label="Evaluation status / 评估状态")
-                report_run = gr.Textbox(label="Report run ID / 报告运行 ID")
-                with gr.Row():
-                    download_json = gr.DownloadButton("Download JSON / 下载 JSON")
-                    download_html = gr.DownloadButton("Download HTML / 下载 HTML")
+                with gr.Tabs(selected="evaluation-run-tab"):
+                    with gr.Tab("Run / 运行", id="evaluation-run-tab"):
+                        with gr.Row():
+                            dataset_select = gr.Dropdown(
+                                choices=list(initial_evaluation.dataset_choices),
+                                value=initial_evaluation.selected_dataset_key,
+                                label="Registered dataset / 已注册数据集",
+                                interactive=bool(initial_evaluation.dataset_choices),
+                            )
+                            plan_select = gr.Dropdown(
+                                choices=list(initial_evaluation.plan_choices),
+                                value=initial_evaluation.selected_plan_key,
+                                label="Registered run type / 已注册运行类型",
+                                interactive=bool(initial_evaluation.plan_choices),
+                            )
+                        identity_table = gr.Dataframe(
+                            headers=["identity", "immutable value"],
+                            value=[list(row) for row in initial_evaluation.identity_rows],
+                            label="Immutable identity / 不可变身份",
+                            interactive=False,
+                            type="array",
+                        )
+                        plan_table = gr.Dataframe(
+                            headers=[
+                                "plan_id",
+                                "type",
+                                "cases",
+                                "candidates",
+                                "max_logical_calls",
+                                "max_provider_calls",
+                                "cache_policy",
+                                "cost_estimate",
+                                "cost_cap",
+                                "max_active_jobs",
+                            ],
+                            value=[list(row) for row in initial_evaluation.plan_rows],
+                            label="Plan preview / 计划预览",
+                            interactive=False,
+                            type="array",
+                        )
+                        with gr.Row():
+                            start_evaluation = gr.Button(
+                                "Start evaluation / 启动评估",
+                                variant="primary",
+                                interactive=initial_evaluation.start_enabled,
+                            )
+                            refresh_evaluation = gr.Button(
+                                "Refresh persisted evidence / 刷新持久化证据"
+                            )
+                        run_select = gr.Dropdown(
+                            choices=list(initial_evaluation.run_choices),
+                            value=initial_evaluation.selected_run_id,
+                            label="Persisted run history / 持久化运行历史",
+                            interactive=bool(initial_evaluation.run_choices),
+                        )
+                        runs_table = gr.Dataframe(
+                            headers=[
+                                "run_id",
+                                "type",
+                                "status",
+                                "completed",
+                                "failed",
+                                "remaining",
+                                "total",
+                                "dataset",
+                                "version",
+                                "corpus",
+                                "configuration",
+                                "started_at",
+                                "completed_at",
+                                "gate",
+                            ],
+                            value=[list(row) for row in initial_evaluation.run_rows],
+                            label="Run history / 运行历史",
+                            interactive=False,
+                            type="array",
+                        )
+                        evaluation_progress = gr.Markdown(
+                            initial_evaluation.progress_markdown,
+                            label="Background progress / 后台进度",
+                        )
+                        evaluation_status = gr.Markdown(
+                            initial_evaluation.status_markdown,
+                            label="Evaluation status / 评估状态",
+                        )
+
+                    with gr.Tab("Overview / 结果总览", id="evaluation-overview-tab"):
+                        gate_banner = gr.Markdown(
+                            initial_evaluation.gate_markdown,
+                            label="Overall gate / 总体门槛",
+                        )
+                        overview_table = gr.Dataframe(
+                            headers=[
+                                "metric",
+                                "value",
+                                "unit",
+                                "threshold",
+                                "numerator",
+                                "denominator",
+                                "state",
+                                "scorer",
+                            ],
+                            value=[list(row) for row in initial_evaluation.overview_rows],
+                            label="Quality, performance, cost / 质量、性能和成本",
+                            interactive=False,
+                            type="array",
+                        )
+                        category_table = gr.Dataframe(
+                            headers=[
+                                "category",
+                                "cases",
+                                "metric",
+                                "value",
+                                "denominator",
+                                "state",
+                            ],
+                            value=[list(row) for row in initial_evaluation.category_rows],
+                            label="Category results / 分类结果",
+                            interactive=False,
+                            type="array",
+                        )
+                        failures_table = gr.Dataframe(
+                            headers=[
+                                "case_id",
+                                "safe_error",
+                                "tags",
+                                "metric_contributions",
+                                "refusal_reason",
+                                "citation_ids",
+                                "request_id",
+                                "trace_id",
+                                "outcome",
+                            ],
+                            value=[list(row) for row in initial_evaluation.failure_rows],
+                            label="Privacy-safe failed cases / 隐私安全的失败用例",
+                            interactive=False,
+                            type="array",
+                        )
+
+                    with gr.Tab("Operations / 运维", id="evaluation-operations-tab"):
+                        operations_table = gr.Dataframe(
+                            headers=[
+                                "metric",
+                                "value",
+                                "unit",
+                                "threshold",
+                                "numerator",
+                                "denominator",
+                                "state",
+                                "scorer",
+                            ],
+                            value=[list(row) for row in initial_evaluation.operations_rows],
+                            label="Canonical operations measures / 规范运维指标",
+                            interactive=False,
+                            type="array",
+                        )
+                        operations_preview = gr.Textbox(
+                            value=initial_evaluation.operations_preview,
+                            label="Validated text preview / 已验证文本预览",
+                            lines=14,
+                            interactive=False,
+                        )
+                        operations_links = gr.Markdown(
+                            initial_evaluation.operations_links_markdown,
+                            label="TXT/CSV download status / TXT/CSV 下载状态",
+                        )
+
+                    with gr.Tab("Artifacts / 报告下载", id="evaluation-artifacts-tab"):
+                        artifacts_table = gr.Dataframe(
+                            headers=[
+                                "artifact_id",
+                                "format",
+                                "schema",
+                                "media_type",
+                                "digest",
+                                "bytes",
+                                "created_at",
+                            ],
+                            value=[list(row) for row in initial_evaluation.artifact_rows],
+                            label="Validated artifact manifest / 已验证制品清单",
+                            interactive=False,
+                            type="array",
+                        )
+                        artifact_links = gr.Markdown(
+                            initial_evaluation.artifact_links_markdown,
+                            label="Same-origin API downloads / 同源 API 下载",
+                        )
 
             with gr.Tab("Diagnostics", id="diagnostics-tab"):
                 refresh_health = gr.Button("Refresh health / 刷新健康状态")
@@ -228,26 +416,31 @@ def create_workbench(
             return _document_outputs(await controller.delete_document(source, confirmed))
 
         async def on_start_evaluation(
-            selected_dataset: str,
-            selected_version: str,
+            selected_dataset: str | None,
+            selected_plan: str | None,
             raw_state: BrowserSessionState | None,
-        ) -> tuple[list[list[Any]], list[list[Any]], str, str, BrowserSessionState]:
+        ) -> tuple[Any, ...]:
             return _evaluation_outputs(
-                await controller.start_evaluation(selected_dataset, selected_version, raw_state)
+                await controller.start_registered_evaluation(
+                    selected_dataset,
+                    selected_plan,
+                    raw_state,
+                )
             )
 
         def on_refresh_evaluation(
+            selected_dataset: str | None,
+            selected_plan: str | None,
+            selected_run: str | None,
             raw_state: BrowserSessionState | None,
-        ) -> tuple[list[list[Any]], list[list[Any]], str, str, BrowserSessionState]:
-            return _evaluation_outputs(controller.refresh_evaluations(raw_state))
-
-        def on_compare(
-            baseline: str,
-            candidate: str,
-            raw_state: BrowserSessionState | None,
-        ) -> tuple[list[list[Any]], list[list[Any]], str, str, BrowserSessionState]:
+        ) -> tuple[Any, ...]:
             return _evaluation_outputs(
-                controller.compare_evaluations(baseline, candidate, raw_state)
+                controller.preview_evaluation_plan(
+                    selected_dataset,
+                    selected_plan,
+                    selected_run,
+                    raw_state,
+                )
             )
 
         def on_health() -> tuple[list[list[Any]], list[list[Any]], str]:
@@ -297,41 +490,76 @@ def create_workbench(
         )
 
         evaluation_outputs = [
+            dataset_select,
+            plan_select,
+            run_select,
+            identity_table,
+            plan_table,
             runs_table,
+            evaluation_progress,
+            gate_banner,
+            overview_table,
+            category_table,
             failures_table,
-            metrics,
+            operations_table,
+            operations_preview,
+            operations_links,
+            artifacts_table,
+            artifact_links,
             evaluation_status,
+            start_evaluation,
+            evaluation_timer,
+            session_state,
+        ]
+        evaluation_inputs = [
+            dataset_select,
+            plan_select,
+            run_select,
             session_state,
         ]
         start_evaluation.click(
             on_start_evaluation,
-            inputs=[dataset_id, dataset_version, session_state],
+            inputs=[dataset_select, plan_select, session_state],
             outputs=evaluation_outputs,
             api_name="evaluation_start",
         )
         refresh_evaluation.click(
             on_refresh_evaluation,
-            inputs=[session_state],
+            inputs=evaluation_inputs,
             outputs=evaluation_outputs,
             api_name="evaluation_refresh",
         )
-        compare.click(
-            on_compare,
-            inputs=[baseline_run, candidate_run, session_state],
+        dataset_select.input(
+            on_refresh_evaluation,
+            inputs=evaluation_inputs,
             outputs=evaluation_outputs,
-            api_name="evaluation_compare",
+            api_name=None,
         )
-        download_json.click(
-            lambda value: controller.report_path(value, "json"),
-            inputs=[report_run],
-            outputs=[download_json],
-            api_name="evaluation_report_json",
+        plan_select.input(
+            on_refresh_evaluation,
+            inputs=evaluation_inputs,
+            outputs=evaluation_outputs,
+            api_name=None,
         )
-        download_html.click(
-            lambda value: controller.report_path(value, "html"),
-            inputs=[report_run],
-            outputs=[download_html],
-            api_name="evaluation_report_html",
+        run_select.input(
+            on_refresh_evaluation,
+            inputs=evaluation_inputs,
+            outputs=evaluation_outputs,
+            api_name=None,
+        )
+        evaluation_timer.tick(
+            on_refresh_evaluation,
+            inputs=evaluation_inputs,
+            outputs=evaluation_outputs,
+            api_name=None,
+            show_progress="hidden",
+        )
+        demo.load(
+            on_refresh_evaluation,
+            inputs=evaluation_inputs,
+            outputs=evaluation_outputs,
+            api_name=None,
+            show_progress="hidden",
         )
 
         diagnostic_outputs = [health_table, request_table, diagnostics_status]

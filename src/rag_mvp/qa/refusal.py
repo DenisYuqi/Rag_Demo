@@ -12,7 +12,8 @@ from typing import cast
 from rag_mvp.domain.qa import RefusalReason
 from rag_mvp.domain.retrieval import RankingEvidence
 
-REFUSAL_POLICY_VERSION = "normalized-fact-support-v1"
+LEGACY_REFUSAL_POLICY_VERSION = "normalized-fact-support-v1"
+REFUSAL_POLICY_VERSION = "normalized-fact-support-v2"
 DEFAULT_MINIMUM_SUPPORT_SCORE = 0.55
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$")
 
@@ -26,6 +27,7 @@ class EvidenceDecisionKind(StrEnum):
 class EvidenceDecisionCode(StrEnum):
     ANSWERABLE = "answerable"
     PARTIAL_EVIDENCE = "partial-evidence"
+    LOW_CONFIDENCE = RefusalReason.LOW_CONFIDENCE
     INSUFFICIENT_EVIDENCE = RefusalReason.INSUFFICIENT_EVIDENCE
     CONFLICTING_EVIDENCE = RefusalReason.CONFLICTING_EVIDENCE
 
@@ -155,12 +157,12 @@ class RefusalPolicy:
         if not supported:
             return self._decision(
                 EvidenceDecisionKind.REFUSAL,
-                EvidenceDecisionCode.INSUFFICIENT_EVIDENCE,
+                EvidenceDecisionCode.LOW_CONFIDENCE,
                 supported,
                 unsupported,
                 conflicting,
                 (),
-                RefusalReason.INSUFFICIENT_EVIDENCE,
+                RefusalReason.LOW_CONFIDENCE,
             )
         if unsupported:
             return self._decision(
