@@ -78,6 +78,44 @@ class ExplodingChatGateway:
         raise RuntimeError("private reset failure")
 
 
+def test_page_load_clears_conversation_before_loading_stateful_views(tmp_path: Path) -> None:
+    blocks = create_workbench(
+        Settings(_env_file=None, data_root=tmp_path),
+        WorkbenchServices(chat=IsolatingChatGateway()),
+    )
+    config = blocks.get_config_file()
+    labels = {
+        component["id"]: component.get("props", {}).get("label")
+        for component in config["components"]
+    }
+    chat_load = next(
+        dependency
+        for dependency in config["dependencies"]
+        if any(event == "load" for _, event in dependency["targets"])
+        and labels.get(dependency["outputs"][0]) == "Conversation / 对话"
+    )
+
+    assert len(chat_load["inputs"]) == 1
+    assert [labels.get(output) for output in chat_load["outputs"]] == [
+        "Conversation / 对话",
+        None,
+        "Citations / 引用",
+        "Source previews / 来源预览",
+        "Chat status / 对话状态",
+        "Question / 问题",
+    ]
+    assert chat_load["inputs"] == [chat_load["outputs"][1]]
+    stateful_successors = [
+        dependency
+        for dependency in config["dependencies"]
+        if any(event == "then" for _, event in dependency["targets"])
+    ]
+    assert {labels.get(dependency["outputs"][0]) for dependency in stateful_successors} == {
+        "Registered dataset / 已注册数据集",
+        "Registered experiment plan / 已注册实验计划",
+    }
+
+
 @pytest.mark.asyncio
 async def test_gradio_state_factory_keeps_parallel_browser_sessions_isolated(
     tmp_path: Path,

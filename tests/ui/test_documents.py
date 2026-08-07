@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from rag_mvp.config.settings import Settings
 from rag_mvp.domain.ingestion import (
     Document,
     DocumentKind,
@@ -15,6 +16,7 @@ from rag_mvp.domain.ingestion import (
 from rag_mvp.ui.callbacks import WorkbenchCallbacks
 from rag_mvp.ui.models import UploadPayload
 from rag_mvp.ui.services import WorkbenchServices
+from rag_mvp.ui.workbench import create_workbench
 
 pytestmark = pytest.mark.ui
 
@@ -100,6 +102,36 @@ class FakeDocumentGateway:
 
     def list_jobs(self) -> tuple[IngestionJob, ...]:
         return tuple(self.jobs)
+
+
+def test_existing_documents_are_preloaded_and_refreshed_on_page_load() -> None:
+    gateway = FakeDocumentGateway(with_document=True)
+    blocks = create_workbench(
+        settings=Settings(_env_file=None),
+        services=WorkbenchServices(documents=gateway),
+    )
+    config = blocks.get_config_file()
+    components = config["components"]
+    components_by_label = {
+        component["props"].get("label"): component
+        for component in components
+        if component.get("props")
+    }
+    documents = components_by_label["Active documents / 活跃文档"]
+    jobs = components_by_label["Ingestion progress / 摄取进度"]
+    status = components_by_label["Document status / 文档状态"]
+
+    assert documents["props"]["value"]["data"] == [
+        ["source_policy", "Leave Policy", 2, "text", "text/plain"]
+    ]
+    assert "revision_initial" in status["props"]["value"]
+    expected_outputs = {documents["id"], jobs["id"], status["id"]}
+    assert any(
+        any(event == "load" for _, event in dependency["targets"])
+        and dependency["inputs"] == []
+        and set(dependency["outputs"]) == expected_outputs
+        for dependency in config["dependencies"]
+    )
 
 
 @pytest.mark.asyncio

@@ -225,6 +225,7 @@ def create_workbench(
     """Create one workbench using the same in-process services as the HTTP API."""
 
     controller = callbacks or WorkbenchCallbacks(services)
+    initial_documents = controller.refresh_documents()
     initial_evaluation = controller.refresh_evaluations(None)
     initial_comparison = controller.refresh_comparisons(None)
     with gr.Blocks(title="RAG Assistant Workbench") as demo:
@@ -266,6 +267,7 @@ def create_workbench(
                     refresh_documents = gr.Button("Refresh / 刷新")
                 documents_table = gr.Dataframe(
                     headers=["source_id", "title", "version", "type", "media_type"],
+                    value=[list(row) for row in initial_documents.document_rows],
                     label="Active documents / 活跃文档",
                     interactive=False,
                     type="array",
@@ -282,6 +284,7 @@ def create_workbench(
                         "chunks",
                         "revision",
                     ],
+                    value=[list(row) for row in initial_documents.job_rows],
                     label="Ingestion progress / 摄取进度",
                     interactive=False,
                     type="array",
@@ -289,7 +292,10 @@ def create_workbench(
                 delete_source = gr.Textbox(label="Source ID to delete / 待删除来源 ID")
                 confirm_delete = gr.Checkbox(label="Confirm deletion / 确认删除")
                 delete = gr.Button("Delete / 删除", variant="stop")
-                document_status = gr.Markdown(label="Document status / 文档状态")
+                document_status = gr.Markdown(
+                    value=initial_documents.status_markdown,
+                    label="Document status / 文档状态",
+                )
 
             with gr.Tab("Evaluation", id="evaluation-tab"):
                 evaluation_timer = gr.Timer(
@@ -1050,6 +1056,13 @@ def create_workbench(
             cancels=[ask_event],
             api_name="chat_cancel",
         )
+        chat_load = demo.load(
+            on_reset,
+            inputs=[session_state],
+            outputs=chat_outputs,
+            api_name=None,
+            show_progress="hidden",
+        )
 
         document_outputs = [documents_table, jobs_table, document_status]
         refresh_documents.click(
@@ -1067,6 +1080,12 @@ def create_workbench(
             inputs=[delete_source, confirm_delete],
             outputs=document_outputs,
             api_name="documents_delete",
+        )
+        demo.load(
+            on_documents,
+            outputs=document_outputs,
+            api_name=None,
+            show_progress="hidden",
         )
 
         evaluation_outputs = [
@@ -1143,7 +1162,7 @@ def create_workbench(
             api_name=None,
             show_progress="hidden",
         )
-        demo.load(
+        chat_load.then(
             on_refresh_evaluation,
             inputs=evaluation_inputs,
             outputs=evaluation_outputs,
@@ -1211,7 +1230,7 @@ def create_workbench(
             api_name=None,
             show_progress="hidden",
         )
-        demo.load(
+        chat_load.then(
             on_refresh_comparison,
             inputs=comparison_inputs,
             outputs=comparison_outputs,
