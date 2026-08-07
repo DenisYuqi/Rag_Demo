@@ -92,6 +92,11 @@ class Settings(BaseSettings):
     bge_embedding_max_length: int = Field(default=8192, ge=64, le=8192)
     bge_reranking_max_length: int = Field(default=1024, ge=64, le=8192)
     bge_model_cache_dir: Path | None = None
+    bge_provider_timeout_seconds: float = Field(default=60.0, gt=0, le=60)
+    bge_qa_deadline_seconds: float = Field(default=45.0, gt=0, le=60)
+    bge_qa_retrieval_budget_seconds: float = Field(default=20.0, gt=0, le=60)
+    bge_rerank_deadline_seconds: float = Field(default=10.0, gt=0, le=60)
+    bge_qa_evidence_assessment_budget_seconds: float = Field(default=10.0, gt=0, le=60)
 
     default_retrieval_mode: Literal["dense", "hybrid", "hybrid-rerank"] = "hybrid"
     dense_candidate_limit: int = Field(default=20, ge=1, le=100)
@@ -243,6 +248,20 @@ class Settings(BaseSettings):
             raise ValueError("BAAI/bge-m3 requires a 1024-dimensional embedding space")
         if self.resolved_bge_data_root == self.data_root.resolve(strict=False):
             raise ValueError("BGE and OpenAI profiles must use different data roots")
+        bge_stage_budgets = {
+            "retrieval": self.bge_qa_retrieval_budget_seconds,
+            "rerank": self.bge_rerank_deadline_seconds,
+            "evidence assessment": self.bge_qa_evidence_assessment_budget_seconds,
+            "generation": self.qa_generation_budget_seconds,
+            "finalization": self.qa_finalization_budget_seconds,
+        }
+        if any(value >= self.bge_qa_deadline_seconds for value in bge_stage_budgets.values()):
+            raise ValueError("each BGE stage budget must be below the BGE total QA deadline")
+        if (
+            self.qa_generation_budget_seconds + self.qa_finalization_budget_seconds
+            > self.bge_qa_deadline_seconds
+        ):
+            raise ValueError("generation and finalization budgets exceed the BGE total QA deadline")
         if self.total_shutdown_budget_seconds >= self.CONTAINER_STOP_GRACE_SECONDS:
             raise ValueError("server and application shutdown budgets must fit container grace")
         if self.openai_api_key is None and self.openai_api_key_file is not None:
@@ -277,6 +296,13 @@ class Settings(BaseSettings):
                 "embedding_dimension": self.bge_embedding_dimension,
                 "reranking_model": self.bge_reranking_model,
                 "default_retrieval_mode": "hybrid-rerank",
+                "provider_timeout_seconds": self.bge_provider_timeout_seconds,
+                "qa_deadline_seconds": self.bge_qa_deadline_seconds,
+                "qa_retrieval_budget_seconds": self.bge_qa_retrieval_budget_seconds,
+                "rerank_deadline_seconds": self.bge_rerank_deadline_seconds,
+                "qa_evidence_assessment_budget_seconds": (
+                    self.bge_qa_evidence_assessment_budget_seconds
+                ),
                 "pricing_version": "unconfigured",
                 "workbench_enabled": False,
             }

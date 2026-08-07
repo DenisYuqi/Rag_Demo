@@ -15,6 +15,6 @@ Compose mounts the `rag-mvp-model-cache` volume at `/var/cache/huggingface`. The
 
 ## Local settings
 
-The model names, data/cache roots, device, FP16 mode, batch sizes, and maximum input lengths use the `RAG_MVP_BGE_*` environment variables documented in `.env.example`. Keep FP16 disabled on CPU. On a compatible accelerator, set `RAG_MVP_BGE_DEVICE` to the device accepted by FlagEmbedding (for example `cuda:0`) and enable FP16 only after validating model output and memory behavior.
+The model names, data/cache roots, device, FP16 mode, batch sizes, maximum input lengths, and local-provider/QA stage deadlines use the `RAG_MVP_BGE_*` environment variables documented in `.env.example`. The BGE profile defaults to larger provider, total-request, reranking, and evidence-assessment budgets than `openai-api`; changing them does not alter the API profile. Keep FP16 disabled on CPU. On a compatible accelerator, set `RAG_MVP_BGE_DEVICE` to the device accepted by FlagEmbedding (for example `cuda:0`) and enable FP16 only after validating model output and memory behavior.
 
 To remove the BGE choice without affecting the OpenAI index, set `RAG_MVP_BGE_PROFILE_ENABLED=false`. Changing `RAG_MVP_DEFAULT_RETRIEVAL_PROFILE` only changes the initial workbench selection; it does not change the HTTP API provider.

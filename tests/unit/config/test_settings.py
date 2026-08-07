@@ -29,6 +29,11 @@ def test_defaults_are_safe_and_offline_ready(tmp_path: object) -> None:
     assert settings.bge_embedding_model == "BAAI/bge-m3"
     assert settings.bge_embedding_dimension == 1024
     assert settings.bge_reranking_model == "BAAI/bge-reranker-v2-m3"
+    assert settings.bge_provider_timeout_seconds == 60
+    assert settings.bge_qa_deadline_seconds == 45
+    assert settings.bge_qa_retrieval_budget_seconds == 20
+    assert settings.bge_rerank_deadline_seconds == 10
+    assert settings.bge_qa_evidence_assessment_budget_seconds == 10
     assert settings.qa_minimum_support_score == 0.45
     assert settings.server_shutdown_grace_seconds == 4
     assert settings.app_shutdown_grace_seconds == 15
@@ -47,8 +52,17 @@ def test_bge_profile_settings_are_isolated_and_truthful(tmp_path: Path) -> None:
     assert local.embedding_dimension == 1024
     assert local.reranking_model == "BAAI/bge-reranker-v2-m3"
     assert local.default_retrieval_mode == "hybrid-rerank"
+    assert local.provider_timeout_seconds == 60
+    assert local.qa_deadline_seconds == 45
+    assert local.qa_retrieval_budget_seconds == 20
+    assert local.rerank_deadline_seconds == 10
+    assert local.qa_evidence_assessment_budget_seconds == 10
     assert settings.embedding_model == "text-embedding-3-small"
     assert settings.reranking_model is None
+    assert settings.provider_timeout_seconds == 8
+    assert settings.qa_deadline_seconds == 9.5
+    assert settings.rerank_deadline_seconds == 3
+    assert settings.qa_evidence_assessment_budget_seconds == 4
 
 
 def test_bge_profile_configuration_invariants_are_enforced(tmp_path: Path) -> None:
@@ -65,6 +79,14 @@ def test_bge_profile_configuration_invariants_are_enforced(tmp_path: Path) -> No
 
     with pytest.raises(ValidationError, match="different data roots"):
         Settings(data_root=tmp_path, bge_data_root=tmp_path, _env_file=None)
+
+    with pytest.raises(ValidationError, match="each BGE stage budget"):
+        Settings(
+            data_root=tmp_path,
+            bge_qa_deadline_seconds=8,
+            bge_qa_evidence_assessment_budget_seconds=8,
+            _env_file=None,
+        )
 
 
 @pytest.mark.parametrize(
