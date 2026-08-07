@@ -1,0 +1,54 @@
+{
+  "case_count": 24,
+  "cases_file": "cases.jsonl",
+  "content_hash": "sha256:44b5abd33e53ca78630b2b311a8f0a2f19d1462de9b1475d59685ca9abf648df",
+  "contract_version": "2.0.0",
+  "corpus": {
+    "content_hash": "sha256:3aeeae28fe27695af03eb0390ff035469032ab48d319414bdbf2f5419cc40997",
+    "manifest_file": "corpus/manifest.json",
+    "snapshot_id": "acceptance-bilingual-corpus",
+    "version": "2.0.0"
+  },
+  "coverage": {
+    "minimum_case_count": 24,
+    "minimum_challenge_counts": {
+      "architecture": 2,
+      "cross-language-semantic": 2,
+      "exact-identifier-lexical": 2,
+      "plausible-distractor": 2,
+      "rerank-sensitive": 2,
+      "scanned-document": 2,
+      "technical-specification": 2
+    },
+    "minimum_language_counts": {
+      "en": 8,
+      "zh": 8
+    },
+    "minimum_multi_turn_cases": 4
+  },
+  "dataset_id": "original-pdf-acceptance",
+  "hash_algorithm": "sha256-canonical-json-v1",
+  "required_categories": [
+    "answerable-en",
+    "answerable-zh",
+    "injection",
+    "multi-turn",
+    "ocr",
+    "pii",
+    "required-refusal",
+    "unanswerable"
+  ],
+  "required_languages": [
+    "zh",
+    "en"
+  ],
+  "required_metrics": [
+    "answer-compliance",
+    "context-precision",
+    "faithfulness",
+    "refusal-appropriateness",
+    "style"
+  ],
+  "schema_version": "rag-evaluation-dataset-v2",
+  "version": "2.0.0"
+}

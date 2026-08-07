@@ -1,0 +1,880 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rag-mvp.local/schemas/evaluation-report-v2.schema.json",
+  "title": "RAG MVP Evaluation Report v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "schema_version",
+    "report_id",
+    "run_id",
+    "configuration_id",
+    "generated_at",
+    "provenance",
+    "acceptance_contract",
+    "acceptance_gate_id",
+    "gates",
+    "performance_evidence",
+    "operations_summary",
+    "category_results",
+    "failed_cases",
+    "artifacts",
+    "status",
+    "accepted",
+    "limitations"
+  ],
+  "properties": {
+    "$schema": {
+      "const": "https://rag-mvp.local/schemas/evaluation-report-v2.schema.json"
+    },
+    "schema_version": {"const": "2.0.0"},
+    "report_id": {"$ref": "#/$defs/identifier"},
+    "run_id": {"$ref": "#/$defs/identifier"},
+    "configuration_id": {"$ref": "#/$defs/identifier"},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "provenance": {"$ref": "#/$defs/provenance"},
+    "acceptance_contract": {"$ref": "#/$defs/acceptanceContract"},
+    "acceptance_gate_id": {"$ref": "#/$defs/identifier"},
+    "gates": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/gateResult"}
+    },
+    "performance_evidence": {"$ref": "#/$defs/performanceEvidence"},
+    "operations_summary": {"$ref": "#/$defs/operationsSummary"},
+    "category_results": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/categoryResult"}
+    },
+    "failed_cases": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/failedCase"}
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/artifactDescriptor"}
+    },
+    "status": {"enum": ["passed", "failed", "unavailable"]},
+    "accepted": {"type": "boolean"},
+    "limitations": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/identifier"}
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "sha256Digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "unavailable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "reason"],
+      "properties": {
+        "status": {"const": "unavailable"},
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z][a-z0-9_.-]*$"
+        }
+      }
+    },
+    "evidenceValue": {
+      "oneOf": [
+        {"type": "number"},
+        {"$ref": "#/$defs/unavailable"}
+      ]
+    },
+    "evidenceNumerator": {
+      "oneOf": [
+        {"type": "number", "minimum": 0},
+        {"$ref": "#/$defs/unavailable"}
+      ]
+    },
+    "evidenceDenominator": {
+      "oneOf": [
+        {"type": "integer", "minimum": 0},
+        {"$ref": "#/$defs/unavailable"}
+      ]
+    },
+    "evidenceScorerVersion": {
+      "oneOf": [
+        {"$ref": "#/$defs/identifier"},
+        {"$ref": "#/$defs/unavailable"}
+      ]
+    },
+    "metricObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "metric_id",
+        "unit",
+        "value",
+        "numerator",
+        "denominator",
+        "eligible",
+        "threshold",
+        "operator",
+        "scorer_version",
+        "status",
+        "evidence_references"
+      ],
+      "properties": {
+        "schema_version": {"const": "2.0.0"},
+        "metric_id": {"$ref": "#/$defs/identifier"},
+        "unit": {"$ref": "#/$defs/identifier"},
+        "value": {"$ref": "#/$defs/evidenceValue"},
+        "numerator": {"$ref": "#/$defs/evidenceNumerator"},
+        "denominator": {"$ref": "#/$defs/evidenceDenominator"},
+        "eligible": {"type": "boolean"},
+        "threshold": {"type": ["number", "null"]},
+        "operator": {
+          "enum": [">", ">=", "<", "<=", "==", null]
+        },
+        "scorer_version": {"$ref": "#/$defs/evidenceScorerVersion"},
+        "status": {
+          "enum": ["observed", "passed", "failed", "unavailable"]
+        },
+        "evidence_references": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/identifier"}
+        }
+      }
+    },
+    "gateResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "gate_id",
+        "profile_version",
+        "status",
+        "valid",
+        "passed",
+        "case_executions_complete",
+        "observations",
+        "failure_reasons"
+      ],
+      "properties": {
+        "schema_version": {"const": "2.0.0"},
+        "gate_id": {"$ref": "#/$defs/identifier"},
+        "profile_version": {"$ref": "#/$defs/identifier"},
+        "status": {"enum": ["passed", "failed", "unavailable"]},
+        "valid": {"type": "boolean"},
+        "passed": {"type": "boolean"},
+        "case_executions_complete": {"type": "boolean"},
+        "observations": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/metricObservation"}
+        },
+        "failure_reasons": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/identifier"}
+        }
+      }
+    },
+    "metricRequirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "metric_id",
+        "unit",
+        "threshold",
+        "operator",
+        "minimum_denominator"
+      ],
+      "properties": {
+        "metric_id": {"$ref": "#/$defs/identifier"},
+        "unit": {"$ref": "#/$defs/identifier"},
+        "threshold": {"type": "number"},
+        "operator": {"enum": [">", ">=", "<", "<=", "=="]},
+        "minimum_denominator": {"type": "integer", "minimum": 1}
+      }
+    },
+    "acceptanceContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "contract_id",
+        "version",
+        "gate_profile_version",
+        "dataset_schema_version",
+        "performance_schema_version",
+        "cost_schema_version",
+        "metric_requirements"
+      ],
+      "properties": {
+        "schema_version": {"const": "rag-acceptance-contract-v2"},
+        "contract_id": {"$ref": "#/$defs/identifier"},
+        "version": {"$ref": "#/$defs/identifier"},
+        "gate_profile_version": {"$ref": "#/$defs/identifier"},
+        "dataset_schema_version": {"$ref": "#/$defs/identifier"},
+        "performance_schema_version": {"$ref": "#/$defs/identifier"},
+        "cost_schema_version": {"$ref": "#/$defs/identifier"},
+        "metric_requirements": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/metricRequirement"}
+        }
+      }
+    },
+    "nonNegativeDecimal": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?$"
+    },
+    "modelRole": {
+      "enum": ["embedding", "generation", "reranking", "evaluation"]
+    },
+    "modelAttemptStatus": {
+      "enum": ["succeeded", "failed", "cancelled", "timed-out"]
+    },
+    "availability": {
+      "enum": ["available", "unavailable", "not-applicable"]
+    },
+    "costUnknownReason": {
+      "enum": [
+        "provider-attempt-evidence-missing",
+        "pricing-rate-missing",
+        "input-usage-unknown",
+        "output-usage-unknown",
+        "input-rate-unknown",
+        "output-rate-unknown",
+        "logical-attempt-denominator-zero",
+        "success-denominator-zero",
+        "cost-incomplete"
+      ]
+    },
+    "tokenUsage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input_tokens", "output_tokens", "total_tokens_reported"],
+      "properties": {
+        "input_tokens": {"type": ["integer", "null"], "minimum": 0},
+        "output_tokens": {"type": ["integer", "null"], "minimum": 0},
+        "total_tokens_reported": {"type": ["integer", "null"], "minimum": 0}
+      }
+    },
+    "providerAttemptEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation_id",
+        "attempt_number",
+        "route_id",
+        "role",
+        "provider",
+        "model",
+        "status",
+        "fallback",
+        "latency_ms",
+        "safe_error_category",
+        "usage"
+      ],
+      "properties": {
+        "operation_id": {"$ref": "#/$defs/identifier"},
+        "attempt_number": {"type": "integer", "minimum": 1},
+        "route_id": {
+          "oneOf": [{"$ref": "#/$defs/identifier"}, {"type": "null"}]
+        },
+        "role": {"$ref": "#/$defs/modelRole"},
+        "provider": {"$ref": "#/$defs/identifier"},
+        "model": {"$ref": "#/$defs/identifier"},
+        "status": {"$ref": "#/$defs/modelAttemptStatus"},
+        "fallback": {"type": "boolean"},
+        "latency_ms": {"type": ["number", "null"], "minimum": 0},
+        "safe_error_category": {
+          "type": ["string", "null"],
+          "pattern": "^[a-z][a-z0-9_.-]*$"
+        },
+        "usage": {"$ref": "#/$defs/tokenUsage"}
+      }
+    },
+    "loadAttempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attempt_id",
+        "logical_request_id",
+        "scenario_id",
+        "attempt_number",
+        "retry_of_attempt_id",
+        "status",
+        "started_at",
+        "completed_at",
+        "latency_ms",
+        "http_status_code",
+        "request_id",
+        "trace_id",
+        "instance_identity",
+        "terminal_kind",
+        "safe_error_code",
+        "retryable",
+        "provider_attempt_count",
+        "provider_failed_attempt_count",
+        "provider_unknown_usage_attempt_count",
+        "provider_evidence_complete",
+        "provider_attempts",
+        "stage_timings_ms",
+        "token_counts",
+        "model_identities",
+        "cache_status"
+      ],
+      "properties": {
+        "attempt_id": {"$ref": "#/$defs/identifier"},
+        "logical_request_id": {"$ref": "#/$defs/identifier"},
+        "scenario_id": {
+          "oneOf": [{"$ref": "#/$defs/identifier"}, {"type": "null"}]
+        },
+        "attempt_number": {"type": "integer", "minimum": 1},
+        "retry_of_attempt_id": {
+          "oneOf": [{"$ref": "#/$defs/identifier"}, {"type": "null"}]
+        },
+        "status": {
+          "enum": [
+            "succeeded",
+            "http-error",
+            "terminal-error",
+            "timeout",
+            "incomplete",
+            "malformed",
+            "transport-error"
+          ]
+        },
+        "started_at": {"type": "string", "format": "date-time"},
+        "completed_at": {"type": "string", "format": "date-time"},
+        "latency_ms": {"type": "number", "minimum": 0},
+        "http_status_code": {
+          "type": ["integer", "null"],
+          "minimum": 100,
+          "maximum": 599
+        },
+        "request_id": {
+          "oneOf": [{"$ref": "#/$defs/identifier"}, {"type": "null"}]
+        },
+        "trace_id": {
+          "oneOf": [{"$ref": "#/$defs/identifier"}, {"type": "null"}]
+        },
+        "instance_identity": {
+          "oneOf": [{"$ref": "#/$defs/identifier"}, {"type": "null"}]
+        },
+        "terminal_kind": {"enum": ["answer", "refusal", "error", null]},
+        "safe_error_code": {
+          "type": ["string", "null"],
+          "pattern": "^[a-z][a-z0-9_.-]{0,63}$"
+        },
+        "retryable": {"type": "boolean"},
+        "provider_attempt_count": {"type": "integer", "minimum": 0},
+        "provider_failed_attempt_count": {"type": "integer", "minimum": 0},
+        "provider_unknown_usage_attempt_count": {"type": "integer", "minimum": 0},
+        "provider_evidence_complete": {"type": "boolean"},
+        "provider_attempts": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/providerAttemptEvidence"}
+        },
+        "stage_timings_ms": {
+          "type": "object",
+          "additionalProperties": {"type": "number", "minimum": 0}
+        },
+        "token_counts": {
+          "type": "object",
+          "additionalProperties": {"type": "integer", "minimum": 0}
+        },
+        "model_identities": {
+          "type": "object",
+          "additionalProperties": {"type": "string"}
+        },
+        "cache_status": {
+          "type": "object",
+          "additionalProperties": {"type": "string"}
+        }
+      }
+    },
+    "latencyPercentiles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["count", "p50_ms", "p90_ms", "p95_ms", "p99_ms"],
+      "properties": {
+        "count": {"type": "integer", "minimum": 1},
+        "p50_ms": {"type": "number", "minimum": 0},
+        "p90_ms": {"type": "number", "minimum": 0},
+        "p95_ms": {"type": "number", "minimum": 0},
+        "p99_ms": {"type": "number", "minimum": 0}
+      }
+    },
+    "nullableLatencyPercentiles": {
+      "oneOf": [
+        {"$ref": "#/$defs/latencyPercentiles"},
+        {"type": "null"}
+      ]
+    },
+    "latencyScopes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["all_attempts", "successful_attempts"],
+      "properties": {
+        "all_attempts": {"$ref": "#/$defs/nullableLatencyPercentiles"},
+        "successful_attempts": {"$ref": "#/$defs/nullableLatencyPercentiles"}
+      }
+    },
+    "attemptRate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["numerator", "denominator", "value", "status"],
+      "properties": {
+        "numerator": {"type": "integer", "minimum": 0},
+        "denominator": {"type": "integer", "minimum": 0},
+        "value": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+        "status": {"$ref": "#/$defs/availability"}
+      }
+    },
+    "officialP90Gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "metric",
+        "scope",
+        "operator",
+        "threshold_ms",
+        "observed_ms",
+        "denominator",
+        "status",
+        "passed"
+      ],
+      "properties": {
+        "metric": {"const": "p90_latency_ms"},
+        "scope": {"const": "all-measured-http-attempts"},
+        "operator": {"const": "<="},
+        "threshold_ms": {"type": "number", "exclusiveMinimum": 0},
+        "observed_ms": {"type": ["number", "null"], "minimum": 0},
+        "denominator": {"type": "integer", "minimum": 0},
+        "status": {"$ref": "#/$defs/availability"},
+        "passed": {"type": ["boolean", "null"]}
+      }
+    },
+    "exactPricingRate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "provider", "model", "input_per_million", "output_per_million"],
+      "properties": {
+        "role": {"$ref": "#/$defs/modelRole"},
+        "provider": {"$ref": "#/$defs/identifier"},
+        "model": {"$ref": "#/$defs/identifier"},
+        "input_per_million": {
+          "oneOf": [{"$ref": "#/$defs/nonNegativeDecimal"}, {"type": "null"}]
+        },
+        "output_per_million": {
+          "oneOf": [{"$ref": "#/$defs/nonNegativeDecimal"}, {"type": "null"}]
+        }
+      }
+    },
+    "pricingProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "pricing_version",
+        "currency",
+        "rates",
+        "source_references",
+        "digest"
+      ],
+      "properties": {
+        "schema_version": {"const": "pricing-provenance-v2"},
+        "pricing_version": {"$ref": "#/$defs/identifier"},
+        "currency": {"$ref": "#/$defs/identifier"},
+        "rates": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/exactPricingRate"}
+        },
+        "source_references": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 500}
+        },
+        "digest": {"$ref": "#/$defs/sha256Digest"}
+      }
+    },
+    "providerAttemptCost": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "http_attempt_id",
+        "logical_request_id",
+        "provider_attempt_ordinal",
+        "operation_id",
+        "attempt_number",
+        "role",
+        "provider",
+        "model",
+        "status",
+        "fallback",
+        "usage",
+        "pricing_rate",
+        "known_partial_cost",
+        "total_cost",
+        "complete",
+        "unknown_reasons"
+      ],
+      "properties": {
+        "http_attempt_id": {"$ref": "#/$defs/identifier"},
+        "logical_request_id": {"$ref": "#/$defs/identifier"},
+        "provider_attempt_ordinal": {"type": "integer", "minimum": 1},
+        "operation_id": {"$ref": "#/$defs/identifier"},
+        "attempt_number": {"type": "integer", "minimum": 1},
+        "role": {"$ref": "#/$defs/modelRole"},
+        "provider": {"$ref": "#/$defs/identifier"},
+        "model": {"$ref": "#/$defs/identifier"},
+        "status": {"$ref": "#/$defs/modelAttemptStatus"},
+        "fallback": {"type": "boolean"},
+        "usage": {"$ref": "#/$defs/tokenUsage"},
+        "pricing_rate": {
+          "oneOf": [{"$ref": "#/$defs/exactPricingRate"}, {"type": "null"}]
+        },
+        "known_partial_cost": {"$ref": "#/$defs/nonNegativeDecimal"},
+        "total_cost": {
+          "oneOf": [{"$ref": "#/$defs/nonNegativeDecimal"}, {"type": "null"}]
+        },
+        "complete": {"type": "boolean"},
+        "unknown_reasons": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/costUnknownReason"}
+        }
+      }
+    },
+    "roleDirectionTokens": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "direction",
+        "provider_attempt_count",
+        "unknown_usage_attempt_count",
+        "known_tokens",
+        "total_tokens",
+        "status",
+        "unknown_reasons"
+      ],
+      "properties": {
+        "role": {"$ref": "#/$defs/modelRole"},
+        "direction": {"enum": ["input", "output"]},
+        "provider_attempt_count": {"type": "integer", "minimum": 0},
+        "unknown_usage_attempt_count": {"type": "integer", "minimum": 0},
+        "known_tokens": {"type": "integer", "minimum": 0},
+        "total_tokens": {"type": ["integer", "null"], "minimum": 0},
+        "status": {"$ref": "#/$defs/availability"},
+        "unknown_reasons": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/costUnknownReason"}
+        }
+      }
+    },
+    "normalizedCost": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["denominator_kind", "denominator", "per_1000", "status", "unknown_reasons"],
+      "properties": {
+        "denominator_kind": {
+          "enum": ["logical-attempts", "successful-logical-attempts"]
+        },
+        "denominator": {"type": "integer", "minimum": 0},
+        "per_1000": {
+          "oneOf": [{"$ref": "#/$defs/nonNegativeDecimal"}, {"type": "null"}]
+        },
+        "status": {"$ref": "#/$defs/availability"},
+        "unknown_reasons": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/costUnknownReason"}
+        }
+      }
+    },
+    "costEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "pricing",
+        "provider_attempt_count",
+        "provider_attempts",
+        "unverifiable_http_attempt_ids",
+        "role_direction_tokens",
+        "logical_attempt_count",
+        "successful_logical_attempt_count",
+        "known_partial_cost",
+        "total_cost",
+        "total_cost_status",
+        "cost_per_1000_logical_attempts",
+        "cost_per_1000_successes",
+        "complete",
+        "unknown_reasons"
+      ],
+      "properties": {
+        "schema_version": {"const": "provider-cost-evidence-v2"},
+        "pricing": {"$ref": "#/$defs/pricingProvenance"},
+        "provider_attempt_count": {"type": "integer", "minimum": 0},
+        "provider_attempts": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/providerAttemptCost"}
+        },
+        "unverifiable_http_attempt_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/identifier"}
+        },
+        "role_direction_tokens": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/roleDirectionTokens"}
+        },
+        "logical_attempt_count": {"type": "integer", "minimum": 0},
+        "successful_logical_attempt_count": {"type": "integer", "minimum": 0},
+        "known_partial_cost": {"$ref": "#/$defs/nonNegativeDecimal"},
+        "total_cost": {
+          "oneOf": [{"$ref": "#/$defs/nonNegativeDecimal"}, {"type": "null"}]
+        },
+        "total_cost_status": {"$ref": "#/$defs/availability"},
+        "cost_per_1000_logical_attempts": {"$ref": "#/$defs/normalizedCost"},
+        "cost_per_1000_successes": {"$ref": "#/$defs/normalizedCost"},
+        "complete": {"type": "boolean"},
+        "unknown_reasons": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/costUnknownReason"}
+        }
+      }
+    },
+    "warmupPerformance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scope",
+        "attempts",
+        "attempt_ledger_digest",
+        "attempt_count",
+        "success_count",
+        "failure_count",
+        "latency_ms"
+      ],
+      "properties": {
+        "scope": {"const": "warm-up-excluded"},
+        "attempts": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/loadAttempt"}
+        },
+        "attempt_ledger_digest": {"$ref": "#/$defs/sha256Digest"},
+        "attempt_count": {"type": "integer", "minimum": 0},
+        "success_count": {"type": "integer", "minimum": 0},
+        "failure_count": {"type": "integer", "minimum": 0},
+        "latency_ms": {"$ref": "#/$defs/latencyScopes"}
+      }
+    },
+    "measuredPerformance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scope",
+        "attempts",
+        "attempt_ledger_digest",
+        "http_attempt_count",
+        "logical_attempt_count",
+        "successful_http_attempt_count",
+        "successful_logical_attempt_count",
+        "failed_http_attempt_count",
+        "error_rate",
+        "latency_ms",
+        "official_p90_gate"
+      ],
+      "properties": {
+        "scope": {"const": "measured"},
+        "attempts": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/loadAttempt"}
+        },
+        "attempt_ledger_digest": {"$ref": "#/$defs/sha256Digest"},
+        "http_attempt_count": {"type": "integer", "minimum": 0},
+        "logical_attempt_count": {"type": "integer", "minimum": 0},
+        "successful_http_attempt_count": {"type": "integer", "minimum": 0},
+        "successful_logical_attempt_count": {"type": "integer", "minimum": 0},
+        "failed_http_attempt_count": {"type": "integer", "minimum": 0},
+        "error_rate": {"$ref": "#/$defs/attemptRate"},
+        "latency_ms": {"$ref": "#/$defs/latencyScopes"},
+        "official_p90_gate": {"$ref": "#/$defs/officialP90Gate"}
+      }
+    },
+    "performanceEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "run_id",
+        "configuration_id",
+        "created_at",
+        "warmup",
+        "measured",
+        "cost"
+      ],
+      "properties": {
+        "schema_version": {"const": "performance-evidence-v2"},
+        "run_id": {"$ref": "#/$defs/identifier"},
+        "configuration_id": {"$ref": "#/$defs/identifier"},
+        "created_at": {"type": "string", "format": "date-time"},
+        "warmup": {"$ref": "#/$defs/warmupPerformance"},
+        "measured": {"$ref": "#/$defs/measuredPerformance"},
+        "cost": {"$ref": "#/$defs/costEvidence"}
+      }
+    },
+    "operationsSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "run_id",
+        "configuration_id",
+        "observations",
+        "source_artifact_ids",
+        "generated_at"
+      ],
+      "properties": {
+        "schema_version": {"const": "rag-operations-summary-v2"},
+        "run_id": {"$ref": "#/$defs/identifier"},
+        "configuration_id": {"$ref": "#/$defs/identifier"},
+        "observations": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/metricObservation"}
+        },
+        "source_artifact_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/identifier"}
+        },
+        "generated_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "artifactDescriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "artifact_id",
+        "format",
+        "media_type",
+        "relative_path",
+        "sha256_digest",
+        "byte_size",
+        "created_at"
+      ],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/identifier"},
+        "artifact_id": {"$ref": "#/$defs/identifier"},
+        "format": {"$ref": "#/$defs/identifier"},
+        "media_type": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*$"
+        },
+        "relative_path": {"type": "string", "minLength": 1},
+        "sha256_digest": {"$ref": "#/$defs/sha256Digest"},
+        "byte_size": {"type": "integer", "minimum": 0},
+        "created_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dataset_id",
+        "dataset_version",
+        "dataset_content_hash",
+        "corpus_id",
+        "corpus_version",
+        "corpus_content_hash",
+        "case_set_content_hash",
+        "experiment_plan_id",
+        "experiment_plan_content_hash",
+        "configuration_id",
+        "code_revision",
+        "pricing_version",
+        "pricing_content_hash"
+      ],
+      "properties": {
+        "dataset_id": {"$ref": "#/$defs/identifier"},
+        "dataset_version": {"$ref": "#/$defs/identifier"},
+        "dataset_content_hash": {"$ref": "#/$defs/sha256Digest"},
+        "corpus_id": {"$ref": "#/$defs/identifier"},
+        "corpus_version": {"$ref": "#/$defs/identifier"},
+        "corpus_content_hash": {"$ref": "#/$defs/sha256Digest"},
+        "case_set_content_hash": {"$ref": "#/$defs/sha256Digest"},
+        "experiment_plan_id": {"$ref": "#/$defs/identifier"},
+        "experiment_plan_content_hash": {"$ref": "#/$defs/sha256Digest"},
+        "configuration_id": {"$ref": "#/$defs/identifier"},
+        "code_revision": {"$ref": "#/$defs/identifier"},
+        "pricing_version": {"$ref": "#/$defs/identifier"},
+        "pricing_content_hash": {"$ref": "#/$defs/sha256Digest"}
+      }
+    },
+    "categoryResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["category_id", "case_count", "observations"],
+      "properties": {
+        "category_id": {"$ref": "#/$defs/identifier"},
+        "case_count": {"type": "integer", "minimum": 1},
+        "observations": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/metricObservation"}
+        }
+      }
+    },
+    "failedCase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "case_id",
+        "category_ids",
+        "failed_metric_ids",
+        "safe_reason_code",
+        "trace_id"
+      ],
+      "properties": {
+        "case_id": {"$ref": "#/$defs/identifier"},
+        "category_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/identifier"}
+        },
+        "failed_metric_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/identifier"}
+        },
+        "safe_reason_code": {"$ref": "#/$defs/identifier"},
+        "trace_id": {
+          "oneOf": [
+            {"$ref": "#/$defs/identifier"},
+            {"$ref": "#/$defs/unavailable"}
+          ]
+        }
+      }
+    }
+  }
+}

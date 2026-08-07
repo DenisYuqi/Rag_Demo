@@ -1,20 +1,30 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from decimal import Decimal
 
 import pytest
 from pydantic import ValidationError
 
 from rag_mvp.domain.evaluation import (
+    AcceptanceContract,
+    AcceptanceMetricRequirement,
+    ArtifactDescriptor,
     EvaluationRun,
     EvaluationRunStatus,
+    EvidenceComparisonOperator,
     IssueClassification,
     IssueEvidence,
+    MetricObservation,
+    MetricObservationStatus,
     ModelAttempt,
     ModelAttemptStatus,
     ModelPricing,
     ModelRole,
+    OperationsSummary,
     TokenUsage,
+    UnavailableValue,
+    adapt_v1_metric_aggregates,
 )
 
 
@@ -114,3 +124,124 @@ def test_issue_evidence_rejects_missing_observability_references() -> None:
             post_fix_value=0.9,
             relative_improvement_percent=28.57,
         )
+
+
+def test_schema_v2_metric_observation_never_turns_missing_evidence_into_zero() -> None:
+    missing = UnavailableValue(reason="no-eligible-cases")
+    observation = MetricObservation(
+        metric_id="cache-hit-rate",
+        unit="ratio",
+        value=missing,
+        numerator=missing,
+        denominator=missing,
+        eligible=False,
+        scorer_version="cache-rate-v2",
+        status=MetricObservationStatus.UNAVAILABLE,
+    )
+
+    assert observation.model_dump(mode="json")["value"] == {
+        "status": "unavailable",
+        "reason": "no-eligible-cases",
+    }
+    with pytest.raises(ValidationError, match="denominator must be non-zero"):
+        MetricObservation(
+            metric_id="answer-compliance",
+            unit="ratio",
+            value=0.0,
+            numerator=0.0,
+            denominator=0,
+            eligible=True,
+            scorer_version="answer-compliance-v2",
+            status=MetricObservationStatus.OBSERVED,
+        )
+    with pytest.raises(ValidationError, match="ratio metric value disagrees"):
+        MetricObservation(
+            metric_id="answer-compliance",
+            unit="ratio",
+            value=1.0,
+            numerator=11.0,
+            denominator=10,
+            eligible=True,
+            scorer_version="answer-compliance-v2",
+            status=MetricObservationStatus.OBSERVED,
+        )
+
+
+def test_schema_v2_contract_operations_and_artifact_models_are_immutable() -> None:
+    observation = MetricObservation(
+        metric_id="answer-compliance",
+        unit="ratio",
+        value=0.9,
+        numerator=9.0,
+        denominator=10,
+        eligible=True,
+        threshold=0.9,
+        operator=EvidenceComparisonOperator.GREATER_THAN_OR_EQUAL,
+        scorer_version="answer-compliance-v2",
+        status=MetricObservationStatus.PASSED,
+        evidence_references=("case-1",),
+    )
+    contract = AcceptanceContract(
+        contract_id="original-pdf-advanced",
+        version="2.0.0",
+        gate_profile_version="rag-advanced-quality-thresholds-v2",
+        dataset_schema_version="rag-evaluation-dataset-v2",
+        performance_schema_version="rag-performance-evidence-v2",
+        cost_schema_version="rag-cost-evidence-v2",
+        metric_requirements=(
+            AcceptanceMetricRequirement(
+                metric_id="answer-compliance",
+                threshold=0.9,
+                operator=EvidenceComparisonOperator.GREATER_THAN_OR_EQUAL,
+            ),
+        ),
+    )
+    operations = OperationsSummary(
+        run_id="run-v2",
+        configuration_id="config-v2",
+        observations=(observation,),
+        source_artifact_ids=("report-json",),
+    )
+    artifact = ArtifactDescriptor(
+        schema_version="2.0.0",
+        artifact_id="report-json",
+        format="json",
+        media_type="application/json",
+        relative_path="artifacts/report.json",
+        sha256_digest=f"sha256:{'a' * 64}",
+        byte_size=128,
+    )
+
+    assert contract.metric_requirements[0].minimum_denominator == 1
+    assert operations.observations == (observation,)
+    assert ArtifactDescriptor.model_validate_json(artifact.model_dump_json()) == artifact
+    with pytest.raises(ValidationError, match="safe relative POSIX path"):
+        ArtifactDescriptor.model_validate(
+            {**artifact.model_dump(), "relative_path": "../report.json"}
+        )
+
+
+def test_v1_adapter_is_read_only_and_marks_v2_only_fields_unavailable() -> None:
+    legacy = {
+        "faithfulness": {
+            "value": 0.95,
+            "eligible_cases": 8,
+            "operator": ">",
+            "threshold": 0.85,
+            "passed": True,
+            "rationale": "threshold_passed",
+        }
+    }
+    original = deepcopy(legacy)
+
+    observations = adapt_v1_metric_aggregates(
+        legacy,
+        scorer_versions={"faithfulness": "faithfulness-v1"},
+    )
+
+    assert legacy == original
+    assert len(observations) == 1
+    assert observations[0].value == 0.95
+    assert observations[0].denominator == 8
+    assert isinstance(observations[0].numerator, UnavailableValue)
+    assert observations[0].status is MetricObservationStatus.UNAVAILABLE

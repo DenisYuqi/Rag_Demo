@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="rag-report-schema-version" content="{{ report.schema_version }}">
+  <meta name="rag-report-run-id" content="{{ report.run_id }}">
+  <title>RAG evaluation report v2 — {{ report.run_id }}</title>
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+    body { margin: 0 auto; max-width: 82rem; padding: 2rem; line-height: 1.45; }
+    header, section { border-bottom: 1px solid #8885; margin-bottom: 1.5rem; padding-bottom: 1.25rem; }
+    h1, h2 { line-height: 1.15; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid #8885; padding: .45rem .6rem; text-align: left; vertical-align: top; }
+    th { background: #8882; }
+    .pass { color: #16803a; font-weight: 700; }
+    .fail, .unavailable { color: #b42318; font-weight: 700; }
+    .mono, pre { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: .8rem; }
+    .card { border: 1px solid #8885; border-radius: .35rem; padding: .8rem; }
+    .label { color: #666; display: block; font-size: .82rem; }
+    details { margin: .6rem 0; }
+    pre { overflow: auto; white-space: pre-wrap; word-break: break-word; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>RAG evaluation report v2 / RAG 评估报告 v2</h1>
+    <div class="cards">
+      <div class="card"><span class="label">Run ID / 运行 ID</span><span class="mono" data-report-pointer="/run_id">{{ report.run_id | display_value }}</span></div>
+      <div class="card"><span class="label">Schema / 架构</span><span data-report-pointer="/schema_version">{{ report.schema_version | display_value }}</span></div>
+      <div class="card"><span class="label">Generated / 生成时间</span><span data-report-pointer="/generated_at">{{ report.generated_at | display_value }}</span></div>
+      <div class="card"><span class="label">Configuration / 配置</span><span class="mono" data-report-pointer="/configuration_id">{{ report.configuration_id | display_value }}</span></div>
+      <div class="card"><span class="label">Status / 状态</span><span class="{{ report.status }}" data-report-pointer="/status">{{ report.status | display_value }}</span></div>
+      <div class="card"><span class="label">Accepted / 已验收</span><span class="{{ 'pass' if report.accepted else 'fail' }}" data-report-pointer="/accepted">{{ report.accepted | display_value }}</span></div>
+    </div>
+  </header>
+
+  <section>
+    <h2>Acceptance gates / 验收门禁</h2>
+    {% for gate in report.gates %}
+      {% set gate_index = loop.index0 %}
+      <h3 data-report-pointer="/gates/{{ loop.index0 }}/gate_id">{{ gate.gate_id | display_value }}</h3>
+      <div class="cards">
+        <div class="card"><span class="label">Profile</span><span data-report-pointer="/gates/{{ loop.index0 }}/profile_version">{{ gate.profile_version | display_value }}</span></div>
+        <div class="card"><span class="label">Status</span><span class="{{ gate.status }}" data-report-pointer="/gates/{{ loop.index0 }}/status">{{ gate.status | display_value }}</span></div>
+        <div class="card"><span class="label">Valid</span><span data-report-pointer="/gates/{{ loop.index0 }}/valid">{{ gate.valid | display_value }}</span></div>
+        <div class="card"><span class="label">Passed</span><span data-report-pointer="/gates/{{ loop.index0 }}/passed">{{ gate.passed | display_value }}</span></div>
+      </div>
+      <table>
+        <thead><tr><th>Metric</th><th>Value</th><th>Numerator</th><th>Denominator</th><th>Threshold</th><th>Decision</th></tr></thead>
+        <tbody>
+        {% for observation in gate.observations %}
+          <tr>
+            <th data-report-pointer="/gates/{{ gate_index }}/observations/{{ loop.index0 }}/metric_id">{{ observation.metric_id | display_value }}</th>
+            <td data-report-pointer="/gates/{{ gate_index }}/observations/{{ loop.index0 }}/value">{{ observation.value | display_value }}</td>
+            <td data-report-pointer="/gates/{{ gate_index }}/observations/{{ loop.index0 }}/numerator">{{ observation.numerator | display_value }}</td>
+            <td data-report-pointer="/gates/{{ gate_index }}/observations/{{ loop.index0 }}/denominator">{{ observation.denominator | display_value }}</td>
+            <td><span data-report-pointer="/gates/{{ gate_index }}/observations/{{ loop.index0 }}/operator">{{ observation.operator | display_value }}</span> <span data-report-pointer="/gates/{{ gate_index }}/observations/{{ loop.index0 }}/threshold">{{ observation.threshold | display_value }}</span></td>
+            <td class="{{ observation.status }}" data-report-pointer="/gates/{{ gate_index }}/observations/{{ loop.index0 }}/status">{{ observation.status | display_value }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    {% endfor %}
+  </section>
+
+  <section>
+    <h2>Performance and cost / 性能与成本</h2>
+    <div class="cards">
+      <div class="card"><span class="label">Warm-up attempts (excluded)</span><span data-report-pointer="/performance_evidence/warmup/attempt_count">{{ report.performance_evidence.warmup.attempt_count | display_value }}</span></div>
+      <div class="card"><span class="label">Measured HTTP attempts</span><span data-report-pointer="/performance_evidence/measured/http_attempt_count">{{ report.performance_evidence.measured.http_attempt_count | display_value }}</span></div>
+      <div class="card"><span class="label">Successful logical attempts</span><span data-report-pointer="/performance_evidence/measured/successful_logical_attempt_count">{{ report.performance_evidence.measured.successful_logical_attempt_count | display_value }}</span></div>
+      <div class="card"><span class="label">All-attempt P90 (ms)</span><span data-report-pointer="/performance_evidence/measured/official_p90_gate/observed_ms">{{ report.performance_evidence.measured.official_p90_gate.observed_ms | display_value }}</span></div>
+      <div class="card"><span class="label">Pricing version</span><span data-report-pointer="/performance_evidence/cost/pricing/pricing_version">{{ report.performance_evidence.cost.pricing.pricing_version | display_value }}</span></div>
+      <div class="card"><span class="label">Total cost</span><span data-report-pointer="/performance_evidence/cost/total_cost">{{ report.performance_evidence.cost.total_cost | display_value }}</span> <span data-report-pointer="/performance_evidence/cost/pricing/currency">{{ report.performance_evidence.cost.pricing.currency | display_value }}</span></div>
+      <div class="card"><span class="label">Cost / 1,000 logical attempts</span><span data-report-pointer="/performance_evidence/cost/cost_per_1000_logical_attempts/per_1000">{{ report.performance_evidence.cost.cost_per_1000_logical_attempts.per_1000 | display_value }}</span></div>
+      <div class="card"><span class="label">Cost / 1,000 successes</span><span data-report-pointer="/performance_evidence/cost/cost_per_1000_successes/per_1000">{{ report.performance_evidence.cost.cost_per_1000_successes.per_1000 | display_value }}</span></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Operations / 运维摘要</h2>
+    <table>
+      <thead><tr><th>Metric</th><th>Value</th><th>Numerator</th><th>Denominator</th><th>Unit</th></tr></thead>
+      <tbody>
+      {% for observation in report.operations_summary.observations %}
+        <tr>
+          <th data-report-pointer="/operations_summary/observations/{{ loop.index0 }}/metric_id">{{ observation.metric_id | display_value }}</th>
+          <td data-report-pointer="/operations_summary/observations/{{ loop.index0 }}/value">{{ observation.value | display_value }}</td>
+          <td data-report-pointer="/operations_summary/observations/{{ loop.index0 }}/numerator">{{ observation.numerator | display_value }}</td>
+          <td data-report-pointer="/operations_summary/observations/{{ loop.index0 }}/denominator">{{ observation.denominator | display_value }}</td>
+          <td data-report-pointer="/operations_summary/observations/{{ loop.index0 }}/unit">{{ observation.unit | display_value }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Category results / 分类结果</h2>
+    {% if report.category_results %}
+      <table>
+        <thead><tr><th>Category</th><th>Cases</th><th>Observations</th></tr></thead>
+        <tbody>
+        {% for category in report.category_results %}
+          <tr>
+            <th data-report-pointer="/category_results/{{ loop.index0 }}/category_id">{{ category.category_id | display_value }}</th>
+            <td data-report-pointer="/category_results/{{ loop.index0 }}/case_count">{{ category.case_count | display_value }}</td>
+            <td data-report-pointer="/category_results/{{ loop.index0 }}/observations">{{ category.observations | canonical_value }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    {% else %}<p>No category evidence / 暂无分类证据</p>{% endif %}
+  </section>
+
+  <section>
+    <h2>Failed cases / 失败案例</h2>
+    {% if report.failed_cases %}
+      <table>
+        <thead><tr><th>Case</th><th>Categories</th><th>Metrics</th><th>Safe reason</th><th>Trace</th></tr></thead>
+        <tbody>
+        {% for item in report.failed_cases %}
+          <tr>
+            <th data-report-pointer="/failed_cases/{{ loop.index0 }}/case_id">{{ item.case_id | display_value }}</th>
+            <td data-report-pointer="/failed_cases/{{ loop.index0 }}/category_ids">{{ item.category_ids | canonical_value }}</td>
+            <td data-report-pointer="/failed_cases/{{ loop.index0 }}/failed_metric_ids">{{ item.failed_metric_ids | canonical_value }}</td>
+            <td data-report-pointer="/failed_cases/{{ loop.index0 }}/safe_reason_code">{{ item.safe_reason_code | display_value }}</td>
+            <td data-report-pointer="/failed_cases/{{ loop.index0 }}/trace_id">{{ item.trace_id | display_value }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    {% else %}<p>No failed cases / 无失败案例</p>{% endif %}
+  </section>
+
+  <section>
+    <h2>Artifacts / 证据制品</h2>
+    <table>
+      <thead><tr><th>ID</th><th>Format</th><th>Media type</th><th>Relative path</th><th>SHA-256</th><th>Bytes</th></tr></thead>
+      <tbody>
+      {% for artifact in report.artifacts %}
+        <tr>
+          <th data-report-pointer="/artifacts/{{ loop.index0 }}/artifact_id">{{ artifact.artifact_id | display_value }}</th>
+          <td data-report-pointer="/artifacts/{{ loop.index0 }}/format">{{ artifact.format | display_value }}</td>
+          <td data-report-pointer="/artifacts/{{ loop.index0 }}/media_type">{{ artifact.media_type | display_value }}</td>
+          <td class="mono" data-report-pointer="/artifacts/{{ loop.index0 }}/relative_path">{{ artifact.relative_path | display_value }}</td>
+          <td class="mono" data-report-pointer="/artifacts/{{ loop.index0 }}/sha256_digest">{{ artifact.sha256_digest | display_value }}</td>
+          <td data-report-pointer="/artifacts/{{ loop.index0 }}/byte_size">{{ artifact.byte_size | display_value }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Canonical source sections / 规范源数据</h2>
+    <p>Each visible value below is verified against the embedded canonical JSON.</p>
+    {% for section in canonical_sections %}
+      <details>
+        <summary>{{ section }}</summary>
+        <pre data-report-pointer="/{{ section | pointer_token }}">{{ report[section] | canonical_value }}</pre>
+      </details>
+    {% endfor %}
+  </section>
+
+  <script id="evaluation-report-json" type="application/json">{{ canonical_json | safe }}</script>
+</body>
+</html>

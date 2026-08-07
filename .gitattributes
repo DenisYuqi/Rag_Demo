@@ -1,3 +1,8 @@
 evaluations/releases/**/*.json text eol=lf
 evaluations/releases/**/*.html text eol=lf
 evaluations/releases/**/README.md text eol=lf
+evaluations/datasets/**/*.json text eol=lf
+evaluations/datasets/**/*.jsonl text eol=lf
+evaluations/datasets/**/*.md text eol=lf
+evaluations/datasets/**/*.txt text eol=lf
+evaluations/datasets/**/*.pdf binary

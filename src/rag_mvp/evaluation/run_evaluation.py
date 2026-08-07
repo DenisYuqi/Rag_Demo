@@ -89,10 +89,10 @@ async def run_real_evaluation(
 ) -> tuple[Path, dict[str, object]]:
     """Execute and persist one run; dynamic text never enters the summary."""
 
+    dataset = load_dataset(dataset_path)
     settings = _settings(data_root, profile)
     if settings.provider_backend != "openai" or settings.provider_readiness_errors():
         raise RuntimeError("evaluation_provider_unavailable")
-    dataset = load_dataset(dataset_path)
     run_directory = (output_root / run_id).resolve()
     run_directory.mkdir(mode=0o700, parents=True, exist_ok=False)
     composition = compose_openai_services(settings, DEFAULT_REDACTOR)

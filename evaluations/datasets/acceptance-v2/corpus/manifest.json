@@ -1,0 +1,30 @@
+{
+  "active_sources": {
+    "src_accept_architecture": 1,
+    "src_accept_cross_language": 1,
+    "src_accept_identifiers": 1,
+    "src_accept_scanned_notice": 1,
+    "src_accept_technical_api": 1,
+    "src_accept_travel_authority": 1,
+    "src_accept_travel_draft": 1
+  },
+  "chunk_count": 7,
+  "chunks_file": "chunks.jsonl",
+  "content_hash": "sha256:3aeeae28fe27695af03eb0390ff035469032ab48d319414bdbf2f5419cc40997",
+  "derivation": {
+    "chunking_version": "structure-page-token-v1",
+    "extraction_version": "extraction-v1",
+    "normalization_version": "unicode-nfc-lines-v1",
+    "overlap_tokens": 80,
+    "target_tokens": 500,
+    "tokenizer_version": "unicode-word-cjk-v1"
+  },
+  "document_count": 7,
+  "documents_file": "documents.jsonl",
+  "hash_algorithm": "sha256-canonical-json-v1",
+  "schema_version": "rag-evaluation-corpus-v2",
+  "snapshot_id": "acceptance-bilingual-corpus",
+  "source_manifest_file": "source-manifest.json",
+  "source_manifest_hash": "sha256:5ea01368800ae63e4630370452468a54b6ab774a943a163f2c6205b31be0c2a9",
+  "version": "2.0.0"
+}

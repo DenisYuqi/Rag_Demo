@@ -2,9 +2,19 @@ from __future__ import annotations
 
 import pytest
 
+from rag_mvp.domain.evaluation import (
+    EvidenceComparisonOperator,
+    GateStatus,
+    MetricObservation,
+    MetricObservationStatus,
+    UnavailableValue,
+)
 from rag_mvp.evaluation.grounding_metrics import MetricAggregate, MetricName
 from rag_mvp.evaluation.quality_gate import (
+    ADVANCED_QUALITY_GATE_VERSION,
     QUALITY_GATE_VERSION,
+    AdvancedMetricName,
+    AdvancedQualityGate,
     QualityGate,
     ThresholdOperator,
 )
@@ -35,6 +45,42 @@ def _passing_values() -> dict[MetricName, MetricAggregate]:
         MetricName.REFUSAL_APPROPRIATENESS: _aggregate(
             MetricName.REFUSAL_APPROPRIATENESS,
             0.80,
+        ),
+    }
+
+
+def _advanced_observation(
+    metric: AdvancedMetricName,
+    value: float,
+    *,
+    denominator: int = 100,
+) -> MetricObservation:
+    return MetricObservation(
+        metric_id=metric.value,
+        unit="ratio",
+        value=value,
+        numerator=value * denominator,
+        denominator=denominator,
+        eligible=True,
+        scorer_version=f"{metric.value}-v2",
+        status=MetricObservationStatus.OBSERVED,
+    )
+
+
+def _advanced_passing_values() -> dict[AdvancedMetricName, MetricObservation]:
+    return {
+        AdvancedMetricName.FAITHFULNESS: _advanced_observation(
+            AdvancedMetricName.FAITHFULNESS, 0.85
+        ),
+        AdvancedMetricName.CONTEXT_PRECISION: _advanced_observation(
+            AdvancedMetricName.CONTEXT_PRECISION, 0.70
+        ),
+        AdvancedMetricName.ANSWER_COMPLIANCE: _advanced_observation(
+            AdvancedMetricName.ANSWER_COMPLIANCE, 0.90
+        ),
+        AdvancedMetricName.STYLE: _advanced_observation(AdvancedMetricName.STYLE, 0.85),
+        AdvancedMetricName.REFUSAL_APPROPRIATENESS: _advanced_observation(
+            AdvancedMetricName.REFUSAL_APPROPRIATENESS, 0.90
         ),
     }
 
@@ -157,3 +203,85 @@ def test_metric_without_eligible_cases_makes_gate_invalid() -> None:
     assert not result.passed
     assert decision.value is None
     assert decision.rationale == "required_metric_has_no_eligible_cases"
+
+
+def test_advanced_v2_profile_uses_five_inclusive_unrounded_thresholds() -> None:
+    result = AdvancedQualityGate().evaluate(_advanced_passing_values())
+
+    assert result.profile_version == ADVANCED_QUALITY_GATE_VERSION
+    assert result.status is GateStatus.PASSED
+    assert result.valid and result.passed
+    assert tuple(item.metric_id for item in result.observations) == tuple(
+        metric.value for metric in AdvancedMetricName
+    )
+    assert all(
+        item.operator is EvidenceComparisonOperator.GREATER_THAN_OR_EQUAL
+        for item in result.observations
+    )
+    assert tuple(item.threshold for item in result.observations) == (
+        0.85,
+        0.70,
+        0.90,
+        0.85,
+        0.90,
+    )
+
+
+@pytest.mark.parametrize("metric", list(AdvancedMetricName))
+def test_advanced_v2_gate_has_no_weighted_compensation(metric: AdvancedMetricName) -> None:
+    values = {required: _advanced_observation(required, 1.0) for required in AdvancedMetricName}
+    threshold = {
+        AdvancedMetricName.FAITHFULNESS: 0.85,
+        AdvancedMetricName.CONTEXT_PRECISION: 0.70,
+        AdvancedMetricName.ANSWER_COMPLIANCE: 0.90,
+        AdvancedMetricName.STYLE: 0.85,
+        AdvancedMetricName.REFUSAL_APPROPRIATENESS: 0.90,
+    }[metric]
+    values[metric] = _advanced_observation(metric, threshold - 1e-12, denominator=1)
+
+    result = AdvancedQualityGate().evaluate(values)
+
+    assert result.valid
+    assert not result.passed
+    assert result.status is GateStatus.FAILED
+    assert result.failure_reasons == (f"{metric.value}-threshold-not-met",)
+
+
+def test_advanced_v2_gate_requires_nonzero_complete_denominator_evidence() -> None:
+    values = _advanced_passing_values()
+    missing = UnavailableValue(reason="not-recorded-in-v1")
+    values[AdvancedMetricName.ANSWER_COMPLIANCE] = MetricObservation(
+        metric_id=AdvancedMetricName.ANSWER_COMPLIANCE.value,
+        unit="ratio",
+        value=0.95,
+        numerator=missing,
+        denominator=10,
+        eligible=True,
+        threshold=0.90,
+        operator=EvidenceComparisonOperator.GREATER_THAN_OR_EQUAL,
+        scorer_version="legacy-v1",
+        status=MetricObservationStatus.UNAVAILABLE,
+    )
+
+    result = AdvancedQualityGate().evaluate(values)
+
+    assert not result.valid
+    assert not result.passed
+    assert result.status is GateStatus.UNAVAILABLE
+    assert result.failure_reasons == ("answer-compliance-unavailable",)
+    decision = result.observations[2]
+    assert decision.status is MetricObservationStatus.UNAVAILABLE
+    assert isinstance(decision.denominator, UnavailableValue)
+
+
+def test_advanced_v2_gate_missing_metric_and_incomplete_execution_are_explicit() -> None:
+    values = _advanced_passing_values()
+    del values[AdvancedMetricName.STYLE]
+
+    result = AdvancedQualityGate().evaluate(values, case_executions_complete=False)
+
+    assert not result.valid
+    assert result.failure_reasons == (
+        "case-executions-incomplete",
+        "style-unavailable",
+    )

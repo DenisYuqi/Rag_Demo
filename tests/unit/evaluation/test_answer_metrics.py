@@ -4,12 +4,16 @@ import pytest
 
 from rag_mvp.evaluation.answer_metrics import (
     ANSWER_COMPLETENESS_SCORER_VERSION,
+    ANSWER_COMPLIANCE_SCORER_VERSION,
     REFUSAL_APPROPRIATENESS_SCORER_VERSION,
     STYLE_CONSISTENCY_SCORER_VERSION,
     AnswerCompletenessScorer,
+    AnswerComplianceScorer,
+    ComplianceAssessment,
     RefusalAppropriatenessScorer,
     StyleAssessment,
     StyleConsistencyScorer,
+    aggregate_answer_compliance,
 )
 from rag_mvp.evaluation.grounding_metrics import (
     EvidenceVerdict,
@@ -24,6 +28,15 @@ def _style(expectation_id: str, satisfied: bool) -> StyleAssessment:
         expectation_id=expectation_id,
         satisfied=satisfied,
         rationale="check_satisfied" if satisfied else "check_violated",
+    )
+
+
+def _obligation(obligation_id: str, satisfied: bool) -> ComplianceAssessment:
+    return ComplianceAssessment(
+        obligation_id=obligation_id,
+        satisfied=satisfied,
+        rationale="obligation_satisfied" if satisfied else "obligation_violated",
+        evidence_references=(f"evidence-{obligation_id}",),
     )
 
 
@@ -100,6 +113,134 @@ def test_completeness_has_strict_eligibility_and_expected_fact_registry() -> Non
             response_outcome="answer",
             expected_fact_ids=("fact-1",),
             covered_fact_ids=("fact-invented",),
+        )
+
+
+def test_answer_compliance_requires_every_obligation_without_compensation() -> None:
+    scorer = AnswerComplianceScorer()
+    passed = scorer.score(
+        case_id="case-pass",
+        answerable=True,
+        response_outcome="answer",
+        assessments=(
+            _obligation("required-language", True),
+            _obligation("required-citation", True),
+        ),
+    )
+    failed = scorer.score(
+        case_id="case-fail",
+        answerable=True,
+        response_outcome="answer",
+        assessments=(
+            _obligation("required-language", True),
+            _obligation("required-citation", False),
+        ),
+    )
+
+    assert passed.scorer_version == ANSWER_COMPLIANCE_SCORER_VERSION
+    assert (passed.score, passed.numerator, passed.denominator) == (1.0, 1, 1)
+    assert (failed.score, failed.numerator, failed.denominator) == (0.0, 0, 1)
+    assert failed.rationale == "satisfied_obligations=1; obligations=2"
+
+
+def test_completeness_can_pass_while_independent_compliance_fails() -> None:
+    completeness = AnswerCompletenessScorer().score(
+        case_id="case-regression",
+        answerable=True,
+        response_outcome="answer",
+        expected_fact_ids=("fact-1",),
+        covered_fact_ids=("fact-1",),
+    )
+    compliance = AnswerComplianceScorer().score(
+        case_id="case-regression",
+        answerable=True,
+        response_outcome="answer",
+        assessments=(_obligation("respond-in-chinese", False),),
+    )
+
+    assert completeness.score == 1.0
+    assert compliance.score == 0.0
+
+
+def test_answer_compliance_aggregate_retains_compliant_and_eligible_counts() -> None:
+    scorer = AnswerComplianceScorer()
+    results = tuple(
+        scorer.score(
+            case_id=f"case-{index}",
+            answerable=True,
+            response_outcome="answer",
+            assessments=(_obligation("response-form", index < 2),),
+        )
+        for index in range(3)
+    )
+
+    aggregate = aggregate_answer_compliance(results)
+    observation = aggregate.to_metric_observation()
+
+    assert aggregate.score == 2 / 3
+    assert (aggregate.numerator, aggregate.denominator, aggregate.total_cases) == (2, 3, 3)
+    assert observation.value == 2 / 3
+    assert observation.numerator == 2
+    assert observation.denominator == 3
+    assert observation.evidence_references == ("case-0", "case-1", "case-2")
+
+
+def test_answer_compliance_keeps_answerable_refusal_in_denominator() -> None:
+    result = AnswerComplianceScorer().score(
+        case_id="case-refused",
+        answerable=True,
+        response_outcome="refusal",
+        assessments=(_obligation("answer-in-request-language", True),),
+    )
+
+    assert result.eligible
+    assert (result.score, result.numerator, result.denominator) == (0.0, 0, 1)
+    assert result.rationale == "answer_required_for_compliance"
+
+
+def test_refusal_compliance_is_scored_but_excluded_from_answerable_aggregate() -> None:
+    scorer = AnswerComplianceScorer()
+    answer = scorer.score(
+        case_id="case-answer",
+        answerable=True,
+        response_outcome="answer",
+        assessments=(_obligation("citation-required", True),),
+    )
+    refusal = scorer.score(
+        case_id="case-refusal",
+        answerable=False,
+        response_outcome="refusal",
+        assessments=(
+            _obligation("safe-reason", True),
+            _obligation("actionable-guidance", False),
+        ),
+    )
+
+    aggregate = aggregate_answer_compliance((answer, refusal))
+
+    assert refusal.scored
+    assert not refusal.eligible
+    assert refusal.score == 0.0
+    assert refusal.rationale == "satisfied_obligations=1; obligations=2"
+    assert refusal.to_metric_observation().value == 0.0
+    assert (aggregate.numerator, aggregate.denominator, aggregate.total_cases) == (1, 1, 2)
+
+
+def test_answer_compliance_rejects_missing_or_duplicate_obligations() -> None:
+    scorer = AnswerComplianceScorer()
+    with pytest.raises(MetricInputError, match="compliance_obligations_missing"):
+        scorer.score(
+            case_id="case-missing",
+            answerable=True,
+            response_outcome="answer",
+            assessments=(),
+        )
+    with pytest.raises(MetricInputError, match="duplicate_compliance_obligation"):
+        scorer.score(
+            case_id="case-duplicate",
+            answerable=True,
+            response_outcome="answer",
+            assessments=(_obligation("language", True), _obligation("language", True)),
         )
 
 

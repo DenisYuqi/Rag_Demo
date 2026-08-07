@@ -1,0 +1,73 @@
+{
+  "artifacts": [
+    {
+      "artifact_kind": "source",
+      "byte_size": 497,
+      "content_hash": "sha256:b8ae4b02fa9a1b7c1a44241fc3e4f608a4964f791c72afb8391c205f295fa2b0",
+      "media_type": "text/markdown",
+      "relative_path": "sources/technical-api-spec-en.md",
+      "source_id": "src_accept_technical_api"
+    },
+    {
+      "artifact_kind": "source",
+      "byte_size": 504,
+      "content_hash": "sha256:e1d75fcb9d6f6dec819fda168454f4a3af90f8400597539745742f707fabac58",
+      "media_type": "text/markdown",
+      "relative_path": "sources/architecture-guide-zh.md",
+      "source_id": "src_accept_architecture"
+    },
+    {
+      "artifact_kind": "source",
+      "byte_size": 447,
+      "content_hash": "sha256:83df250118786ef785f1f3c5da1ed2313281eeb3e7884942362efbf544ff99c8",
+      "media_type": "text/markdown",
+      "relative_path": "sources/identifier-catalog-bilingual.md",
+      "source_id": "src_accept_identifiers"
+    },
+    {
+      "artifact_kind": "source",
+      "byte_size": 417,
+      "content_hash": "sha256:c5131f2be6616fea5da36319e4b9e012a4f6bfdf2857ca500092753ccfab7434",
+      "media_type": "text/markdown",
+      "relative_path": "sources/travel-policy-authoritative-zh.md",
+      "source_id": "src_accept_travel_authority"
+    },
+    {
+      "artifact_kind": "source",
+      "byte_size": 351,
+      "content_hash": "sha256:030012b50bbf1d6cab34d14f891fd607550b6fc5905e34a180ce89ed21aeb2c5",
+      "media_type": "text/markdown",
+      "relative_path": "sources/travel-policy-draft-distractor-en.md",
+      "source_id": "src_accept_travel_draft"
+    },
+    {
+      "artifact_kind": "source",
+      "byte_size": 469,
+      "content_hash": "sha256:035010809c743727144fa8b3e2bf617b922bf510d1c17b03a72d06bc57175658",
+      "media_type": "text/markdown",
+      "relative_path": "sources/cross-language-operations-en.md",
+      "source_id": "src_accept_cross_language"
+    },
+    {
+      "artifact_kind": "source",
+      "byte_size": 14724,
+      "content_hash": "sha256:191d97278c65a9d3bb8e8677ebf5cc80bbe3341423e8927912f26947fa5221b7",
+      "media_type": "application/pdf",
+      "relative_path": "sources/scanned-expense-notice.pdf",
+      "source_id": "src_accept_scanned_notice"
+    },
+    {
+      "artifact_kind": "derivation",
+      "byte_size": 97,
+      "content_hash": "sha256:7b57e9071ca27ab7228e673d4aaa0121ecaab2d6f285c24011c25f9466abe292",
+      "media_type": "text/plain",
+      "relative_path": "sources/scanned-expense-notice-ocr.txt",
+      "source_id": "src_accept_scanned_notice"
+    }
+  ],
+  "content_hash": "sha256:5ea01368800ae63e4630370452468a54b6ab774a943a163f2c6205b31be0c2a9",
+  "hash_algorithm": "sha256-canonical-json-v1",
+  "schema_version": "rag-evaluation-source-manifest-v2",
+  "snapshot_id": "acceptance-bilingual-corpus",
+  "version": "2.0.0"
+}

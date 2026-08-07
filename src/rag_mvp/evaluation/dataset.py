@@ -8,7 +8,7 @@ import unicodedata
 from collections import Counter
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, cast
 
 from pydantic import Field, StringConstraints, ValidationError, field_validator, model_validator
 
@@ -26,6 +26,9 @@ from rag_mvp.ingestion.normalization import NORMALIZATION_VERSION, normalize_doc
 
 DATASET_SCHEMA_VERSION = "rag-evaluation-dataset-v1"
 CORPUS_SCHEMA_VERSION = "rag-evaluation-corpus-v1"
+DATASET_SCHEMA_VERSION_V2 = "rag-evaluation-dataset-v2"
+CORPUS_SCHEMA_VERSION_V2 = "rag-evaluation-corpus-v2"
+SOURCE_MANIFEST_SCHEMA_VERSION_V2 = "rag-evaluation-source-manifest-v2"
 HASH_ALGORITHM = "sha256-canonical-json-v1"
 
 type SemanticVersion = Annotated[
@@ -71,6 +74,35 @@ class EvaluationMetric(StrEnum):
     REFUSAL_APPROPRIATENESS = "refusal-appropriateness"
 
 
+class EvaluationMetricV2(StrEnum):
+    """Independent metrics required by the advanced acceptance contract."""
+
+    FAITHFULNESS = "faithfulness"
+    CONTEXT_PRECISION = "context-precision"
+    ANSWER_COMPLIANCE = "answer-compliance"
+    STYLE = "style"
+    REFUSAL_APPROPRIATENESS = "refusal-appropriateness"
+
+
+class ChallengeTag(StrEnum):
+    EXACT_IDENTIFIER_LEXICAL = "exact-identifier-lexical"
+    CROSS_LANGUAGE_SEMANTIC = "cross-language-semantic"
+    PLAUSIBLE_DISTRACTOR = "plausible-distractor"
+    TECHNICAL_SPECIFICATION = "technical-specification"
+    ARCHITECTURE = "architecture"
+    SCANNED_DOCUMENT = "scanned-document"
+    RERANK_SENSITIVE = "rerank-sensitive"
+
+
+class ComplianceObligationKind(StrEnum):
+    REQUIRED_CONTENT = "required-content"
+    PROHIBITED_CONTENT = "prohibited-content"
+    RESPONSE_LANGUAGE = "response-language"
+    RESPONSE_FORMAT = "response-format"
+    CITATION_BEHAVIOR = "citation-behavior"
+    REFUSAL_GUIDANCE = "refusal-guidance"
+
+
 class StyleExpectation(StrEnum):
     ANSWER_IN_REQUEST_LANGUAGE = "answer-in-request-language"
     CITATIONS_REQUIRED = "citations-required"
@@ -86,6 +118,22 @@ class CorpusSnapshotFormat(StrEnum):
 
 ACCEPTANCE_REQUIRED_CATEGORIES: frozenset[EvaluationCategory] = frozenset(EvaluationCategory)
 ACCEPTANCE_REQUIRED_METRICS: frozenset[EvaluationMetric] = frozenset(EvaluationMetric)
+ACCEPTANCE_V2_REQUIRED_METRICS: frozenset[EvaluationMetricV2] = frozenset(EvaluationMetricV2)
+ACCEPTANCE_V2_MINIMUM_CASES = 24
+ACCEPTANCE_V2_MINIMUM_LANGUAGE_COUNTS: dict[EvaluationLanguage, int] = {
+    EvaluationLanguage.CHINESE: 8,
+    EvaluationLanguage.ENGLISH: 8,
+}
+ACCEPTANCE_V2_MINIMUM_MULTI_TURN_CASES = 4
+ACCEPTANCE_V2_MINIMUM_CHALLENGE_COUNTS: dict[ChallengeTag, int] = {
+    ChallengeTag.EXACT_IDENTIFIER_LEXICAL: 2,
+    ChallengeTag.CROSS_LANGUAGE_SEMANTIC: 2,
+    ChallengeTag.PLAUSIBLE_DISTRACTOR: 2,
+    ChallengeTag.TECHNICAL_SPECIFICATION: 2,
+    ChallengeTag.ARCHITECTURE: 2,
+    ChallengeTag.SCANNED_DOCUMENT: 2,
+    ChallengeTag.RERANK_SENSITIVE: 2,
+}
 
 
 def _require_unique(values: tuple[object, ...], *, label: str) -> None:
@@ -124,6 +172,42 @@ class ExpectedFact(DomainModel):
     def evidence_ids_are_unique(cls, value: tuple[str, ...]) -> tuple[str, ...]:
         _require_unique(value, label="expected-fact evidence IDs")
         return value
+
+
+class ResponseInstruction(DomainModel):
+    instruction_id: Identifier
+    text: NonEmptyText
+
+
+class ComplianceObligation(DomainModel):
+    obligation_id: Identifier
+    version: SemanticVersion
+    instruction_id: Identifier
+    kind: ComplianceObligationKind
+    description: NonEmptyText
+    expected_values: Annotated[tuple[NonEmptyText, ...], Field(min_length=1)]
+
+    @field_validator("expected_values")
+    @classmethod
+    def expected_values_are_unique(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        _require_unique(value, label="compliance-obligation expected values")
+        return value
+
+
+class RefusalGuidanceExpectation(DomainModel):
+    expected: bool
+    reason_codes: tuple[Identifier, ...]
+    guidance_required: bool
+    language: EvaluationLanguage
+
+    @model_validator(mode="after")
+    def validate_refusal_expectation(self) -> RefusalGuidanceExpectation:
+        _require_unique(self.reason_codes, label="expected refusal reason codes")
+        if self.expected and not self.reason_codes:
+            raise ValueError("expected refusals require at least one safe reason code")
+        if not self.expected and (self.reason_codes or self.guidance_required):
+            raise ValueError("answerable cases cannot require refusal guidance")
+        return self
 
 
 class EvaluationCase(DomainModel):
@@ -199,6 +283,44 @@ class EvaluationCase(DomainModel):
         return self
 
 
+class EvaluationCaseV2(EvaluationCase):
+    """Acceptance-v2 case with explicit instructions and compliance evidence."""
+
+    permitted_source_ids: tuple[Identifier, ...]
+    response_instructions: Annotated[tuple[ResponseInstruction, ...], Field(min_length=1)]
+    compliance_obligations: Annotated[tuple[ComplianceObligation, ...], Field(min_length=1)]
+    refusal_expectation: RefusalGuidanceExpectation
+    challenge_tags: tuple[ChallengeTag, ...]
+
+    @model_validator(mode="after")
+    def validate_v2_contract(self) -> EvaluationCaseV2:
+        _require_unique(self.permitted_source_ids, label="permitted source IDs")
+        _require_unique(
+            tuple(item.instruction_id for item in self.response_instructions),
+            label="response instruction IDs",
+        )
+        _require_unique(
+            tuple(item.obligation_id for item in self.compliance_obligations),
+            label="compliance obligation IDs",
+        )
+        _require_unique(self.challenge_tags, label="challenge tags")
+
+        instruction_ids = {item.instruction_id for item in self.response_instructions}
+        obligation_instruction_ids = {item.instruction_id for item in self.compliance_obligations}
+        if obligation_instruction_ids != instruction_ids:
+            raise ValueError(
+                "every response instruction must have one or more compliance obligations"
+            )
+        expects_refusal = self.answerability is not Answerability.ANSWERABLE
+        if self.refusal_expectation.expected != expects_refusal:
+            raise ValueError("refusal expectation must match answerability")
+        if self.refusal_expectation.language is not self.language:
+            raise ValueError("refusal guidance language must match the response language")
+        if self.answerability is Answerability.ANSWERABLE and not self.permitted_source_ids:
+            raise ValueError("answerable v2 cases require permitted sources")
+        return self
+
+
 class CorpusReference(DomainModel):
     snapshot_id: Identifier
     version: SemanticVersion
@@ -226,6 +348,91 @@ class DatasetManifest(DomainModel):
     def declared_requirements_are_unique(self) -> DatasetManifest:
         _require_unique(self.required_categories, label="required categories")
         _require_unique(self.required_metrics, label="required metrics")
+        return self
+
+
+class AcceptanceCoverageV2(DomainModel):
+    minimum_case_count: Annotated[int, Field(ge=ACCEPTANCE_V2_MINIMUM_CASES)] = (
+        ACCEPTANCE_V2_MINIMUM_CASES
+    )
+    minimum_language_counts: dict[EvaluationLanguage, Annotated[int, Field(ge=0)]]
+    minimum_multi_turn_cases: Annotated[int, Field(ge=ACCEPTANCE_V2_MINIMUM_MULTI_TURN_CASES)] = (
+        ACCEPTANCE_V2_MINIMUM_MULTI_TURN_CASES
+    )
+    minimum_challenge_counts: dict[ChallengeTag, Annotated[int, Field(ge=0)]]
+
+    @model_validator(mode="after")
+    def require_advanced_minima(self) -> AcceptanceCoverageV2:
+        for language, required in ACCEPTANCE_V2_MINIMUM_LANGUAGE_COUNTS.items():
+            if self.minimum_language_counts.get(language, 0) < required:
+                raise ValueError("acceptance-v2 language minimum is below the contract")
+        for tag, required in ACCEPTANCE_V2_MINIMUM_CHALLENGE_COUNTS.items():
+            if self.minimum_challenge_counts.get(tag, 0) < required:
+                raise ValueError("acceptance-v2 challenge minimum is below the contract")
+        return self
+
+
+class DatasetManifestV2(DomainModel):
+    schema_version: Literal["rag-evaluation-dataset-v2"] = "rag-evaluation-dataset-v2"
+    contract_version: SemanticVersion
+    dataset_id: Identifier
+    version: SemanticVersion
+    content_hash: Sha256Digest
+    hash_algorithm: Literal["sha256-canonical-json-v1"] = "sha256-canonical-json-v1"
+    cases_file: str = "cases.jsonl"
+    case_count: Annotated[int, Field(ge=ACCEPTANCE_V2_MINIMUM_CASES)]
+    corpus: CorpusReference
+    required_categories: Annotated[tuple[EvaluationCategory, ...], Field(min_length=1)]
+    required_metrics: Annotated[tuple[EvaluationMetricV2, ...], Field(min_length=1)]
+    required_languages: Annotated[tuple[EvaluationLanguage, ...], Field(min_length=2)]
+    coverage: AcceptanceCoverageV2
+
+    _safe_cases_file = field_validator("cases_file")(_validate_relative_path)
+
+    @model_validator(mode="after")
+    def declared_requirements_are_unique(self) -> DatasetManifestV2:
+        _require_unique(self.required_categories, label="required categories")
+        _require_unique(self.required_metrics, label="required metrics")
+        _require_unique(self.required_languages, label="required languages")
+        return self
+
+
+class SourceArtifactKind(StrEnum):
+    SOURCE = "source"
+    DERIVATION = "derivation"
+
+
+class CorpusSourceArtifact(DomainModel):
+    source_id: Identifier
+    artifact_kind: SourceArtifactKind
+    relative_path: str
+    media_type: Identifier
+    content_hash: Sha256Digest
+    byte_size: Annotated[int, Field(gt=0)]
+
+    _safe_relative_path = field_validator("relative_path")(_validate_relative_path)
+
+
+class CorpusSourceManifest(DomainModel):
+    schema_version: Literal["rag-evaluation-source-manifest-v2"] = (
+        "rag-evaluation-source-manifest-v2"
+    )
+    snapshot_id: Identifier
+    version: SemanticVersion
+    content_hash: Sha256Digest
+    hash_algorithm: Literal["sha256-canonical-json-v1"] = "sha256-canonical-json-v1"
+    artifacts: Annotated[tuple[CorpusSourceArtifact, ...], Field(min_length=1)]
+
+    @model_validator(mode="after")
+    def source_artifacts_are_unique(self) -> CorpusSourceManifest:
+        _require_unique(
+            tuple((item.source_id, item.artifact_kind) for item in self.artifacts),
+            label="source manifest artifact identities",
+        )
+        _require_unique(
+            tuple(item.relative_path for item in self.artifacts),
+            label="source manifest paths",
+        )
         return self
 
 
@@ -329,10 +536,31 @@ class CorpusSnapshotManifest(DomainModel):
     _safe_chunks_file = field_validator("chunks_file")(_validate_relative_path)
 
 
+class CorpusSnapshotManifestV2(DomainModel):
+    schema_version: Literal["rag-evaluation-corpus-v2"] = "rag-evaluation-corpus-v2"
+    snapshot_id: Identifier
+    version: SemanticVersion
+    content_hash: Sha256Digest
+    hash_algorithm: Literal["sha256-canonical-json-v1"] = "sha256-canonical-json-v1"
+    documents_file: str = "documents.jsonl"
+    chunks_file: str = "chunks.jsonl"
+    source_manifest_file: str = "source-manifest.json"
+    source_manifest_hash: Sha256Digest
+    derivation: CorpusDerivation
+    active_sources: dict[Identifier, Annotated[int, Field(gt=0)]]
+    document_count: Annotated[int, Field(gt=0)]
+    chunk_count: Annotated[int, Field(gt=0)]
+
+    _safe_documents_file = field_validator("documents_file")(_validate_relative_path)
+    _safe_chunks_file = field_validator("chunks_file")(_validate_relative_path)
+    _safe_source_manifest_file = field_validator("source_manifest_file")(_validate_relative_path)
+
+
 class CorpusSnapshot(DomainModel):
-    manifest: CorpusSnapshotManifest
+    manifest: CorpusSnapshotManifest | CorpusSnapshotManifestV2
     documents: tuple[CorpusDocument, ...]
     chunks: tuple[CorpusChunk, ...]
+    source_manifest: CorpusSourceManifest | None = None
 
     @property
     def chunks_by_id(self) -> dict[str, CorpusChunk]:
@@ -341,14 +569,21 @@ class CorpusSnapshot(DomainModel):
 
 class EvaluationDataset(DomainModel):
     root: Path
-    manifest: DatasetManifest
-    cases: tuple[EvaluationCase, ...]
+    manifest: DatasetManifest | DatasetManifestV2
+    cases: tuple[EvaluationCase | EvaluationCaseV2, ...]
     corpus: CorpusSnapshot
     category_counts: dict[EvaluationCategory, int]
-    metric_eligibility_counts: dict[EvaluationMetric, int]
+    metric_eligibility_counts: dict[EvaluationMetric | EvaluationMetricV2, int]
+    language_counts: dict[EvaluationLanguage, int] = Field(default_factory=dict)
+    challenge_counts: dict[ChallengeTag, int] = Field(default_factory=dict)
 
-    def eligible_cases(self, metric: EvaluationMetric | str) -> tuple[EvaluationCase, ...]:
-        resolved = EvaluationMetric(metric)
+    def eligible_cases(
+        self, metric: EvaluationMetric | EvaluationMetricV2 | str
+    ) -> tuple[EvaluationCase | EvaluationCaseV2, ...]:
+        if isinstance(self.manifest, DatasetManifestV2):
+            resolved: EvaluationMetric | EvaluationMetricV2 = EvaluationMetricV2(metric)
+        else:
+            resolved = EvaluationMetric(metric)
         return tuple(case for case in self.cases if _is_eligible(case, resolved))
 
     @property
@@ -396,7 +631,7 @@ def calculate_chunk_content_hash(text: str) -> str:
 
 
 def calculate_corpus_content_hash(
-    manifest: CorpusSnapshotManifest,
+    manifest: CorpusSnapshotManifest | CorpusSnapshotManifestV2,
     documents: tuple[CorpusDocument, ...],
     chunks: tuple[CorpusChunk, ...],
 ) -> str:
@@ -409,13 +644,18 @@ def calculate_corpus_content_hash(
 
 
 def calculate_dataset_content_hash(
-    manifest: DatasetManifest,
-    cases: tuple[EvaluationCase, ...],
+    manifest: DatasetManifest | DatasetManifestV2,
+    cases: tuple[EvaluationCase | EvaluationCaseV2, ...],
 ) -> str:
     payload = {
         "manifest": manifest.model_dump(mode="json", exclude={"content_hash"}),
         "cases": [case.model_dump(mode="json") for case in cases],
     }
+    return _sha256_bytes(_canonical_json_bytes(payload))
+
+
+def calculate_source_manifest_content_hash(manifest: CorpusSourceManifest) -> str:
+    payload = manifest.model_dump(mode="json", exclude={"content_hash"})
     return _sha256_bytes(_canonical_json_bytes(payload))
 
 
@@ -445,6 +685,29 @@ def _read_object(path: Path, model_type: type[DomainModel], *, label: str) -> Do
         raise DatasetValidationError(f"{label} must be a JSON object")
     try:
         return model_type.model_validate(payload)
+    except ValidationError as exc:
+        raise DatasetValidationError(f"invalid {label} schema") from exc
+
+
+def _read_versioned_object(
+    path: Path,
+    model_types: dict[str, type[DomainModel]],
+    *,
+    label: str,
+) -> DomainModel:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise DatasetValidationError(f"missing {label}") from exc
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise DatasetValidationError(f"invalid {label}") from exc
+    if not isinstance(payload, dict):
+        raise DatasetValidationError(f"{label} must be a JSON object")
+    schema_version = payload.get("schema_version")
+    if not isinstance(schema_version, str) or schema_version not in model_types:
+        raise DatasetValidationError(f"unsupported {label} schema version")
+    try:
+        return model_types[schema_version].model_validate(payload)
     except ValidationError as exc:
         raise DatasetValidationError(f"invalid {label} schema") from exc
 
@@ -483,18 +746,24 @@ def _read_jsonl(
     return tuple(records)
 
 
-def _is_eligible(case: EvaluationCase, metric: EvaluationMetric) -> bool:
+def _is_eligible(
+    case: EvaluationCase | EvaluationCaseV2,
+    metric: EvaluationMetric | EvaluationMetricV2,
+) -> bool:
     if metric in {
         EvaluationMetric.FAITHFULNESS,
         EvaluationMetric.CONTEXT_PRECISION,
         EvaluationMetric.ANSWER_COMPLETENESS,
+        EvaluationMetricV2.FAITHFULNESS,
+        EvaluationMetricV2.CONTEXT_PRECISION,
+        EvaluationMetricV2.ANSWER_COMPLIANCE,
     }:
         return (
             case.answerability is Answerability.ANSWERABLE
             and bool(case.expected_facts)
             and bool(case.authoritative_evidence_ids)
         )
-    if metric is EvaluationMetric.STYLE_CONSISTENCY:
+    if metric in {EvaluationMetric.STYLE_CONSISTENCY, EvaluationMetricV2.STYLE}:
         return bool(case.style_expectations)
     return True
 
@@ -554,7 +823,7 @@ def _derive_document_chunks(
 
 def _validate_reproduced_chunks(
     corpus_root: Path,
-    manifest: CorpusSnapshotManifest,
+    manifest: CorpusSnapshotManifest | CorpusSnapshotManifestV2,
     documents: tuple[CorpusDocument, ...],
     chunks: tuple[CorpusChunk, ...],
 ) -> None:
@@ -591,17 +860,78 @@ def _validate_reproduced_chunks(
                 raise DatasetValidationError("corpus chunk does not match production derivation")
 
 
+def _validate_source_manifest(
+    corpus_root: Path,
+    corpus_manifest: CorpusSnapshotManifestV2,
+    documents: tuple[CorpusDocument, ...],
+) -> CorpusSourceManifest:
+    value = _read_object(
+        _resolve_relative(corpus_root, corpus_manifest.source_manifest_file),
+        CorpusSourceManifest,
+        label="source manifest",
+    )
+    assert isinstance(value, CorpusSourceManifest)
+    if (
+        value.snapshot_id != corpus_manifest.snapshot_id
+        or value.version != corpus_manifest.version
+        or value.content_hash != corpus_manifest.source_manifest_hash
+    ):
+        raise DatasetValidationError("source manifest identity mismatch")
+    if calculate_source_manifest_content_hash(value) != value.content_hash:
+        raise DatasetValidationError("source manifest content hash mismatch")
+
+    expected: list[CorpusSourceArtifact] = []
+    for document in documents:
+        source_path = _resolve_relative(corpus_root, document.source_path)
+        expected.append(
+            CorpusSourceArtifact(
+                source_id=document.source_id,
+                artifact_kind=SourceArtifactKind.SOURCE,
+                relative_path=document.source_path,
+                media_type=document.media_type,
+                content_hash=document.content_hash,
+                byte_size=source_path.stat().st_size,
+            )
+        )
+        if document.derivation_artifact_path is not None:
+            assert document.derivation_artifact_hash is not None
+            derivation_path = _resolve_relative(
+                corpus_root,
+                document.derivation_artifact_path,
+            )
+            expected.append(
+                CorpusSourceArtifact(
+                    source_id=document.source_id,
+                    artifact_kind=SourceArtifactKind.DERIVATION,
+                    relative_path=document.derivation_artifact_path,
+                    media_type="text/plain",
+                    content_hash=document.derivation_artifact_hash,
+                    byte_size=derivation_path.stat().st_size,
+                )
+            )
+
+    def key(item: CorpusSourceArtifact) -> tuple[str, str]:
+        return item.source_id, item.artifact_kind.value
+
+    if tuple(sorted(value.artifacts, key=key)) != tuple(sorted(expected, key=key)):
+        raise DatasetValidationError("source manifest does not match corpus sources")
+    return value
+
+
 def _validate_corpus(
     dataset_root: Path,
     reference: CorpusReference,
 ) -> CorpusSnapshot:
     manifest_path = _resolve_relative(dataset_root, reference.manifest_file)
-    manifest_value = _read_object(
+    manifest_value = _read_versioned_object(
         manifest_path,
-        CorpusSnapshotManifest,
+        {
+            CORPUS_SCHEMA_VERSION: CorpusSnapshotManifest,
+            CORPUS_SCHEMA_VERSION_V2: CorpusSnapshotManifestV2,
+        },
         label="corpus manifest",
     )
-    assert isinstance(manifest_value, CorpusSnapshotManifest)
+    assert isinstance(manifest_value, (CorpusSnapshotManifest, CorpusSnapshotManifestV2))
     manifest = manifest_value
     if (
         manifest.snapshot_id != reference.snapshot_id
@@ -672,7 +1002,17 @@ def _validate_corpus(
     calculated_hash = calculate_corpus_content_hash(manifest, documents, chunks)
     if calculated_hash != manifest.content_hash:
         raise DatasetValidationError("corpus snapshot content hash mismatch")
-    return CorpusSnapshot(manifest=manifest, documents=documents, chunks=chunks)
+    source_manifest = (
+        _validate_source_manifest(corpus_root, manifest, documents)
+        if isinstance(manifest, CorpusSnapshotManifestV2)
+        else None
+    )
+    return CorpusSnapshot(
+        manifest=manifest,
+        documents=documents,
+        chunks=chunks,
+        source_manifest=source_manifest,
+    )
 
 
 def _validate_dataset_contract(
@@ -721,6 +1061,102 @@ def _validate_dataset_contract(
     return category_counts, metric_counts
 
 
+def _validate_v2_dataset_contract(
+    manifest: DatasetManifestV2,
+    cases: tuple[EvaluationCaseV2, ...],
+    corpus: CorpusSnapshot,
+    *,
+    acceptance_mode: bool,
+) -> tuple[
+    dict[EvaluationCategory, int],
+    dict[EvaluationMetricV2, int],
+    dict[EvaluationLanguage, int],
+    dict[ChallengeTag, int],
+]:
+    if len(cases) != manifest.case_count:
+        raise DatasetValidationError("case count does not match the dataset manifest")
+    try:
+        _require_unique(tuple(case.case_id for case in cases), label="case IDs")
+    except ValueError as exc:
+        raise DatasetValidationError(str(exc)) from exc
+
+    chunks_by_id = corpus.chunks_by_id
+    source_ids = {document.source_id for document in corpus.documents}
+    for case in cases:
+        missing_evidence = set(case.authoritative_evidence_ids) - chunks_by_id.keys()
+        if missing_evidence:
+            raise DatasetValidationError("case references unknown authoritative evidence")
+        missing_sources = set(case.permitted_source_ids) - source_ids
+        if missing_sources:
+            raise DatasetValidationError("case references unknown permitted source")
+        evidence_sources = {
+            chunks_by_id[evidence_id].source_id for evidence_id in case.authoritative_evidence_ids
+        }
+        if not evidence_sources <= set(case.permitted_source_ids):
+            raise DatasetValidationError("authoritative evidence is outside permitted sources")
+        if (
+            case.category is EvaluationCategory.OCR
+            or ChallengeTag.SCANNED_DOCUMENT in case.challenge_tags
+        ) and not any(
+            chunks_by_id[evidence_id].extraction_method is ExtractionMethod.OCR
+            for evidence_id in case.authoritative_evidence_ids
+        ):
+            raise DatasetValidationError(
+                "scanned-document cases require authoritative OCR evidence"
+            )
+
+    category_counts = dict(Counter(case.category for case in cases))
+    language_counts = dict(Counter(case.language for case in cases))
+    challenge_counts = dict(Counter(tag for case in cases for tag in case.challenge_tags))
+    metric_counts = {
+        metric: sum(_is_eligible(case, metric) for case in cases) for metric in EvaluationMetricV2
+    }
+
+    if any(category_counts.get(category, 0) < 1 for category in manifest.required_categories):
+        raise DatasetValidationError("a required category has no eligible case")
+    if any(language_counts.get(language, 0) < 1 for language in manifest.required_languages):
+        raise DatasetValidationError("a required language has no eligible case")
+    if any(metric_counts.get(metric, 0) < 1 for metric in manifest.required_metrics):
+        raise DatasetValidationError("a required metric has no eligible denominator")
+
+    if acceptance_mode:
+        if set(manifest.required_categories) < ACCEPTANCE_REQUIRED_CATEGORIES:
+            raise DatasetValidationError("acceptance-v2 manifest omits required categories")
+        if set(manifest.required_metrics) < ACCEPTANCE_V2_REQUIRED_METRICS:
+            raise DatasetValidationError("acceptance-v2 manifest omits required metrics")
+        if not {
+            EvaluationLanguage.CHINESE,
+            EvaluationLanguage.ENGLISH,
+        } <= set(manifest.required_languages):
+            raise DatasetValidationError("acceptance-v2 manifest omits required languages")
+        if len(cases) < manifest.coverage.minimum_case_count:
+            raise DatasetValidationError("acceptance-v2 case coverage is below the contract")
+        for language, required in manifest.coverage.minimum_language_counts.items():
+            if language_counts.get(language, 0) < required:
+                raise DatasetValidationError(
+                    "acceptance-v2 language coverage is below the contract"
+                )
+        multi_turn_cases = tuple(case for case in cases if case.history)
+        if len(multi_turn_cases) < manifest.coverage.minimum_multi_turn_cases:
+            raise DatasetValidationError("acceptance-v2 multi-turn coverage is below the contract")
+        multi_turn_languages = {case.language for case in multi_turn_cases}
+        if (
+            not {
+                EvaluationLanguage.CHINESE,
+                EvaluationLanguage.ENGLISH,
+            }
+            <= multi_turn_languages
+        ):
+            raise DatasetValidationError("acceptance-v2 multi-turn cases must span both languages")
+        for tag, required in manifest.coverage.minimum_challenge_counts.items():
+            if challenge_counts.get(tag, 0) < required:
+                raise DatasetValidationError(
+                    "acceptance-v2 challenge coverage is below the contract"
+                )
+
+    return category_counts, metric_counts, language_counts, challenge_counts
+
+
 def load_dataset(
     path: str | Path,
     *,
@@ -732,27 +1168,52 @@ def load_dataset(
     root = Path(path).resolve()
     if not root.is_dir():
         raise DatasetValidationError("dataset root does not exist")
-    manifest_value = _read_object(root / "manifest.json", DatasetManifest, label="dataset manifest")
-    assert isinstance(manifest_value, DatasetManifest)
+    manifest_value = _read_versioned_object(
+        root / "manifest.json",
+        {
+            DATASET_SCHEMA_VERSION: DatasetManifest,
+            DATASET_SCHEMA_VERSION_V2: DatasetManifestV2,
+        },
+        label="dataset manifest",
+    )
+    assert isinstance(manifest_value, (DatasetManifest, DatasetManifestV2))
     manifest = manifest_value
     if expected_corpus_version is not None and manifest.corpus.version != expected_corpus_version:
         raise DatasetValidationError("dataset corpus version does not match the requested corpus")
 
     case_values = _read_jsonl(
         _resolve_relative(root, manifest.cases_file),
-        EvaluationCase,
+        EvaluationCaseV2 if isinstance(manifest, DatasetManifestV2) else EvaluationCase,
         label="evaluation cases",
     )
     cases = tuple(value for value in case_values if isinstance(value, EvaluationCase))
     corpus = _validate_corpus(root, manifest.corpus)
     if calculate_dataset_content_hash(manifest, cases) != manifest.content_hash:
         raise DatasetValidationError("dataset content hash mismatch")
-    category_counts, metric_counts = _validate_dataset_contract(
-        manifest,
-        cases,
-        corpus,
-        acceptance_mode=acceptance_mode,
-    )
+    if isinstance(manifest, DatasetManifestV2):
+        v2_cases = cast(tuple[EvaluationCaseV2, ...], cases)
+        category_counts, v2_metric_counts, language_counts, challenge_counts = (
+            _validate_v2_dataset_contract(
+                manifest,
+                v2_cases,
+                corpus,
+                acceptance_mode=acceptance_mode,
+            )
+        )
+        metric_counts: dict[EvaluationMetric | EvaluationMetricV2, int] = {
+            metric: count for metric, count in v2_metric_counts.items()
+        }
+    else:
+        v1_cases = cases
+        category_counts, v1_metric_counts = _validate_dataset_contract(
+            manifest,
+            v1_cases,
+            corpus,
+            acceptance_mode=acceptance_mode,
+        )
+        metric_counts = {metric: count for metric, count in v1_metric_counts.items()}
+        language_counts = dict(Counter(case.language for case in v1_cases))
+        challenge_counts = {}
     return EvaluationDataset(
         root=root,
         manifest=manifest,
@@ -760,6 +1221,8 @@ def load_dataset(
         corpus=corpus,
         category_counts=category_counts,
         metric_eligibility_counts=metric_counts,
+        language_counts=language_counts,
+        challenge_counts=challenge_counts,
     )
 
 
@@ -807,7 +1270,16 @@ def materialize_production_documents(
 __all__ = [
     "ACCEPTANCE_REQUIRED_CATEGORIES",
     "ACCEPTANCE_REQUIRED_METRICS",
+    "ACCEPTANCE_V2_MINIMUM_CASES",
+    "ACCEPTANCE_V2_MINIMUM_CHALLENGE_COUNTS",
+    "ACCEPTANCE_V2_MINIMUM_LANGUAGE_COUNTS",
+    "ACCEPTANCE_V2_MINIMUM_MULTI_TURN_CASES",
+    "ACCEPTANCE_V2_REQUIRED_METRICS",
+    "AcceptanceCoverageV2",
     "Answerability",
+    "ChallengeTag",
+    "ComplianceObligation",
+    "ComplianceObligationKind",
     "ConversationTurn",
     "CorpusChunk",
     "CorpusDerivation",
@@ -816,19 +1288,29 @@ __all__ = [
     "CorpusSnapshot",
     "CorpusSnapshotFormat",
     "CorpusSnapshotManifest",
+    "CorpusSnapshotManifestV2",
+    "CorpusSourceArtifact",
+    "CorpusSourceManifest",
     "DatasetManifest",
+    "DatasetManifestV2",
     "DatasetValidationError",
     "EvaluationCase",
+    "EvaluationCaseV2",
     "EvaluationCategory",
     "EvaluationDataset",
     "EvaluationLanguage",
     "EvaluationMetric",
+    "EvaluationMetricV2",
     "ExpectedFact",
+    "RefusalGuidanceExpectation",
+    "ResponseInstruction",
+    "SourceArtifactKind",
     "StyleExpectation",
     "calculate_chunk_content_hash",
     "calculate_corpus_content_hash",
     "calculate_dataset_content_hash",
     "calculate_source_content_hash",
+    "calculate_source_manifest_content_hash",
     "compute_corpus_content_hash",
     "compute_dataset_content_hash",
     "load_dataset",

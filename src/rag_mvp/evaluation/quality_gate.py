@@ -9,9 +9,19 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import cast
 
+from rag_mvp.domain.evaluation import (
+    EvidenceComparisonOperator,
+    GateResult,
+    GateStatus,
+    MetricObservation,
+    MetricObservationStatus,
+    UnavailableValue,
+)
 from rag_mvp.evaluation.grounding_metrics import MetricAggregate, MetricName
 
 QUALITY_GATE_VERSION = "rag-quality-thresholds-v1"
+ADVANCED_QUALITY_GATE_VERSION = "rag-advanced-quality-thresholds-v2"
+ADVANCED_QUALITY_GATE_ID = "advanced-quality"
 
 
 class QualityGateInputError(ValueError):
@@ -25,6 +35,14 @@ class QualityGateInputError(ValueError):
 class ThresholdOperator(StrEnum):
     GREATER_THAN = ">"
     GREATER_THAN_OR_EQUAL = ">="
+
+
+class AdvancedMetricName(StrEnum):
+    FAITHFULNESS = "faithfulness"
+    CONTEXT_PRECISION = "context-precision"
+    ANSWER_COMPLIANCE = "answer-compliance"
+    STYLE = "style"
+    REFUSAL_APPROPRIATENESS = "refusal-appropriateness"
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +82,16 @@ QUALITY_THRESHOLDS: Mapping[MetricName, QualityThreshold] = MappingProxyType(
             0.80,
             ThresholdOperator.GREATER_THAN_OR_EQUAL,
         ),
+    }
+)
+
+ADVANCED_QUALITY_THRESHOLDS: Mapping[AdvancedMetricName, float] = MappingProxyType(
+    {
+        AdvancedMetricName.FAITHFULNESS: 0.85,
+        AdvancedMetricName.CONTEXT_PRECISION: 0.70,
+        AdvancedMetricName.ANSWER_COMPLIANCE: 0.90,
+        AdvancedMetricName.STYLE: 0.85,
+        AdvancedMetricName.REFUSAL_APPROPRIATENESS: 0.90,
     }
 )
 
@@ -206,6 +234,154 @@ class QualityGate:
             passed=passed,
             rationale="threshold_passed" if passed else "threshold_failed",
         )
+
+
+class AdvancedQualityGate:
+    """Evaluate the schema-v2 advanced profile without changing the v1 quality gate."""
+
+    version = ADVANCED_QUALITY_GATE_VERSION
+    gate_id = ADVANCED_QUALITY_GATE_ID
+
+    def evaluate(
+        self,
+        observations: Mapping[AdvancedMetricName | str, MetricObservation],
+        *,
+        case_executions_complete: bool = True,
+    ) -> GateResult:
+        if type(case_executions_complete) is not bool:
+            raise QualityGateInputError("quality_execution_completeness_invalid")
+        values = _advanced_observations(observations)
+        decisions = tuple(
+            _advanced_decision(metric, ADVANCED_QUALITY_THRESHOLDS[metric], values.get(metric))
+            for metric in AdvancedMetricName
+        )
+        complete = all(
+            decision.status is not MetricObservationStatus.UNAVAILABLE for decision in decisions
+        )
+        valid = case_executions_complete and complete
+        passed = valid and all(
+            decision.status is MetricObservationStatus.PASSED for decision in decisions
+        )
+        failure_reasons: list[str] = []
+        if not case_executions_complete:
+            failure_reasons.append("case-executions-incomplete")
+        for metric, decision in zip(AdvancedMetricName, decisions, strict=True):
+            if decision.status is MetricObservationStatus.UNAVAILABLE:
+                failure_reasons.append(f"{metric.value}-unavailable")
+            elif decision.status is MetricObservationStatus.FAILED:
+                failure_reasons.append(f"{metric.value}-threshold-not-met")
+        return GateResult(
+            gate_id=self.gate_id,
+            profile_version=self.version,
+            status=(
+                GateStatus.UNAVAILABLE
+                if not valid
+                else GateStatus.PASSED
+                if passed
+                else GateStatus.FAILED
+            ),
+            valid=valid,
+            passed=passed,
+            case_executions_complete=case_executions_complete,
+            observations=decisions,
+            failure_reasons=tuple(failure_reasons),
+        )
+
+
+def _advanced_decision(
+    metric: AdvancedMetricName,
+    threshold: float,
+    observation: MetricObservation | None,
+) -> MetricObservation:
+    missing = UnavailableValue(reason="required-evidence-missing")
+    if observation is None:
+        return MetricObservation(
+            metric_id=metric.value,
+            unit="ratio",
+            value=missing,
+            numerator=missing,
+            denominator=missing,
+            eligible=False,
+            threshold=threshold,
+            operator=EvidenceComparisonOperator.GREATER_THAN_OR_EQUAL,
+            scorer_version=missing,
+            status=MetricObservationStatus.UNAVAILABLE,
+        )
+
+    value = observation.value
+    numerator = observation.numerator
+    denominator = observation.denominator
+    scorer_version = observation.scorer_version
+    complete = (
+        observation.eligible
+        and observation.unit == "ratio"
+        and isinstance(value, float)
+        and isinstance(numerator, float)
+        and isinstance(denominator, int)
+        and denominator > 0
+        and isinstance(scorer_version, str)
+        and 0 <= value <= 1
+        and 0 <= numerator <= denominator
+        and math.isclose(value, numerator / denominator, rel_tol=1e-12, abs_tol=1e-12)
+    )
+    if not complete:
+        unavailable = UnavailableValue(reason="invalid-aggregate-evidence")
+        return MetricObservation(
+            metric_id=metric.value,
+            unit="ratio",
+            value=unavailable,
+            numerator=unavailable,
+            denominator=unavailable,
+            eligible=False,
+            threshold=threshold,
+            operator=EvidenceComparisonOperator.GREATER_THAN_OR_EQUAL,
+            scorer_version=(scorer_version if isinstance(scorer_version, str) else unavailable),
+            status=MetricObservationStatus.UNAVAILABLE,
+            evidence_references=observation.evidence_references,
+        )
+    assert isinstance(value, float)
+    assert isinstance(numerator, float)
+    assert isinstance(denominator, int)
+    assert isinstance(scorer_version, str)
+    passed = value >= threshold
+    return MetricObservation(
+        metric_id=metric.value,
+        unit="ratio",
+        value=value,
+        numerator=numerator,
+        denominator=denominator,
+        eligible=True,
+        threshold=threshold,
+        operator=EvidenceComparisonOperator.GREATER_THAN_OR_EQUAL,
+        scorer_version=scorer_version,
+        status=(MetricObservationStatus.PASSED if passed else MetricObservationStatus.FAILED),
+        evidence_references=observation.evidence_references,
+    )
+
+
+def _advanced_observations(
+    values: object,
+) -> dict[AdvancedMetricName, MetricObservation]:
+    if not isinstance(values, Mapping):
+        raise QualityGateInputError("quality_observations_invalid")
+    resolved: dict[AdvancedMetricName, MetricObservation] = {}
+    for raw_metric, raw_observation in cast(Mapping[object, object], values).items():
+        try:
+            metric = (
+                raw_metric
+                if isinstance(raw_metric, AdvancedMetricName)
+                else AdvancedMetricName(cast(str, raw_metric))
+            )
+        except (TypeError, ValueError):
+            raise QualityGateInputError("unknown_advanced_quality_metric") from None
+        if not isinstance(raw_observation, MetricObservation):
+            raise QualityGateInputError("quality_observation_invalid")
+        if raw_observation.metric_id != metric.value:
+            raise QualityGateInputError("quality_observation_identity_mismatch")
+        if metric in resolved:
+            raise QualityGateInputError("duplicate_advanced_quality_metric")
+        resolved[metric] = raw_observation
+    return resolved
 
 
 def _aggregates(
