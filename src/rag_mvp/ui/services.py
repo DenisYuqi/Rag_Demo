@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Protocol
 from uuid import uuid4
 
@@ -144,12 +145,48 @@ class DiagnosticsGateway(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
+class RetrievalProfileGateways:
+    chat: ChatGateway | None = None
+    documents: DocumentGateway | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class WorkbenchServices:
     chat: ChatGateway | None = None
     documents: DocumentGateway | None = None
     evaluations: EvaluationGateway | None = None
     diagnostics: DiagnosticsGateway | None = None
     redactor: Redactor | None = DEFAULT_REDACTOR
+    retrieval_profiles: Mapping[str, RetrievalProfileGateways] = field(default_factory=dict)
+    default_retrieval_profile: str = "openai-api"
+
+    def __post_init__(self) -> None:
+        profiles = dict(self.retrieval_profiles)
+        if any(not isinstance(key, str) or not key.strip() for key in profiles):
+            raise ValueError("retrieval_profile_id_invalid")
+        if any(not isinstance(value, RetrievalProfileGateways) for value in profiles.values()):
+            raise TypeError("retrieval_profile_gateways_invalid")
+        if profiles and self.default_retrieval_profile not in profiles:
+            raise ValueError("default_retrieval_profile_missing")
+        object.__setattr__(self, "retrieval_profiles", MappingProxyType(profiles))
+
+    @property
+    def retrieval_profile_ids(self) -> tuple[str, ...]:
+        if self.retrieval_profiles:
+            return tuple(self.retrieval_profiles)
+        return (self.default_retrieval_profile,)
+
+    def chat_for(self, profile_id: str | None) -> ChatGateway | None:
+        if not self.retrieval_profiles:
+            return self.chat if profile_id in {None, self.default_retrieval_profile} else None
+        profile = self.retrieval_profiles.get(profile_id or self.default_retrieval_profile)
+        return None if profile is None else profile.chat
+
+    def documents_for(self, profile_id: str | None) -> DocumentGateway | None:
+        if not self.retrieval_profiles:
+            return self.documents if profile_id in {None, self.default_retrieval_profile} else None
+        profile = self.retrieval_profiles.get(profile_id or self.default_retrieval_profile)
+        return None if profile is None else profile.documents
 
 
 @dataclass(frozen=True, slots=True)
@@ -281,16 +318,27 @@ def configured_workbench_services(
     diagnostics: DiagnosticsGateway | None = None,
     evaluations: EvaluationGateway | None = None,
     redactor: Redactor | None = DEFAULT_REDACTOR,
+    profile_services: Mapping[str, tuple[QARuntimeServices, IngestionService]] | None = None,
 ) -> WorkbenchServices:
     """Compose available backends without claiming unavailable future capabilities."""
 
     chat = SharedQAGateway(qa, redactor) if qa and redactor else None
     documents = SharedDocumentGateway(ingestion) if ingestion is not None else None
-    del settings
+    profiles: dict[str, RetrievalProfileGateways] = {}
+    if profile_services is not None:
+        profiles = {
+            profile_id: RetrievalProfileGateways(
+                chat=SharedQAGateway(profile_qa, redactor) if redactor else None,
+                documents=SharedDocumentGateway(profile_ingestion),
+            )
+            for profile_id, (profile_qa, profile_ingestion) in profile_services.items()
+        }
     return WorkbenchServices(
         chat=chat,
         documents=documents,
         evaluations=evaluations,
         diagnostics=diagnostics,
         redactor=redactor,
+        retrieval_profiles=profiles,
+        default_retrieval_profile=settings.default_retrieval_profile,
     )

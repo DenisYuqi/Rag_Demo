@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, replace
+from typing import Literal
 
 from openai import AsyncOpenAI
 
@@ -38,6 +40,10 @@ from rag_mvp.ingestion.service import IngestionService
 from rag_mvp.observability.diagnostics import SafeRequestDiagnosticStore
 from rag_mvp.performance.deadlines import QALatencyBudgets
 from rag_mvp.performance.worker_pools import RagWorkerPools
+from rag_mvp.providers.bge_adapters import (
+    LocalBgeEmbeddingProvider,
+    LocalBgeRerankingProvider,
+)
 from rag_mvp.providers.models import (
     EmbeddingRequest,
     EmbeddingResult,
@@ -79,6 +85,7 @@ from rag_mvp.storage.layout import DataLayout
 from rag_mvp.storage.repositories import RuntimeRepositories
 
 _ADAPTER_VERSION = "openai-compatible-v1"
+_BGE_ADAPTER_VERSION = "flag-embedding-v1"
 _CLEANUP_TASKS: set[asyncio.Task[None]] = set()
 
 
@@ -145,23 +152,7 @@ def compose_openai_services(
     recorder = PersistentAttemptRecorder(runtime_repositories.provider_usage)
     diagnostics = SafeRequestDiagnosticStore(database, redactor=redactor)
 
-    proxy_url = (
-        settings.openai_proxy_url.get_secret_value()
-        if settings.openai_proxy_url is not None
-        else None
-    )
-    api_key = settings.openai_api_key
-    if api_key is None:
-        raise ValueError("openai_provider_configuration_incomplete")
-    client = create_async_openai_client(
-        OpenAIClientConfig(
-            base_url=settings.openai_base_url,
-            api_key=api_key.get_secret_value(),
-            secret_reference=":".join(("env", "RAG_MVP_OPENAI_API_KEY")),
-            timeout_seconds=settings.provider_timeout_seconds,
-            proxy_url=proxy_url,
-        )
-    )
+    client = _create_openai_client(settings)
     worker_pools = RagWorkerPools()
     try:
         composition = _compose_with_client(
@@ -248,6 +239,64 @@ def compose_openai_services(
         raise
 
 
+def compose_bge_services(settings: Settings, redactor: Redactor) -> ExecutableComposition:
+    """Build the isolated local-retrieval profile with shared API generation."""
+
+    if settings.provider_backend != "openai" or settings.provider_readiness_errors():
+        raise ValueError("openai_provider_configuration_incomplete")
+    if not settings.bge_profile_enabled:
+        raise ValueError("bge_profile_disabled")
+    if not redactor.fully_configured:
+        raise ValueError("safety_configuration_incomplete")
+
+    local_settings = settings.bge_profile_settings()
+    layout = DataLayout.from_root(local_settings.data_root)
+    layout.initialize()
+    database = Database(layout.metadata_db)
+    database.initialize()
+    runtime_repositories = RuntimeRepositories.from_database(database)
+    recorder = PersistentAttemptRecorder(runtime_repositories.provider_usage)
+    diagnostics = SafeRequestDiagnosticStore(database, redactor=redactor)
+    client = _create_openai_client(local_settings)
+    worker_pools = RagWorkerPools()
+    try:
+        return _compose_with_client(
+            local_settings,
+            redactor,
+            layout,
+            runtime_repositories,
+            recorder,
+            diagnostics,
+            client,
+            worker_pools,
+            retrieval_backend="bge",
+        )
+    except Exception:
+        _close_failed_client(client)
+        _close_failed_worker_pools(worker_pools)
+        raise
+
+
+def _create_openai_client(settings: Settings) -> AsyncOpenAI:
+    proxy_url = (
+        settings.openai_proxy_url.get_secret_value()
+        if settings.openai_proxy_url is not None
+        else None
+    )
+    api_key = settings.openai_api_key
+    if api_key is None:
+        raise ValueError("openai_provider_configuration_incomplete")
+    return create_async_openai_client(
+        OpenAIClientConfig(
+            base_url=settings.openai_base_url,
+            api_key=api_key.get_secret_value(),
+            secret_reference=":".join(("env", "RAG_MVP_OPENAI_API_KEY")),
+            timeout_seconds=settings.provider_timeout_seconds,
+            proxy_url=proxy_url,
+        )
+    )
+
+
 def _compose_with_client(
     settings: Settings,
     redactor: Redactor,
@@ -257,20 +306,10 @@ def _compose_with_client(
     diagnostics: SafeRequestDiagnosticStore,
     client: AsyncOpenAI,
     worker_pools: RagWorkerPools,
+    *,
+    retrieval_backend: Literal["openai", "bge"] = "openai",
 ) -> ExecutableComposition:
     provider_alias = _provider_alias(settings.openai_base_url)
-    embedding_identity = EmbeddingSpaceIdentity(
-        provider=provider_alias,
-        model=settings.embedding_model,
-        dimension=settings.embedding_dimension,
-        normalization=NormalizationPolicy.NONE,
-        adapter_version=_ADAPTER_VERSION,
-    )
-    embedding = OpenAIEmbeddingProvider(
-        client,
-        embedding_identity,
-        send_dimensions=settings.openai_send_dimensions,
-    )
     generation = OpenAIChatGenerationProvider(
         client,
         ModelIdentity(provider_alias, settings.generation_model, _ADAPTER_VERSION),
@@ -280,28 +319,80 @@ def _compose_with_client(
         attempt_timeout_seconds=settings.provider_timeout_seconds,
         max_retries=settings.provider_retry_limit,
     )
-    embedding_route: EmbeddingRoute = ProviderRoute(
-        "openai-embedding",
-        embedding,
-        retry_policy,
-    )
     generation_route: GenerationRoute = ProviderRoute(
         "openai-generation",
         generation,
         retry_policy,
     )
-    reranking_routes: tuple[RerankingRoute, ...] = ()
-    if settings.reranking_model is not None:
-        reranking_generation = OpenAIChatGenerationProvider(
+    provider_cleanup: Callable[[], None] | None = None
+    if retrieval_backend == "openai":
+        embedding_identity = EmbeddingSpaceIdentity(
+            provider=provider_alias,
+            model=settings.embedding_model,
+            dimension=settings.embedding_dimension,
+            normalization=NormalizationPolicy.NONE,
+            adapter_version=_ADAPTER_VERSION,
+        )
+        openai_embedding = OpenAIEmbeddingProvider(
             client,
-            ModelIdentity(provider_alias, settings.reranking_model, _ADAPTER_VERSION),
-            max_tokens_parameter=settings.openai_max_tokens_parameter,
+            embedding_identity,
+            send_dimensions=settings.openai_send_dimensions,
         )
-        reranker = OpenAIListwiseRerankingProvider(
-            reranking_generation,
+        embedding_route: EmbeddingRoute = ProviderRoute(
+            "openai-embedding",
+            openai_embedding,
+            retry_policy,
+        )
+        reranking_routes: tuple[RerankingRoute, ...] = ()
+        if settings.reranking_model is not None:
+            reranking_generation = OpenAIChatGenerationProvider(
+                client,
+                ModelIdentity(provider_alias, settings.reranking_model, _ADAPTER_VERSION),
+                max_tokens_parameter=settings.openai_max_tokens_parameter,
+            )
+            openai_reranker = OpenAIListwiseRerankingProvider(
+                reranking_generation,
+                max_candidates=settings.rerank_candidate_limit,
+            )
+            reranking_routes = (
+                ProviderRoute("openai-reranking", openai_reranker, retry_policy),
+            )
+    else:
+        embedding_identity = EmbeddingSpaceIdentity(
+            provider="bge-local",
+            model=settings.embedding_model,
+            dimension=settings.embedding_dimension,
+            normalization=NormalizationPolicy.L2,
+            adapter_version=_BGE_ADAPTER_VERSION,
+        )
+        bge_embedding = LocalBgeEmbeddingProvider(
+            embedding_identity,
+            device=settings.bge_device,
+            use_fp16=settings.bge_use_fp16,
+            batch_size=settings.bge_embedding_batch_size,
+            max_length=settings.bge_embedding_max_length,
+            cache_dir=settings.bge_model_cache_dir,
+        )
+        reranking_model = settings.reranking_model
+        if reranking_model is None:
+            raise ValueError("bge_reranking_model_missing")
+        bge_reranker = LocalBgeRerankingProvider(
+            ModelIdentity("bge-local", reranking_model, _BGE_ADAPTER_VERSION),
+            device=settings.bge_device,
+            use_fp16=settings.bge_use_fp16,
+            batch_size=settings.bge_reranking_batch_size,
+            max_length=settings.bge_reranking_max_length,
             max_candidates=settings.rerank_candidate_limit,
+            cache_dir=settings.bge_model_cache_dir,
         )
-        reranking_routes = (ProviderRoute("openai-reranking", reranker, retry_policy),)
+        embedding_route = ProviderRoute("bge-embedding", bge_embedding, retry_policy)
+        reranking_routes = (ProviderRoute("bge-reranking", bge_reranker, retry_policy),)
+
+        def close_bge_models() -> None:
+            bge_reranker.close()
+            bge_embedding.close()
+
+        provider_cleanup = close_bge_models
     router = ModelProviderRouter(
         embedding_routes=(embedding_route,),
         generation_routes=(generation_route,),
@@ -334,6 +425,7 @@ def _compose_with_client(
             ingestion,
             diagnostics,
             worker_pools,
+            provider_cleanup,
         )
     except Exception:
         ingestion.close()
@@ -352,6 +444,7 @@ def _compose_qa(
     ingestion: IngestionService,
     diagnostics: SafeRequestDiagnosticStore,
     worker_pools: RagWorkerPools,
+    provider_cleanup: Callable[[], None] | None = None,
 ) -> ExecutableComposition:
     conversations = ConversationService(runtime_repositories.sessions)
     snapshots = BoundRetrievalSnapshotFactory(layout, ingestion.repositories.index_revisions)
@@ -417,7 +510,11 @@ def _compose_qa(
         try:
             await client.close()
         finally:
-            await worker_pools.aclose()
+            try:
+                await worker_pools.aclose()
+            finally:
+                if provider_cleanup is not None:
+                    await asyncio.to_thread(provider_cleanup)
 
     qa = QARuntimeServices(
         conversations=conversations,

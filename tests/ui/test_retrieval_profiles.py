@@ -1,0 +1,166 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+import pytest
+
+from rag_mvp.config.settings import Settings
+from rag_mvp.domain.qa import RefusalReason, StreamEventKind, ValidatedStreamEvent
+from rag_mvp.domain.retrieval import RetrievalMode
+from rag_mvp.ui.callbacks import SAFE_UNAVAILABLE, WorkbenchCallbacks
+from rag_mvp.ui.models import BrowserSessionState, ChatServiceResult
+from rag_mvp.ui.services import RetrievalProfileGateways, WorkbenchServices
+from rag_mvp.ui.workbench import create_workbench
+
+pytestmark = pytest.mark.ui
+
+
+@dataclass
+class ProfileChatGateway:
+    profile_id: str
+    submissions: list[str] = field(default_factory=list)
+    resets: list[str | None] = field(default_factory=list)
+
+    async def submit(
+        self,
+        *,
+        owner_id: str,
+        session_id: str | None,
+        question: str,
+        mode: RetrievalMode,
+    ) -> ChatServiceResult:
+        del owner_id, session_id, mode
+        self.submissions.append(question)
+        return ChatServiceResult(
+            event=ValidatedStreamEvent(
+                request_id=f"request-{self.profile_id}",
+                session_id=f"session-{self.profile_id}",
+                sequence=0,
+                kind=StreamEventKind.REFUSAL,
+                response_language="en",
+                content="No indexed evidence.",
+                reason=RefusalReason.INSUFFICIENT_EVIDENCE,
+                terminal=True,
+            )
+        )
+
+    def reset(self, *, owner_id: str, session_id: str | None) -> str:
+        del owner_id
+        self.resets.append(session_id)
+        return f"session-{self.profile_id}"
+
+
+@dataclass
+class ProfileDocumentGateway:
+    profile_id: str
+    reads: int = 0
+
+    def submit_upload(self, payload: object) -> object:
+        del payload
+        raise AssertionError("not used")
+
+    def submit_reindex(self) -> object:
+        raise AssertionError("not used")
+
+    def submit_delete(self, source_id: str) -> object:
+        del source_id
+        raise AssertionError("not used")
+
+    async def run_job(self, job_id: str) -> object:
+        del job_id
+        raise AssertionError("not used")
+
+    def get_job(self, job_id: str) -> object:
+        del job_id
+        return None
+
+    def list_active_documents(self) -> tuple[str, tuple[()]]:
+        self.reads += 1
+        return f"revision-{self.profile_id}", ()
+
+    def list_jobs(self) -> tuple[()]:
+        return ()
+
+
+def profile_services() -> tuple[WorkbenchServices, ProfileChatGateway, ProfileChatGateway]:
+    openai = ProfileChatGateway("openai-api")
+    bge = ProfileChatGateway("bge-local")
+    services = WorkbenchServices(
+        retrieval_profiles={
+            "openai-api": RetrievalProfileGateways(
+                chat=openai,
+                documents=ProfileDocumentGateway("openai-api"),  # type: ignore[arg-type]
+            ),
+            "bge-local": RetrievalProfileGateways(
+                chat=bge,
+                documents=ProfileDocumentGateway("bge-local"),  # type: ignore[arg-type]
+            ),
+        },
+        default_retrieval_profile="openai-api",
+    )
+    return services, openai, bge
+
+
+@pytest.mark.asyncio
+async def test_callbacks_route_explicit_profile_and_reject_unknown_profile() -> None:
+    services, openai, bge = profile_services()
+    callbacks = WorkbenchCallbacks(services)
+
+    rendered = await callbacks.submit_chat(
+        "Question",
+        "hybrid-rerank",
+        None,
+        BrowserSessionState.create(),
+        "bge-local",
+    )
+    unknown = await callbacks.submit_chat(
+        "Question", "hybrid", None, None, "unknown-profile"
+    )
+
+    assert bge.submissions == ["Question"]
+    assert openai.submissions == []
+    assert rendered.state.session_id == "session-bge-local"
+    assert unknown.status_markdown == SAFE_UNAVAILABLE
+
+
+def test_switching_profile_starts_a_fresh_profile_session_and_refreshes_documents() -> None:
+    services, openai, bge = profile_services()
+    callbacks = WorkbenchCallbacks(services)
+    state = BrowserSessionState.create().with_session("session-openai-api")
+
+    switched = callbacks.switch_profile("bge-local", state)
+    documents = callbacks.refresh_documents("bge-local")
+
+    assert switched.state.session_id == "session-bge-local"
+    assert bge.resets == [None]
+    assert openai.resets == []
+    assert "revision-bge-local" in documents.status_markdown
+
+
+def test_workbench_profile_selector_is_wired_to_chat_and_documents() -> None:
+    services, _, _ = profile_services()
+    blocks = create_workbench(Settings(_env_file=None), services)
+    config = blocks.get_config_file()
+    profile = next(
+        component
+        for component in config["components"]
+        if component.get("props", {}).get("label") == "Retrieval profile / 检索模型"
+    )
+
+    assert profile["props"]["choices"] == [
+        ("openai-api", "openai-api"),
+        ("bge-local", "bge-local"),
+    ]
+    assert profile["props"]["value"] == "openai-api"
+    by_api_name = {
+        dependency.get("api_name"): dependency for dependency in config["dependencies"]
+    }
+    for api_name in (
+        "chat_submit",
+        "documents_refresh",
+        "documents_upload",
+        "documents_reindex",
+        "documents_delete",
+    ):
+        assert profile["id"] in by_api_name[api_name]["inputs"]
+    assert by_api_name["retrieval_profile_select"]["inputs"][0] == profile["id"]

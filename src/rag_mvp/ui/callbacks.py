@@ -121,17 +121,19 @@ class WorkbenchCallbacks:
         mode: RetrievalMode | str,
         history: Sequence[Mapping[str, object]] | None,
         state: BrowserSessionState | None,
+        profile_id: str | None = None,
     ) -> ChatRender:
         current = _state(state)
         prior = _history(history)
-        if self.services.chat is None:
+        chat = self.services.chat_for(profile_id)
+        if chat is None:
             return ChatRender(prior, current, "", "", SAFE_UNAVAILABLE)
         if not isinstance(question, str) or not question.strip():
             return ChatRender(prior, current, "", "", "Enter a question. / 请输入问题。")
         correlation = current.active_request_id or f"ui_{uuid4().hex}"
         try:
             selected_mode = RetrievalMode(mode)
-            result = await self.services.chat.submit(
+            result = await chat.submit(
                 owner_id=current.owner_id,
                 session_id=current.session_id,
                 question=question,
@@ -202,12 +204,17 @@ class WorkbenchCallbacks:
                 f"{SAFE_UI_ERROR} Correlation: `{correlation}`",
             )
 
-    def reset_chat(self, state: BrowserSessionState | None) -> ChatRender:
+    def reset_chat(
+        self,
+        state: BrowserSessionState | None,
+        profile_id: str | None = None,
+    ) -> ChatRender:
         current = _state(state)
-        if self.services.chat is None:
+        chat = self.services.chat_for(profile_id)
+        if chat is None:
             return ChatRender((), current, "", "", SAFE_UNAVAILABLE)
         try:
-            session_id = self.services.chat.reset(
+            session_id = chat.reset(
                 owner_id=current.owner_id,
                 session_id=current.session_id,
             )
@@ -221,6 +228,13 @@ class WorkbenchCallbacks:
         except Exception:
             return ChatRender((), current.with_session(None), "", "", SAFE_UI_ERROR)
 
+    def switch_profile(
+        self,
+        profile_id: str | None,
+        state: BrowserSessionState | None,
+    ) -> ChatRender:
+        return self.reset_chat(_state(state).with_session(None), profile_id)
+
     def cancel_chat(
         self,
         history: Sequence[Mapping[str, object]] | None,
@@ -229,8 +243,8 @@ class WorkbenchCallbacks:
         current = _state(state).with_active_request(None)
         return ChatRender(_history(history), current, "", "", SAFE_CANCELLED)
 
-    def refresh_documents(self) -> DocumentsRender:
-        service = self.services.documents
+    def refresh_documents(self, profile_id: str | None = None) -> DocumentsRender:
+        service = self.services.documents_for(profile_id)
         if service is None:
             return DocumentsRender((), (), SAFE_UNAVAILABLE)
         try:
@@ -252,8 +266,9 @@ class WorkbenchCallbacks:
         file_path: str | None,
         source_key: str | None,
         display_title: str | None,
+        profile_id: str | None = None,
     ) -> DocumentsRender:
-        service = self.services.documents
+        service = self.services.documents_for(profile_id)
         if service is None:
             return DocumentsRender((), (), SAFE_UNAVAILABLE)
         if not file_path:
@@ -269,22 +284,31 @@ class WorkbenchCallbacks:
             )
             submitted = service.submit_upload(payload)
             completed = await service.run_job(submitted.job_id)
-            return self._documents_after_job(completed, operation="upload")
+            return self._documents_after_job(
+                completed, operation="upload", profile_id=profile_id
+            )
         except Exception:
             return DocumentsRender((), (), SAFE_UI_ERROR)
 
-    async def reindex_documents(self) -> DocumentsRender:
-        service = self.services.documents
+    async def reindex_documents(self, profile_id: str | None = None) -> DocumentsRender:
+        service = self.services.documents_for(profile_id)
         if service is None:
             return DocumentsRender((), (), SAFE_UNAVAILABLE)
         try:
             completed = await service.run_job(service.submit_reindex().job_id)
-            return self._documents_after_job(completed, operation="reindex")
+            return self._documents_after_job(
+                completed, operation="reindex", profile_id=profile_id
+            )
         except Exception:
             return DocumentsRender((), (), SAFE_UI_ERROR)
 
-    async def delete_document(self, source_id: str, confirmed: bool) -> DocumentsRender:
-        service = self.services.documents
+    async def delete_document(
+        self,
+        source_id: str,
+        confirmed: bool,
+        profile_id: str | None = None,
+    ) -> DocumentsRender:
+        service = self.services.documents_for(profile_id)
         if service is None:
             return DocumentsRender((), (), SAFE_UNAVAILABLE)
         if not confirmed:
@@ -293,7 +317,7 @@ class WorkbenchCallbacks:
             completed = await service.run_job(service.submit_delete(source_id).job_id)
             if completed.status is not IngestionJobStatus.SUCCEEDED:
                 raise ValueError("delete_not_published")
-            refreshed = self.refresh_documents()
+            refreshed = self.refresh_documents(profile_id)
             if any(row and row[0] == source_id for row in refreshed.document_rows):
                 raise ValueError("source_still_active")
             return DocumentsRender(
@@ -625,8 +649,14 @@ class WorkbenchCallbacks:
         except Exception:
             return DiagnosticsRender((), (), SAFE_UI_ERROR)
 
-    def _documents_after_job(self, completed: IngestionJob, *, operation: str) -> DocumentsRender:
-        refreshed = self.refresh_documents()
+    def _documents_after_job(
+        self,
+        completed: IngestionJob,
+        *,
+        operation: str,
+        profile_id: str | None,
+    ) -> DocumentsRender:
+        refreshed = self.refresh_documents(profile_id)
         if completed.status is not IngestionJobStatus.SUCCEEDED:
             code = completed.safe_error_code or "job_failed"
             return DocumentsRender(

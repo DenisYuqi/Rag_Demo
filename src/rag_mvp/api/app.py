@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from collections.abc import AsyncIterator, Coroutine
+from collections.abc import AsyncIterator, Coroutine, Mapping
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, cast
@@ -484,6 +484,9 @@ def create_app(
     owns_evaluation_service: bool = False,
     diagnostics_service: DiagnosticOperations | None = None,
     workbench_services: WorkbenchServices | None = None,
+    workbench_profile_services: Mapping[
+        str, tuple[QARuntimeServices, IngestionService]
+    ] | None = None,
     redactor: Redactor | None = DEFAULT_REDACTOR,
     writer_lock: DataRootWriterLock | None = None,
 ) -> FastAPI:
@@ -535,6 +538,7 @@ def create_app(
             diagnostics=diagnostics_gateway,
             evaluations=cast("EvaluationGateway", evaluation_service),
             redactor=redactor,
+            profile_services=workbench_profile_services,
         )
 
     @asynccontextmanager
@@ -678,7 +682,7 @@ def create_executable_app(settings: Settings | None = None) -> FastAPI:
         resolved_settings.provider_backend == "openai"
         and not resolved_settings.provider_readiness_errors()
     ):
-        from rag_mvp.api.composition import compose_openai_services
+        from rag_mvp.api.composition import compose_bge_services, compose_openai_services
 
         layout = DataLayout.from_root(resolved_settings.data_root)
         try:
@@ -689,6 +693,31 @@ def create_executable_app(settings: Settings | None = None) -> FastAPI:
         writer_lock.acquire()
         try:
             composition = compose_openai_services(resolved_settings, DEFAULT_REDACTOR)
+            profile_services = {
+                "openai-api": (composition.qa, composition.ingestion),
+            }
+            if resolved_settings.bge_profile_enabled:
+                bge = compose_bge_services(resolved_settings, DEFAULT_REDACTOR)
+                main_close = composition.qa.close_callback
+
+                async def close_all_profiles() -> None:
+                    try:
+                        await bge.qa.close()
+                    finally:
+                        try:
+                            await asyncio.to_thread(bge.ingestion.close)
+                        finally:
+                            if main_close is not None:
+                                await main_close()
+
+                composition = replace(
+                    composition,
+                    qa=replace(composition.qa, close_callback=close_all_profiles),
+                )
+                profile_services = {
+                    "openai-api": (composition.qa, composition.ingestion),
+                    "bge-local": (bge.qa, bge.ingestion),
+                }
             return create_app(
                 resolved_settings,
                 ingestion_service=composition.ingestion,
@@ -698,6 +727,7 @@ def create_executable_app(settings: Settings | None = None) -> FastAPI:
                 evaluation_service=composition.evaluation,
                 owns_evaluation_service=composition.evaluation is not None,
                 diagnostics_service=composition.diagnostics,
+                workbench_profile_services=profile_services,
                 redactor=DEFAULT_REDACTOR,
                 writer_lock=writer_lock,
             )

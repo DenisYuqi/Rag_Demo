@@ -118,6 +118,10 @@ def test_configured_executable_composes_services_and_waits_for_an_index(tmp_path
     assert app.state.runtime.evaluation_service is not None
     assert app.state.runtime.workbench_services is not None
     assert app.state.runtime.workbench_services.evaluations is app.state.runtime.evaluation_service
+    assert app.state.runtime.workbench_services.retrieval_profile_ids == (
+        "openai-api",
+        "bge-local",
+    )
     assert readiness.status_code == 503
     assert {
         "name": "qa",
@@ -132,6 +136,24 @@ def test_configured_executable_composes_services_and_waits_for_an_index(tmp_path
     assert comparison_catalog.json()["plans"]
     assert qa.status_code == 503
     assert qa.json() == {"error": {"code": "qa_unavailable"}}
+
+
+def test_configured_executable_can_disable_local_profile(tmp_path: Path) -> None:
+    app = create_executable_app(
+        Settings(
+            data_root=tmp_path,
+            provider_backend="openai",
+            openai_api_key="test-key",
+            bge_profile_enabled=False,
+            _env_file=None,
+        )
+    )
+
+    with TestClient(app):
+        services = app.state.runtime.workbench_services
+        assert services is not None
+        assert services.retrieval_profile_ids == ("openai-api",)
+        assert not (tmp_path / "profiles" / "bge-local").exists()
 
 
 def test_configured_executable_stays_live_when_storage_is_not_writable(

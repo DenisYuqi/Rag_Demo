@@ -225,7 +225,7 @@ def create_workbench(
     """Create one workbench using the same in-process services as the HTTP API."""
 
     controller = callbacks or WorkbenchCallbacks(services)
-    initial_documents = controller.refresh_documents()
+    initial_documents = controller.refresh_documents(services.default_retrieval_profile)
     initial_evaluation = controller.refresh_evaluations(None)
     initial_comparison = controller.refresh_comparisons(None)
     with gr.Blocks(title="RAG Assistant Workbench") as demo:
@@ -234,6 +234,12 @@ def create_workbench(
         # locks and HTTP clients.  The model factory is stateless and still gives
         # every browser session a distinct owner identifier.
         session_state = gr.State(value=BrowserSessionState.create)
+        retrieval_profile = gr.Dropdown(
+            choices=list(services.retrieval_profile_ids),
+            value=services.default_retrieval_profile,
+            label="Retrieval profile / 检索模型",
+            interactive=len(services.retrieval_profile_ids) > 1,
+        )
         gr.Markdown("# RAG Assistant Workbench / RAG 助手工作台")
 
         with gr.Tabs(selected="chat-tab"):
@@ -948,15 +954,23 @@ def create_workbench(
             raw_mode: str,
             raw_history: Sequence[Mapping[str, object]] | None,
             raw_state: BrowserSessionState | None,
+            raw_profile: str | None,
         ) -> tuple[list[dict[str, str]], BrowserSessionState, str, str, str, str]:
             return _chat_outputs(
-                await controller.submit_chat(raw_question, raw_mode, raw_history, raw_state)
+                await controller.submit_chat(
+                    raw_question,
+                    raw_mode,
+                    raw_history,
+                    raw_state,
+                    raw_profile,
+                )
             )
 
         def on_reset(
             raw_state: BrowserSessionState | None,
+            raw_profile: str | None = None,
         ) -> tuple[list[dict[str, str]], BrowserSessionState, str, str, str, str]:
-            return _chat_outputs(controller.reset_chat(raw_state))
+            return _chat_outputs(controller.reset_chat(raw_state, raw_profile))
 
         def on_cancel(
             raw_history: Sequence[Mapping[str, object]] | None,
@@ -964,21 +978,34 @@ def create_workbench(
         ) -> tuple[list[dict[str, str]], BrowserSessionState, str, str, str, str]:
             return _chat_outputs(controller.cancel_chat(raw_history, raw_state))
 
-        def on_documents() -> tuple[list[list[Any]], list[list[Any]], str]:
-            return _document_outputs(controller.refresh_documents())
+        def on_documents(
+            raw_profile: str | None = None,
+        ) -> tuple[list[list[Any]], list[list[Any]], str]:
+            return _document_outputs(controller.refresh_documents(raw_profile))
 
         async def on_upload(
-            path: str | None, key: str, title: str
+            path: str | None,
+            key: str,
+            title: str,
+            raw_profile: str | None,
         ) -> tuple[list[list[Any]], list[list[Any]], str]:
-            return _document_outputs(await controller.upload_document(path, key, title))
+            return _document_outputs(
+                await controller.upload_document(path, key, title, raw_profile)
+            )
 
-        async def on_reindex() -> tuple[list[list[Any]], list[list[Any]], str]:
-            return _document_outputs(await controller.reindex_documents())
+        async def on_reindex(
+            raw_profile: str | None,
+        ) -> tuple[list[list[Any]], list[list[Any]], str]:
+            return _document_outputs(await controller.reindex_documents(raw_profile))
 
         async def on_delete(
-            source: str, confirmed: bool
+            source: str,
+            confirmed: bool,
+            raw_profile: str | None,
         ) -> tuple[list[list[Any]], list[list[Any]], str]:
-            return _document_outputs(await controller.delete_document(source, confirmed))
+            return _document_outputs(
+                await controller.delete_document(source, confirmed, raw_profile)
+            )
 
         async def on_start_evaluation(
             selected_dataset: str | None,
@@ -1038,17 +1065,22 @@ def create_workbench(
         chat_outputs = [chatbot, session_state, citations, previews, chat_status, question]
         ask_event = ask.click(
             on_ask,
-            inputs=[question, mode, chatbot, session_state],
+            inputs=[question, mode, chatbot, session_state, retrieval_profile],
             outputs=chat_outputs,
             api_name="chat_submit",
         )
         question.submit(
             on_ask,
-            inputs=[question, mode, chatbot, session_state],
+            inputs=[question, mode, chatbot, session_state, retrieval_profile],
             outputs=chat_outputs,
             api_name=None,
         )
-        reset.click(on_reset, inputs=[session_state], outputs=chat_outputs, api_name="chat_reset")
+        reset.click(
+            on_reset,
+            inputs=[session_state, retrieval_profile],
+            outputs=chat_outputs,
+            api_name="chat_reset",
+        )
         cancel.click(
             on_cancel,
             inputs=[chatbot, session_state],
@@ -1066,18 +1098,26 @@ def create_workbench(
 
         document_outputs = [documents_table, jobs_table, document_status]
         refresh_documents.click(
-            on_documents, outputs=document_outputs, api_name="documents_refresh"
+            on_documents,
+            inputs=[retrieval_profile],
+            outputs=document_outputs,
+            api_name="documents_refresh",
         )
         upload.click(
             on_upload,
-            inputs=[upload_file, source_key, display_title],
+            inputs=[upload_file, source_key, display_title, retrieval_profile],
             outputs=document_outputs,
             api_name="documents_upload",
         )
-        reindex.click(on_reindex, outputs=document_outputs, api_name="documents_reindex")
+        reindex.click(
+            on_reindex,
+            inputs=[retrieval_profile],
+            outputs=document_outputs,
+            api_name="documents_reindex",
+        )
         delete.click(
             on_delete,
-            inputs=[delete_source, confirm_delete],
+            inputs=[delete_source, confirm_delete, retrieval_profile],
             outputs=document_outputs,
             api_name="documents_delete",
         )
@@ -1086,6 +1126,15 @@ def create_workbench(
             outputs=document_outputs,
             api_name=None,
             show_progress="hidden",
+        )
+        retrieval_profile.change(
+            lambda selected, state: (
+                *_chat_outputs(controller.switch_profile(selected, state)),
+                *_document_outputs(controller.refresh_documents(selected)),
+            ),
+            inputs=[retrieval_profile, session_state],
+            outputs=[*chat_outputs, *document_outputs],
+            api_name="retrieval_profile_select",
         )
 
         evaluation_outputs = [
