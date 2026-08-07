@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from datetime import datetime
 from decimal import Decimal
+from html import escape
 from urllib.parse import quote
 
 from rag_mvp.domain import MetricObservation, UnavailableValue
@@ -39,6 +40,46 @@ _REPORT_ARTIFACT_ID = "evaluation-report-json"
 _OPERATIONS_TEXT_ARTIFACT_ID = "operations-summary-txt"
 _OPERATIONS_CSV_ARTIFACT_ID = "operations-summary-csv"
 _API_PREFIX = "/api/v1"
+_QUALITY_METRICS = (
+    "faithfulness",
+    "context-precision",
+    "answer-compliance",
+    "style",
+    "refusal-appropriateness",
+)
+_PERFORMANCE_METRICS = (
+    "total-logical-requests",
+    "successful-logical-requests",
+    "success-rate",
+    "all-attempt-latency-p50",
+    "all-attempt-latency-p90",
+    "all-attempt-latency-p95",
+    "all-attempt-latency-p99",
+    "successful-only-latency-p50",
+    "successful-only-latency-p90",
+    "successful-only-latency-p95",
+    "successful-only-latency-p99",
+    "observed-peak-concurrency",
+    "error-rate",
+    "timeout-rate",
+)
+_COST_METRICS = (
+    "provider-attempt-count",
+    "input-tokens",
+    "output-tokens",
+    "total-cost",
+    "cost-per-1000-logical-attempts",
+    "cost-per-1000-successes",
+)
+_CACHE_METRICS = ("cache-hits", "cache-eligible-lookups", "cache-hit-rate")
+_REFUSAL_METRICS = (
+    "refusals",
+    "answered-requests",
+    "refusal-rate",
+    "compliant-answers",
+    "scored-answers",
+    "answer-compliance-rate",
+)
 
 
 class EvaluationDashboardError(ValueError):
@@ -160,7 +201,11 @@ def render_evaluation_dashboard(
     )
     progress_markdown = _progress_markdown(selected_run, selected_summary)
     gate_markdown = _gate_markdown(selected_run, selected_summary)
-    overview_rows: tuple[tuple[object, ...], ...] = ()
+    overview_rows: tuple[tuple[object, ...], ...] = _unavailable_overview_rows()
+    quality_plot_rows: tuple[tuple[str, float], ...] = ()
+    latency_plot_rows: tuple[tuple[str, int, float], ...] = ()
+    kpi_html = _kpi_html(None)
+    system_rows = _system_rows(None)
     category_rows: tuple[tuple[object, ...], ...] = ()
     operations_rows: tuple[tuple[object, ...], ...] = ()
     operations_preview = "Evidence unavailable. / 证据不可用。"
@@ -185,6 +230,10 @@ def render_evaluation_dashboard(
         if report is not None:
             overview_rows = _overview_rows(report)
             category_rows = _category_rows(report)
+            quality_plot_rows = _quality_plot_rows(report)
+            latency_plot_rows = _latency_plot_rows(report)
+            kpi_html = _kpi_html(report)
+            system_rows = _system_rows(report)
         else:
             overview_rows = _unavailable_overview_rows()
         operations_rows, operations_preview = _operations_view(
@@ -239,9 +288,18 @@ def render_evaluation_dashboard(
         identity_rows=identity_rows,
         plan_rows=plan_rows,
         overview_rows=overview_rows,
+        quality_rows=_metric_subset(overview_rows, _QUALITY_METRICS),
+        quality_plot_rows=quality_plot_rows,
+        performance_rows=_metric_subset(overview_rows, _PERFORMANCE_METRICS),
+        latency_plot_rows=latency_plot_rows,
+        cost_rows=_metric_subset(overview_rows, _COST_METRICS),
         category_rows=category_rows,
         operations_rows=operations_rows,
+        cache_rows=_metric_subset(operations_rows, _CACHE_METRICS),
+        refusal_rows=_metric_subset(operations_rows, _REFUSAL_METRICS),
+        system_rows=system_rows,
         artifact_rows=artifact_rows,
+        kpi_html=kpi_html,
         gate_markdown=gate_markdown,
         progress_markdown=progress_markdown,
         operations_preview=operations_preview,
@@ -624,6 +682,37 @@ def _overview_rows(report: EvaluationReportV2) -> tuple[tuple[object, ...], ...]
     rows.extend(
         (
             _metric_row(
+                "total-logical-requests",
+                measured.logical_attempt_count,
+                "requests",
+                numerator=measured.logical_attempt_count,
+                denominator=measured.logical_attempt_count,
+                status="observed" if measured.logical_attempt_count else "unavailable",
+                scorer="all-http-attempts-v2",
+            ),
+            _metric_row(
+                "successful-logical-requests",
+                measured.successful_logical_attempt_count,
+                "requests",
+                numerator=measured.successful_logical_attempt_count,
+                denominator=measured.logical_attempt_count,
+                status="observed" if measured.logical_attempt_count else "unavailable",
+                scorer="all-http-attempts-v2",
+            ),
+            _metric_row(
+                "success-rate",
+                (
+                    measured.successful_logical_attempt_count / measured.logical_attempt_count
+                    if measured.logical_attempt_count
+                    else None
+                ),
+                "ratio",
+                numerator=measured.successful_logical_attempt_count,
+                denominator=measured.logical_attempt_count,
+                status="observed" if measured.logical_attempt_count else "unavailable",
+                scorer="all-http-attempts-v2",
+            ),
+            _metric_row(
                 "observed-peak-concurrency",
                 _observed_peak_concurrency(measured.attempts),
                 "requests",
@@ -664,6 +753,15 @@ def _overview_rows(report: EvaluationReportV2) -> tuple[tuple[object, ...], ...]
     rows.extend(_token_rows(cost.role_direction_tokens))
     rows.extend(
         (
+            _metric_row(
+                "provider-attempt-count",
+                cost.provider_attempt_count,
+                "attempts",
+                numerator=cost.provider_attempt_count,
+                denominator=measured.http_attempt_count,
+                status="observed" if measured.http_attempt_count else "unavailable",
+                scorer=cost.schema_version,
+            ),
             _metric_row(
                 "total-cost",
                 cost.total_cost,
@@ -718,7 +816,11 @@ def _unavailable_overview_rows() -> tuple[tuple[object, ...], ...]:
         ("refusal-appropriateness", "ratio"),
         *((f"all-attempt-latency-{item}", "ms") for item in ("p50", "p90", "p95", "p99")),
         *((f"successful-only-latency-{item}", "ms") for item in ("p50", "p90", "p95", "p99")),
+        ("total-logical-requests", "requests"),
+        ("successful-logical-requests", "requests"),
+        ("success-rate", "ratio"),
         ("observed-peak-concurrency", "requests"),
+        ("provider-attempt-count", "attempts"),
         ("input-tokens", "tokens"),
         ("output-tokens", "tokens"),
         ("total-cost", "currency"),
@@ -739,6 +841,126 @@ def _unavailable_overview_rows() -> tuple[tuple[object, ...], ...]:
             scorer="unavailable",
         )
         for metric_id, unit in metrics
+    )
+
+
+def _metric_subset(
+    rows: Sequence[tuple[object, ...]],
+    metric_ids: Sequence[str],
+) -> tuple[tuple[object, ...], ...]:
+    """Select metric rows in a stable presentation order without recomputing evidence."""
+
+    by_id = {str(row[0]): row for row in rows if row}
+    return tuple(by_id[metric_id] for metric_id in metric_ids if metric_id in by_id)
+
+
+def _quality_plot_rows(report: EvaluationReportV2) -> tuple[tuple[str, float], ...]:
+    gate = next(item for item in report.gates if item.gate_id == report.acceptance_gate_id)
+    by_id = {item.metric_id: item for item in gate.observations}
+    rows: list[tuple[str, float]] = []
+    for metric_id in _QUALITY_METRICS:
+        observation = by_id.get(metric_id)
+        if observation is None or isinstance(observation.value, UnavailableValue):
+            continue
+        value = observation.value
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        rows.append((metric_id, float(value) * 100.0))
+    return tuple(rows)
+
+
+def _latency_plot_rows(report: EvaluationReportV2) -> tuple[tuple[str, int, float], ...]:
+    measured = report.performance_evidence.measured
+    rows: list[tuple[str, int, float]] = []
+    for scope, latency in (
+        ("all attempts", measured.latency_ms.all_attempts),
+        ("successful only", measured.latency_ms.successful_attempts),
+    ):
+        if latency is None:
+            continue
+        for percentile in (50, 90, 95, 99):
+            rows.append((scope, percentile, float(getattr(latency, f"p{percentile}_ms"))))
+    return tuple(rows)
+
+
+def _system_rows(report: EvaluationReportV2 | None) -> tuple[tuple[object, ...], ...]:
+    unavailable = _unavailable("not-recorded-in-acceptance-evidence")
+    if report is None:
+        peak: object = unavailable
+        attempts: object = unavailable
+        successes: object = unavailable
+        state = "unavailable"
+    else:
+        measured = report.performance_evidence.measured
+        peak = _observed_peak_concurrency(measured.attempts)
+        attempts = measured.http_attempt_count
+        successes = measured.successful_logical_attempt_count
+        state = "observed"
+    return (
+        ("observed-peak-concurrency", peak, "requests", state, "attempt interval ledger"),
+        ("measured-http-attempts", attempts, "attempts", state, "attempt ledger"),
+        ("successful-logical-requests", successes, "requests", state, "attempt ledger"),
+        ("active-requests", unavailable, "requests", "unavailable", "live-only metric"),
+        ("queue-depth", unavailable, "requests", "unavailable", "live-only metric"),
+        ("cpu-utilization", unavailable, "percent", "unavailable", "not collected"),
+        ("memory-usage", unavailable, "bytes", "unavailable", "not collected"),
+    )
+
+
+def _kpi_html(report: EvaluationReportV2 | None) -> str:
+    if report is None:
+        cards = (
+            ("Quality gates / 质量门槛", "—", "evidence unavailable", "unavailable"),
+            ("All-attempt P95 / 全请求 P95", "—", "evidence unavailable", "unavailable"),
+            ("Cost / 1k QA", "—", "evidence unavailable", "unavailable"),
+            ("Success rate / 成功率", "—", "evidence unavailable", "unavailable"),
+        )
+    else:
+        gate = next(item for item in report.gates if item.gate_id == report.acceptance_gate_id)
+        passed = sum(item.status.value == "passed" for item in gate.observations)
+        quality_value = f"{passed}/{len(gate.observations)}"
+        quality_note = gate.status.value.upper()
+        quality_state = gate.status.value
+        latency = report.performance_evidence.measured.latency_ms.all_attempts
+        latency_value = "—" if latency is None else f"{latency.p95_ms / 1000:.2f}s"
+        latency_note = "all measured attempts"
+        latency_state = "unavailable" if latency is None else "observed"
+        cost = report.performance_evidence.cost.cost_per_1000_logical_attempts
+        if cost.per_1000 is None:
+            cost_value = "—"
+            cost_state = "unavailable"
+        else:
+            cost_value = f"{report.performance_evidence.cost.pricing.currency} {cost.per_1000}"
+            cost_state = "observed"
+        measured = report.performance_evidence.measured
+        success_rate = (
+            None
+            if measured.logical_attempt_count == 0
+            else measured.successful_logical_attempt_count / measured.logical_attempt_count
+        )
+        success_value = "—" if success_rate is None else f"{success_rate * 100:.1f}%"
+        success_state = "unavailable" if success_rate is None else "observed"
+        cards = (
+            ("Quality gates / 质量门槛", quality_value, quality_note, quality_state),
+            ("All-attempt P95 / 全请求 P95", latency_value, latency_note, latency_state),
+            ("Cost / 1k QA", cost_value, "logical attempts", cost_state),
+            ("Success rate / 成功率", success_value, "logical requests", success_state),
+        )
+    return (
+        '<div class="rag-kpi-grid">'
+        + "".join(
+            '<section class="rag-kpi-card rag-kpi-'
+            + escape(state)
+            + '"><span>'
+            + escape(label)
+            + "</span><strong>"
+            + escape(value)
+            + "</strong><small>"
+            + escape(note)
+            + "</small></section>"
+            for label, value, note, state in cards
+        )
+        + "</div>"
     )
 
 

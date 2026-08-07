@@ -22,6 +22,15 @@ _ACTIVE_STATUSES = frozenset({"queued", "running"})
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$")
 _API_PREFIX = "/api/v1"
 _MISSING = object()
+_FOCUSED_COMPARISON_METRICS = (
+    "faithfulness",
+    "context-precision",
+    "answer-compliance",
+    "all-attempt-p95",
+    "cost-per-1000",
+    "error-rate",
+    "degradation-rate",
+)
 
 
 class ComparisonDashboardError(ValueError):
@@ -270,6 +279,7 @@ def render_comparison_dashboard(
     }
     summary = None if run is None else summaries[run.comparison_id]
     run_plan = None if run is None else plans_by_id.get(run.plan_id)
+    selected_axis = run_plan.axis if run_plan is not None else None if plan is None else plan.axis
     manifest = None
     if (
         run is not None
@@ -293,6 +303,18 @@ def render_comparison_dashboard(
     gate = _gate_markdown(run, summary)
     cache_conclusion = _cache_conclusion_markdown(run_plan, summary, redactor)
     recommendation = _recommendation_markdown(summary, redactor)
+    retrieval_recommendation = _focused_recommendation_markdown(
+        "retrieval-strategy",
+        selected_axis,
+        summary,
+        redactor,
+    )
+    model_recommendation = _focused_recommendation_markdown(
+        "generation-model",
+        selected_axis,
+        summary,
+        redactor,
+    )
     progress = _progress_markdown(run)
 
     if not plans:
@@ -340,11 +362,28 @@ def render_comparison_dashboard(
         comparison_metric_rows=comparison_metric_rows,
         category_rows=category_rows,
         plot_rows=plot_rows,
+        selected_axis=selected_axis,
+        retrieval_rows=_focused_candidate_rows(
+            summary,
+            selected_axis,
+            "retrieval-strategy",
+            redactor,
+        ),
+        retrieval_plot_rows=_focused_plot_rows(plot_rows, selected_axis, "retrieval-strategy"),
+        model_rows=_focused_candidate_rows(
+            summary,
+            selected_axis,
+            "generation-model",
+            redactor,
+        ),
+        model_plot_rows=_focused_plot_rows(plot_rows, selected_axis, "generation-model"),
         artifact_rows=artifact_rows,
         progress_markdown=progress,
         gate_markdown=gate,
         cache_conclusion_markdown=cache_conclusion,
         recommendation_markdown=recommendation,
+        retrieval_recommendation_markdown=retrieval_recommendation,
+        model_recommendation_markdown=model_recommendation,
         artifact_links_markdown=artifact_links,
         status_markdown=status,
         poll_active=run is not None and run.status in _ACTIVE_STATUSES,
@@ -628,9 +667,7 @@ def _candidate(value: object) -> _Candidate:
         ),
         currency=_optional_identifier(_attribute(value, "currency", default=None)),
         metrics=metrics,
-        gates=tuple(
-            _gate(item) for item in _sequence(_attribute(value, "gates", default=()))
-        ),
+        gates=tuple(_gate(item) for item in _sequence(_attribute(value, "gates", default=()))),
     )
 
 
@@ -638,12 +675,9 @@ def _gate(value: object) -> _Gate:
     return _Gate(
         gate_id=_identifier(_attribute(value, "gate_id")),
         status=_enum_text(_attribute(value, "status")),
-        required_for_selection=bool(
-            _attribute(value, "required_for_selection", default=True)
-        ),
+        required_for_selection=bool(_attribute(value, "required_for_selection", default=True)),
         reason_codes=tuple(
-            _identifier(item)
-            for item in _sequence(_attribute(value, "reason_codes", default=()))
+            _identifier(item) for item in _sequence(_attribute(value, "reason_codes", default=()))
         ),
     )
 
@@ -957,11 +991,7 @@ def _candidate_rows(
                     candidate.baseline,
                     f"gate:{gate.gate_id}",
                     gate.status,
-                    (
-                        "selection-required"
-                        if gate.required_for_selection
-                        else "diagnostic-phase16"
-                    ),
+                    ("selection-required" if gate.required_for_selection else "diagnostic-phase16"),
                     _unavailable("gate-not-numeric"),
                     _unavailable("gate-not-numeric"),
                     gate.status,
@@ -1070,6 +1100,77 @@ def _plot_rows(
             if math.isfinite(numeric):
                 rows.append((label, metric.metric_id, numeric))
     return tuple(rows)
+
+
+def _focused_candidate_rows(
+    summary: _Summary | None,
+    selected_axis: str | None,
+    expected_axis: str,
+    redactor: Redactor,
+) -> tuple[tuple[object, ...], ...]:
+    """Build an interview-friendly table without replacing authoritative evidence rows."""
+
+    if summary is None or selected_axis != expected_axis:
+        return ()
+    selected_id = summary.recommendation.selected_candidate_id
+    rows: list[tuple[object, ...]] = []
+    for candidate in summary.candidates:
+        metrics = {item.metric_id: item for item in candidate.metrics}
+        required_gates = tuple(item for item in candidate.gates if item.required_for_selection)
+        gate_state = (
+            "unavailable"
+            if not required_gates
+            else "passed"
+            if all(item.status == "passed" for item in required_gates)
+            else "failed"
+        )
+        values = tuple(
+            _unavailable("metric-not-recorded")
+            if metrics.get(metric_id) is None
+            else _display(metrics[metric_id].value)
+            for metric_id in _FOCUSED_COMPARISON_METRICS
+        )
+        rows.append(
+            (
+                candidate.candidate_id,
+                _safe_text(candidate.display_name, redactor),
+                _safe_text(candidate.axis_value, redactor),
+                candidate.status,
+                candidate.baseline,
+                *values,
+                gate_state,
+                candidate.candidate_id == selected_id,
+            )
+        )
+    return tuple(rows)
+
+
+def _focused_plot_rows(
+    rows: Sequence[tuple[str, str, float]],
+    selected_axis: str | None,
+    expected_axis: str,
+) -> tuple[tuple[str, str, float], ...]:
+    if selected_axis != expected_axis:
+        return ()
+    return tuple(row for row in rows if row[1] in _FOCUSED_COMPARISON_METRICS)
+
+
+def _focused_recommendation_markdown(
+    expected_axis: str,
+    selected_axis: str | None,
+    summary: _Summary | None,
+    redactor: Redactor,
+) -> str:
+    headings = {
+        "retrieval-strategy": "### Select a retrieval comparison plan / 请选择检索策略对比计划\n",
+        "generation-model": "### Select a model comparison plan / 请选择模型对比计划\n",
+    }
+    if selected_axis != expected_axis:
+        return headings[expected_axis] + (
+            "The page never substitutes evidence from another experiment axis. / "
+            "此页面不会用其他实验轴的证据代替。"
+        )
+    return _recommendation_markdown(summary, redactor)
 
 
 def _artifact_rows(manifest: _Manifest | None) -> tuple[tuple[object, ...], ...]:

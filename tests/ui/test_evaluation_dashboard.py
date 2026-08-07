@@ -314,6 +314,9 @@ def test_typed_views_render_validated_evidence_without_paths_or_private_fields()
     rendered = callbacks.refresh_evaluations(BrowserSessionState.create())
     metrics = {row[0]: row for row in rendered.overview_rows}
     operations = {row[0]: row for row in rendered.operations_rows}
+    quality = {row[0]: row for row in rendered.quality_rows}
+    performance = {row[0]: row for row in rendered.performance_rows}
+    cost = {row[0]: row for row in rendered.cost_rows}
 
     assert rendered.start_enabled
     assert rendered.selected_run_id == _PARSED.run_id
@@ -324,6 +327,30 @@ def test_typed_views_render_validated_evidence_without_paths_or_private_fields()
     assert metrics["cost-per-1000-successes"][5] == "2"
     assert operations["cache-hit-rate"][1].startswith("unavailable")
     assert operations["cache-hit-rate"][5].startswith("unavailable")
+    assert tuple(quality) == (
+        "faithfulness",
+        "context-precision",
+        "answer-compliance",
+        "style",
+        "refusal-appropriateness",
+    )
+    assert {row[0] for row in rendered.quality_plot_rows} == set(quality)
+    assert {row[0] for row in rendered.latency_plot_rows} == {
+        "all attempts",
+        "successful only",
+    }
+    assert performance["all-attempt-latency-p95"][5] == "2"
+    assert cost["cost-per-1000-logical-attempts"][5] == "2"
+    assert "Quality gates / 质量门槛" in rendered.kpi_html
+    assert "All-attempt P95 / 全请求 P95" in rendered.kpi_html
+    assert any(
+        row[0] == "cpu-utilization" and row[3] == "unavailable" for row in rendered.system_rows
+    )
+    assert tuple(row[0] for row in rendered.cache_rows) == (
+        "cache-hits",
+        "cache-eligible-lookups",
+        "cache-hit-rate",
+    )
     assert rendered.failure_rows[0][1] == "review [REDACTED_EMAIL]"
     assert "raw_prompt" not in repr(rendered)
     assert "never render this prompt" not in repr(rendered)

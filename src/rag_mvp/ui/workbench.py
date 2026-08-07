@@ -21,6 +21,30 @@ from .models import (
 )
 from .services import WorkbenchServices
 
+_WORKBENCH_CSS = """
+.rag-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 12px;
+  margin: 4px 0 16px;
+}
+.rag-kpi-card {
+  border: 1px solid var(--border-color-primary);
+  border-radius: 12px;
+  background: var(--background-fill-secondary);
+  padding: 14px 16px;
+  min-height: 116px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+.rag-kpi-card span, .rag-kpi-card small { color: var(--body-text-color-subdued); }
+.rag-kpi-card strong { font-size: 1.75rem; line-height: 1.1; }
+.rag-kpi-passed { border-color: #16a34a; }
+.rag-kpi-failed { border-color: #dc2626; }
+.rag-kpi-unavailable { border-style: dashed; }
+"""
+
 
 def _chat_outputs(
     render: ChatRender,
@@ -69,9 +93,18 @@ def _evaluation_outputs(
         [list(row) for row in render.run_rows],
         render.progress_markdown,
         render.gate_markdown,
+        render.kpi_html,
         [list(row) for row in render.overview_rows],
+        [list(row) for row in render.quality_rows],
+        _quality_plot(render),
         [list(row) for row in render.category_rows],
         [list(row) for row in render.failure_rows],
+        [list(row) for row in render.performance_rows],
+        _latency_plot(render),
+        [list(row) for row in render.cost_rows],
+        [list(row) for row in render.cache_rows],
+        [list(row) for row in render.refusal_rows],
+        [list(row) for row in render.system_rows],
         [list(row) for row in render.operations_rows],
         render.operations_preview,
         render.operations_links_markdown,
@@ -109,6 +142,41 @@ def _comparison_plot(render: ComparisonRender) -> dict[str, object]:
     }
 
 
+def _focused_comparison_plot(rows: Sequence[tuple[str, str, float]]) -> dict[str, object]:
+    return {
+        "columns": ["candidate", "metric", "delta"],
+        "data": [list(row) for row in rows],
+        "datatypes": {
+            "candidate": "nominal",
+            "metric": "nominal",
+            "delta": "quantitative",
+        },
+        "mark": "bar",
+    }
+
+
+def _quality_plot(render: EvaluationRender) -> dict[str, object]:
+    return {
+        "columns": ["metric", "score"],
+        "data": [list(row) for row in render.quality_plot_rows],
+        "datatypes": {"metric": "nominal", "score": "quantitative"},
+        "mark": "bar",
+    }
+
+
+def _latency_plot(render: EvaluationRender) -> dict[str, object]:
+    return {
+        "columns": ["scope", "percentile", "latency_ms"],
+        "data": [list(row) for row in render.latency_plot_rows],
+        "datatypes": {
+            "scope": "nominal",
+            "percentile": "quantitative",
+            "latency_ms": "quantitative",
+        },
+        "mark": "line",
+    }
+
+
 def _comparison_outputs(render: ComparisonRender) -> tuple[Any, ...]:
     return (
         gr.update(
@@ -125,6 +193,12 @@ def _comparison_outputs(render: ComparisonRender) -> tuple[Any, ...]:
         [list(row) for row in render.history_rows],
         render.progress_markdown,
         render.gate_markdown,
+        [list(row) for row in render.retrieval_rows],
+        _focused_comparison_plot(render.retrieval_plot_rows),
+        render.retrieval_recommendation_markdown,
+        [list(row) for row in render.model_rows],
+        _focused_comparison_plot(render.model_plot_rows),
+        render.model_recommendation_markdown,
         [list(row) for row in render.controlled_rows],
         [list(row) for row in render.shared_setup_rows],
         [list(row) for row in render.comparison_metric_rows],
@@ -309,6 +383,10 @@ def create_workbench(
                         )
 
                     with gr.Tab("Overview / 结果总览", id="evaluation-overview-tab"):
+                        dashboard_kpis = gr.HTML(
+                            initial_evaluation.kpi_html,
+                            label="Executive KPI cards / 核心 KPI 卡片",
+                        )
                         gate_banner = gr.Markdown(
                             initial_evaluation.gate_markdown,
                             label="Overall gate / 总体门槛",
@@ -329,38 +407,6 @@ def create_workbench(
                             interactive=False,
                             type="array",
                         )
-                        category_table = gr.Dataframe(
-                            headers=[
-                                "category",
-                                "cases",
-                                "metric",
-                                "value",
-                                "denominator",
-                                "state",
-                            ],
-                            value=[list(row) for row in initial_evaluation.category_rows],
-                            label="Category results / 分类结果",
-                            interactive=False,
-                            type="array",
-                        )
-                        failures_table = gr.Dataframe(
-                            headers=[
-                                "case_id",
-                                "safe_error",
-                                "tags",
-                                "metric_contributions",
-                                "refusal_reason",
-                                "citation_ids",
-                                "request_id",
-                                "trace_id",
-                                "outcome",
-                            ],
-                            value=[list(row) for row in initial_evaluation.failure_rows],
-                            label="Privacy-safe failed cases / 隐私安全的失败用例",
-                            interactive=False,
-                            type="array",
-                        )
-
                     with gr.Tab("Compare / 对比", id="evaluation-compare-tab"):
                         comparison_timer = gr.Timer(
                             value=2.0,
@@ -451,6 +497,113 @@ def create_workbench(
                             initial_comparison.gate_markdown,
                             label="Comparison gate / 对比门槛",
                         )
+                        with gr.Tabs(selected="retrieval-comparison-view"):
+                            with gr.Tab(
+                                "Retrieval Comparison / 检索策略对比",
+                                id="retrieval-comparison-view",
+                            ):
+                                retrieval_comparison_table = gr.Dataframe(
+                                    headers=[
+                                        "candidate_id",
+                                        "candidate",
+                                        "strategy",
+                                        "status",
+                                        "baseline",
+                                        "faithfulness",
+                                        "context_precision",
+                                        "answer_compliance",
+                                        "p95_latency",
+                                        "cost_per_1000",
+                                        "error_rate",
+                                        "degradation_rate",
+                                        "gate",
+                                        "selected",
+                                    ],
+                                    value=[list(row) for row in initial_comparison.retrieval_rows],
+                                    label=(
+                                        "Vector, hybrid, and reranker comparison / "
+                                        "向量、混合与重排对比"
+                                    ),
+                                    interactive=False,
+                                    type="array",
+                                )
+                                retrieval_comparison_plot = gr.BarPlot(
+                                    value=cast(
+                                        Any,
+                                        _focused_comparison_plot(
+                                            initial_comparison.retrieval_plot_rows
+                                        ),
+                                    ),
+                                    x="metric",
+                                    y="delta",
+                                    color="candidate",
+                                    title="Retrieval baseline deltas",
+                                    x_title="Metric / 指标",
+                                    y_title="Baseline delta / 基线差值",
+                                    height=300,
+                                    label="Retrieval comparison plot / 检索对比图",
+                                )
+                                retrieval_recommendation = gr.Markdown(
+                                    initial_comparison.retrieval_recommendation_markdown,
+                                    label="Retrieval recommendation / 检索推荐",
+                                )
+                            with gr.Tab(
+                                "Model Comparison / 模型对比",
+                                id="model-comparison-view",
+                            ):
+                                model_comparison_table = gr.Dataframe(
+                                    headers=[
+                                        "candidate_id",
+                                        "candidate",
+                                        "model",
+                                        "status",
+                                        "baseline",
+                                        "faithfulness",
+                                        "context_precision",
+                                        "answer_compliance",
+                                        "p95_latency",
+                                        "cost_per_1000",
+                                        "error_rate",
+                                        "degradation_rate",
+                                        "gate",
+                                        "selected",
+                                    ],
+                                    value=[list(row) for row in initial_comparison.model_rows],
+                                    label=(
+                                        "Generation model quality, latency, and cost / "
+                                        "生成模型质量、延迟和成本"
+                                    ),
+                                    interactive=False,
+                                    type="array",
+                                )
+                                model_comparison_plot = gr.BarPlot(
+                                    value=cast(
+                                        Any,
+                                        _focused_comparison_plot(
+                                            initial_comparison.model_plot_rows
+                                        ),
+                                    ),
+                                    x="metric",
+                                    y="delta",
+                                    color="candidate",
+                                    title="Model baseline deltas",
+                                    x_title="Metric / 指标",
+                                    y_title="Baseline delta / 基线差值",
+                                    height=300,
+                                    label="Model comparison plot / 模型对比图",
+                                )
+                                model_recommendation = gr.Markdown(
+                                    initial_comparison.model_recommendation_markdown,
+                                    label="Model recommendation / 模型推荐",
+                                )
+                        with gr.Accordion(
+                            "Detailed comparison evidence / 详细对比证据", open=False
+                        ):
+                            gr.Markdown(
+                                "All values below remain the authoritative, "
+                                "denominator-bearing evidence. / "
+                                "以下数值保留为带分母的权威证据。"
+                            )
                         controlled_dimensions = gr.Dataframe(
                             headers=["controlled dimension", "fixed value or state"],
                             value=[list(row) for row in initial_comparison.controlled_rows],
@@ -570,7 +723,154 @@ def create_workbench(
                             label="Comparison status / 对比状态",
                         )
 
+                    with gr.Tab("Quality Analysis / 质量分析", id="evaluation-quality-tab"):
+                        quality_table = gr.Dataframe(
+                            headers=[
+                                "metric",
+                                "value",
+                                "unit",
+                                "threshold",
+                                "numerator",
+                                "denominator",
+                                "state",
+                                "scorer",
+                            ],
+                            value=[list(row) for row in initial_evaluation.quality_rows],
+                            label="Five independent quality metrics / 五项独立质量指标",
+                            interactive=False,
+                            type="array",
+                        )
+                        quality_plot = gr.BarPlot(
+                            value=cast(Any, _quality_plot(initial_evaluation)),
+                            x="metric",
+                            y="score",
+                            title="Quality metrics (percent)",
+                            x_title="Metric / 指标",
+                            y_title="Score / 得分 (%)",
+                            height=320,
+                            label="Quality visualization / 质量可视化",
+                        )
+                        category_table = gr.Dataframe(
+                            headers=[
+                                "category",
+                                "cases",
+                                "metric",
+                                "value",
+                                "denominator",
+                                "state",
+                            ],
+                            value=[list(row) for row in initial_evaluation.category_rows],
+                            label="Category results / 分类结果",
+                            interactive=False,
+                            type="array",
+                        )
+                        failures_table = gr.Dataframe(
+                            headers=[
+                                "case_id",
+                                "safe_error",
+                                "tags",
+                                "metric_contributions",
+                                "refusal_reason",
+                                "citation_ids",
+                                "request_id",
+                                "trace_id",
+                                "outcome",
+                            ],
+                            value=[list(row) for row in initial_evaluation.failure_rows],
+                            label="Privacy-safe failed cases / 隐私安全的失败用例",
+                            interactive=False,
+                            type="array",
+                        )
+
+                    with gr.Tab(
+                        "Performance & Cost / 性能与成本",
+                        id="evaluation-performance-tab",
+                    ):
+                        performance_table = gr.Dataframe(
+                            headers=[
+                                "metric",
+                                "value",
+                                "unit",
+                                "threshold",
+                                "numerator",
+                                "denominator",
+                                "state",
+                                "scorer",
+                            ],
+                            value=[list(row) for row in initial_evaluation.performance_rows],
+                            label="Latency, success, and concurrency / 延迟、成功率和并发",
+                            interactive=False,
+                            type="array",
+                        )
+                        latency_plot = gr.LinePlot(
+                            value=cast(Any, _latency_plot(initial_evaluation)),
+                            x="percentile",
+                            y="latency_ms",
+                            color="scope",
+                            title="Latency percentiles",
+                            x_title="Percentile / 分位数",
+                            y_title="Latency / 延迟 (ms)",
+                            height=320,
+                            label="Latency distribution / 延迟分布",
+                        )
+                        cost_table = gr.Dataframe(
+                            headers=[
+                                "metric",
+                                "value",
+                                "unit",
+                                "threshold",
+                                "numerator",
+                                "denominator",
+                                "state",
+                                "scorer",
+                            ],
+                            value=[list(row) for row in initial_evaluation.cost_rows],
+                            label="Token and cost breakdown / Token 与成本明细",
+                            interactive=False,
+                            type="array",
+                        )
+
                     with gr.Tab("Operations / 运维", id="evaluation-operations-tab"):
+                        with gr.Row():
+                            cache_table = gr.Dataframe(
+                                headers=[
+                                    "metric",
+                                    "value",
+                                    "unit",
+                                    "threshold",
+                                    "numerator",
+                                    "denominator",
+                                    "state",
+                                    "scorer",
+                                ],
+                                value=[list(row) for row in initial_evaluation.cache_rows],
+                                label="Cache statistics / 缓存统计",
+                                interactive=False,
+                                type="array",
+                            )
+                            refusal_table = gr.Dataframe(
+                                headers=[
+                                    "metric",
+                                    "value",
+                                    "unit",
+                                    "threshold",
+                                    "numerator",
+                                    "denominator",
+                                    "state",
+                                    "scorer",
+                                ],
+                                value=[list(row) for row in initial_evaluation.refusal_rows],
+                                label="Refusal and compliance statistics / 拒答与合规统计",
+                                interactive=False,
+                                type="array",
+                            )
+                        system_table = gr.Dataframe(
+                            headers=["metric", "value", "unit", "state", "evidence"],
+                            value=[list(row) for row in initial_evaluation.system_rows],
+                            label="System evidence / 系统证据",
+                            interactive=False,
+                            type="array",
+                        )
                         operations_table = gr.Dataframe(
                             headers=[
                                 "metric",
@@ -778,9 +1078,18 @@ def create_workbench(
             runs_table,
             evaluation_progress,
             gate_banner,
+            dashboard_kpis,
             overview_table,
+            quality_table,
+            quality_plot,
             category_table,
             failures_table,
+            performance_table,
+            latency_plot,
+            cost_table,
+            cache_table,
+            refusal_table,
+            system_table,
             operations_table,
             operations_preview,
             operations_links,
@@ -849,6 +1158,12 @@ def create_workbench(
             comparison_history_table,
             comparison_progress,
             comparison_gate,
+            retrieval_comparison_table,
+            retrieval_comparison_plot,
+            retrieval_recommendation,
+            model_comparison_table,
+            model_comparison_plot,
+            model_recommendation,
             controlled_dimensions,
             comparison_shared_setup,
             comparison_level_metrics,
@@ -935,5 +1250,6 @@ def mount_workbench(
             show_error=False,
             max_file_size=settings.upload_max_bytes,
             allowed_paths=[],
+            css=_WORKBENCH_CSS,
         ),
     )

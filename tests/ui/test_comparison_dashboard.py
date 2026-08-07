@@ -351,6 +351,16 @@ def test_compare_view_renders_authoritative_tables_plot_and_path_free_artifacts(
     metrics = {row[4]: row for row in rendered.candidate_rows if row[0] == "hybrid"}
 
     assert rendered.start_enabled
+    assert rendered.selected_axis == "retrieval-strategy"
+    assert {row[0] for row in rendered.retrieval_rows} == {
+        "dense",
+        "hybrid",
+        "hybrid-rerank",
+    }
+    assert rendered.model_rows == ()
+    assert "hybrid-rerank" in rendered.retrieval_recommendation_markdown
+    assert "Select a model comparison plan" in rendered.model_recommendation_markdown
+    assert rendered.retrieval_plot_rows
     assert "PASS" in rendered.gate_markdown
     assert ("compatibility", "compatible") in rendered.controlled_rows
     assert metrics["faithfulness"][8] == "24"
@@ -400,6 +410,65 @@ def test_compare_view_renders_authoritative_tables_plot_and_path_free_artifacts(
         "provider-call-count",
         "146",
     ) in rendered.shared_setup_rows
+
+
+def test_model_axis_populates_model_view_without_cross_axis_substitution() -> None:
+    model_plan_id = "generation-model-comparison-v1"
+    variants = (
+        Variant("model-mini", "Model Mini", "gpt-mini", "config-mini"),
+        Variant("model-large", "Model Large", "gpt-large", "config-large"),
+    )
+    plan = replace(
+        Plan(),
+        experiment_plan_id=model_plan_id,
+        display_name="Generation model comparison",
+        axis="generation-model",
+        variants=variants,
+        baseline_candidate_id="model-mini",
+        maximum_logical_calls=48,
+    )
+    candidates = (
+        replace(
+            _candidate("model-mini", "Model Mini", baseline=True, multiplier=1),
+            axis_value="gpt-mini",
+        ),
+        replace(
+            _candidate("model-large", "Model Large", baseline=False, multiplier=1.1),
+            axis_value="gpt-large",
+        ),
+    )
+    summary = replace(
+        _completed_summary("model-comparison-complete"),
+        candidates=candidates,
+        category_results=(),
+        recommendation=Recommendation(
+            "recommended",
+            "model-mini",
+            ("best-cost-quality-tradeoff",),
+        ),
+    )
+    run = replace(
+        Run("model-comparison-complete"),
+        experiment_plan_id=model_plan_id,
+        completed_candidates=2,
+        total_candidates=2,
+        completed_cases=48,
+    )
+    gateway = FakeComparisonGateway(
+        plans=[plan],
+        runs=[run],
+        summaries={run.comparison_id: summary},
+        manifests={run.comparison_id: _manifest(run.comparison_id)},
+    )
+
+    rendered = _callbacks(gateway).refresh_comparisons(BrowserSessionState.create())
+
+    assert rendered.selected_axis == "generation-model"
+    assert {row[0] for row in rendered.model_rows} == {"model-mini", "model-large"}
+    assert rendered.retrieval_rows == ()
+    assert "model-mini" in rendered.model_recommendation_markdown
+    assert "Select a retrieval comparison plan" in (rendered.retrieval_recommendation_markdown)
+    assert rendered.model_plot_rows
 
 
 def test_zero_call_exact_history_cost_is_not_rendered_as_incomplete() -> None:
