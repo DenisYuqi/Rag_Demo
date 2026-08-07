@@ -11,6 +11,7 @@ from rag_mvp.domain.ingestion import (
     EmbeddingSpaceIdentity,
     IndexRevision,
     IndexRevisionStatus,
+    ParentChunk,
 )
 from rag_mvp.ingestion.chunking import CHUNKING_VERSION
 from rag_mvp.ingestion.embedding import EmbeddingStage
@@ -23,10 +24,16 @@ from rag_mvp.retrieval.snapshot import (
     RECORD_DIGEST_ALGORITHM,
     chunk_record_digest,
     chunk_set_digest,
+    parent_chunk_record_digest,
+    parent_set_digest,
 )
 from rag_mvp.retrieval.tokenizer import BilingualTokenizer
 from rag_mvp.storage.layout import DataLayout
-from rag_mvp.storage.repositories import IndexRevisionRepository, RepositoryNotFound
+from rag_mvp.storage.repositories import (
+    IndexRevisionRepository,
+    ParentChunkRepository,
+    RepositoryNotFound,
+)
 
 INDEX_EXTRACTION_VERSION = "extraction-v1"
 
@@ -87,21 +94,25 @@ class RevisionStager:
         active_sources: Mapping[str, int],
         context: ProviderCallContext,
         *,
+        parents: Sequence[ParentChunk] = (),
         ingestion_job_id: str | None = None,
         progress_hook: ProgressHook | None = None,
     ) -> IndexRevision:
         if _embedding_identity(self._embedding_stage) != self._embedding_space:
             raise IndexingError("embedding_identity_changed")
         ordered_chunks = tuple(chunks)
+        ordered_parents = tuple(parents)
         normalized_titles = dict(titles)
         normalized_sources = dict(active_sources)
-        expected_digests = _validate_snapshot_inputs(
+        expected_digests, expected_parent_digests = _validate_snapshot_inputs(
+            ordered_parents,
             ordered_chunks,
             normalized_titles,
             normalized_sources,
         )
         expected_ids = frozenset(expected_digests)
         expected_set_digest = chunk_set_digest(expected_digests)
+        expected_parent_set_digest = parent_set_digest(expected_parent_digests)
         revision_path = self._layout.index_revision_path(revision_id)
         dense_path = self._layout.dense_index_path(revision_id)
         lexical_path = self._layout.lexical_index_path(revision_id)
@@ -166,6 +177,8 @@ class RevisionStager:
                 dense_index_path=self._layout.dense_index_relative_path(revision_id),
                 lexical_index_path=self._layout.lexical_index_relative_path(revision_id),
                 chunk_count=len(expected_ids),
+                parent_chunk_count=len(expected_parent_digests),
+                parent_chunk_set_digest=expected_parent_set_digest,
                 dense_schema_version=PersistentChromaIndex.SCHEMA_VERSION,
                 dense_metric=PersistentChromaIndex.METRIC,
                 lexical_schema_version=PersistentBm25Index.SNAPSHOT_SCHEMA,
@@ -196,11 +209,13 @@ class RevisionPublisher:
         self,
         layout: DataLayout,
         revisions: IndexRevisionRepository,
+        parents: ParentChunkRepository | None = None,
         *,
         failure_hook: FailureHook | None = None,
     ) -> None:
         self._layout = layout
         self._revisions = revisions
+        self._parents = parents or ParentChunkRepository(revisions.database)
         self._failure_hook = failure_hook
 
     def publish(
@@ -302,6 +317,26 @@ class RevisionPublisher:
             )
             if len(dense.chunk_ids) != revision.chunk_count:
                 raise IndexingError("revision_chunk_count_mismatch")
+            parent_count, parent_digest, _ = self._parents.inventory(revision.revision_id)
+            if (
+                parent_count != revision.parent_chunk_count
+                or parent_digest != revision.parent_chunk_set_digest
+            ):
+                raise IndexingError("revision_parent_inventory_mismatch")
+            parent_records = self._parents.get_many(
+                revision.revision_id,
+                tuple(record.chunk.parent_chunk_id for record in lexical.records),
+            )
+            referenced_parent_ids = {record.chunk.parent_chunk_id for record in lexical.records}
+            if set(parent_records) != referenced_parent_ids or len(parent_records) != parent_count:
+                raise IndexingError("revision_parent_reference_mismatch")
+            for record in lexical.records:
+                parent = parent_records[record.chunk.parent_chunk_id]
+                if (
+                    parent.source_id != record.chunk.source_id
+                    or parent.document_version != record.chunk.document_version
+                ):
+                    raise IndexingError("revision_parent_reference_mismatch")
 
     def _run_hook(self, phase: str) -> None:
         if self._failure_hook is not None:
@@ -375,12 +410,15 @@ def _validate_written_snapshot(
 
 
 def _validate_snapshot_inputs(
+    parents: tuple[ParentChunk, ...],
     chunks: tuple[Chunk, ...],
     titles: Mapping[str, str],
     active_sources: Mapping[str, int],
-) -> dict[str, str]:
+) -> tuple[dict[str, str], dict[str, str]]:
     if len({chunk.chunk_id for chunk in chunks}) != len(chunks):
         raise IndexingError("duplicate_chunk_id")
+    if len({parent.parent_chunk_id for parent in parents}) != len(parents):
+        raise IndexingError("duplicate_parent_chunk_id")
     if any(
         not isinstance(source_id, str)
         or not source_id
@@ -397,6 +435,13 @@ def _validate_snapshot_inputs(
         raise IndexingError("active_source_chunk_mismatch")
     if not set(active_sources) <= titles.keys():
         raise IndexingError("missing_display_title")
+    parents_by_id = {parent.parent_chunk_id: parent for parent in parents}
+    referenced_parent_ids = {chunk.parent_chunk_id for chunk in chunks}
+    if referenced_parent_ids != set(parents_by_id):
+        raise IndexingError("parent_child_inventory_mismatch")
+    parent_source_ids = {parent.source_id for parent in parents}
+    if parent_source_ids != set(active_sources):
+        raise IndexingError("active_source_parent_mismatch")
 
     digests: dict[str, str] = {}
     try:
@@ -404,10 +449,21 @@ def _validate_snapshot_inputs(
             if active_sources.get(chunk.source_id) != chunk.document_version:
                 raise IndexingError("chunk_not_in_active_sources")
             title = titles[chunk.source_id]
+            parent = parents_by_id[chunk.parent_chunk_id]
+            if (
+                parent.source_id != chunk.source_id
+                or parent.document_version != chunk.document_version
+            ):
+                raise IndexingError("chunk_parent_mismatch")
             digests[chunk.chunk_id] = chunk_record_digest(chunk, title)
     except KeyError:
         raise IndexingError("missing_display_title") from None
-    return digests
+    parent_digests: dict[str, str] = {}
+    for parent in parents:
+        if active_sources.get(parent.source_id) != parent.document_version:
+            raise IndexingError("parent_not_in_active_sources")
+        parent_digests[parent.parent_chunk_id] = parent_chunk_record_digest(parent)
+    return digests, parent_digests
 
 
 def _validate_parity(

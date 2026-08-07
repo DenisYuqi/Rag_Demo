@@ -213,6 +213,7 @@ class EvidenceAssembler:
         chunk = record.chunk
         if (
             candidate.source_id != chunk.source_id
+            or candidate.parent_chunk_id != chunk.parent_chunk_id
             or candidate.document_version != chunk.document_version
             or candidate.ordinal != chunk.ordinal
             or candidate.text != chunk.text

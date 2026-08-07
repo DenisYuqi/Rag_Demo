@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
 from rag_mvp.domain.ingestion import (
+    ChunkLocator,
     Document,
     DocumentKind,
     DocumentVersion,
@@ -16,6 +18,7 @@ from rag_mvp.domain.ingestion import (
     IngestionJob,
     IngestionJobStatus,
     IngestionStage,
+    ParentChunk,
 )
 from rag_mvp.storage.database import Database
 from rag_mvp.storage.repositories import KnowledgeRepositories, RepositoryConflict
@@ -66,6 +69,20 @@ def _revision(revision_id: str, version: int) -> IndexRevision:
     )
 
 
+def _parent(parent_id: str = "parent-1", *, ordinal: int = 0) -> ParentChunk:
+    text = f"Parent context {ordinal}"
+    return ParentChunk(
+        parent_chunk_id=parent_id,
+        source_id="source-1",
+        document_version=1,
+        ordinal=ordinal,
+        text=text,
+        content_digest=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        locator=ChunkLocator(char_start=ordinal * 20, char_end=ordinal * 20 + len(text)),
+        token_count=3,
+    )
+
+
 @pytest.fixture
 def database(tmp_path: Path) -> Database:
     value = Database(tmp_path / "metadata.sqlite3")
@@ -98,6 +115,11 @@ def test_document_versions_crud_and_soft_delete(database: Database) -> None:
     assert deleted.active_version is None
     assert repositories.documents.list() == []
     assert repositories.documents.list(include_deleted=True) == [deleted]
+
+    assert repositories.documents.delete_permanently("source-1") is True
+    assert repositories.documents.get("source-1") is None
+    assert repositories.documents.list_versions("source-1") == []
+    assert repositories.documents.delete_permanently("source-1") is False
 
 
 def test_duplicate_document_key_is_rejected_but_historical_content_can_repeat(
@@ -138,6 +160,51 @@ def test_multi_repository_transaction_rolls_back(database: Database) -> None:
 
     assert repositories.documents.get("source-1") is None
     assert repositories.index_revisions.get("revision-1") is None
+
+
+def test_parent_chunks_are_revision_scoped_validated_and_cascade_deleted(
+    database: Database,
+) -> None:
+    repositories = KnowledgeRepositories.from_database(database)
+    repositories.index_revisions.create(_revision("revision-1", 1))
+    repositories.index_revisions.create(_revision("revision-2", 1))
+    first = _parent()
+    second = _parent("parent-2", ordinal=1)
+
+    repositories.parent_chunks.insert_many("revision-1", (first, second))
+    repositories.parent_chunks.insert_many("revision-2", (first,))
+
+    assert repositories.parent_chunks.get_many("revision-1", ("parent-2", "missing")) == {
+        "parent-2": second
+    }
+    count, digest, records = repositories.parent_chunks.inventory("revision-1")
+    assert count == 2
+    assert digest
+    assert set(records) == {"parent-1", "parent-2"}
+    assert repositories.parent_chunks.list_for_revision("revision-2") == (first,)
+
+    with pytest.raises(RepositoryConflict):
+        repositories.parent_chunks.insert_many("revision-1", (first,))
+
+    with database.transaction() as connection:
+        connection.execute("DELETE FROM index_revisions WHERE revision_id = ?", ("revision-1",))
+    assert repositories.parent_chunks.list_for_revision("revision-1") == ()
+    assert repositories.parent_chunks.list_for_revision("revision-2") == (first,)
+
+
+def test_parent_chunk_repository_detects_content_tampering(database: Database) -> None:
+    repositories = KnowledgeRepositories.from_database(database)
+    repositories.index_revisions.create(_revision("revision-tamper", 1))
+    repositories.parent_chunks.insert_many("revision-tamper", (_parent(),))
+    with database.transaction() as connection:
+        connection.execute("DROP TRIGGER parent_chunks_immutable")
+        connection.execute(
+            "UPDATE parent_chunks SET text = ? WHERE revision_id = ?",
+            ("tampered", "revision-tamper"),
+        )
+
+    with pytest.raises(Exception, match="content digest mismatch"):
+        repositories.parent_chunks.list_for_revision("revision-tamper")
 
 
 def test_index_publication_atomically_supersedes_prior_revision(database: Database) -> None:

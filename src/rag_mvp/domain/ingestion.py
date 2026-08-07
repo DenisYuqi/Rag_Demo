@@ -136,6 +136,7 @@ class DocumentVersion(DomainModel):
 
 class Chunk(DomainModel):
     chunk_id: Identifier
+    parent_chunk_id: Identifier
     source_id: Identifier
     document_version: Annotated[int, Field(gt=0)]
     ordinal: Annotated[int, Field(ge=0)]
@@ -153,6 +154,24 @@ class Chunk(DomainModel):
         return value
 
 
+class ParentChunk(DomainModel):
+    parent_chunk_id: Identifier
+    source_id: Identifier
+    document_version: Annotated[int, Field(gt=0)]
+    ordinal: Annotated[int, Field(ge=0)]
+    text: Annotated[str, StringConstraints(strip_whitespace=False, min_length=1)]
+    content_digest: Digest
+    locator: ChunkLocator
+    token_count: Annotated[int, Field(gt=0)]
+
+    @field_validator("text")
+    @classmethod
+    def text_has_content(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("parent chunk text must not be blank")
+        return value
+
+
 class IndexRevision(DomainModel):
     revision_id: Identifier
     status: IndexRevisionStatus = IndexRevisionStatus.STAGED
@@ -165,13 +184,15 @@ class IndexRevision(DomainModel):
     dense_index_path: NonEmptyText
     lexical_index_path: NonEmptyText
     chunk_count: Annotated[int, Field(ge=0)] = 0
-    dense_schema_version: Identifier = "chroma-revision-v1"
+    parent_chunk_count: Annotated[int, Field(ge=0)] = 0
+    parent_chunk_set_digest: Digest = "legacy-parent-set-unavailable"
+    dense_schema_version: Identifier = "chroma-revision-v2"
     dense_metric: Identifier = "cosine"
-    lexical_schema_version: Identifier = "bm25-snapshot-v3"
+    lexical_schema_version: Identifier = "bm25-snapshot-v4"
     lexical_algorithm_version: Identifier = "bm25-okapi-v1"
     lexical_k1: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 1.5
     lexical_b: Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)] = 0.75
-    record_digest_algorithm: Identifier = "chunk-record-sha256-v1"
+    record_digest_algorithm: Identifier = "chunk-record-sha256-v2"
     ingestion_job_id: Identifier | None = None
     created_at: AwareDatetime = Field(default_factory=utc_now)
     published_at: AwareDatetime | None = None

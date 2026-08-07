@@ -18,9 +18,11 @@ from rag_mvp.domain.ingestion import (
     IngestionJob,
     IngestionJobStatus,
     IngestionStage,
+    ParentChunk,
 )
+from rag_mvp.ingestion.chunking import token_spans
 from rag_mvp.ingestion.embedding import EmbeddingStage
-from rag_mvp.ingestion.indexing import RevisionPublisher, RevisionStager
+from rag_mvp.ingestion.indexing import IndexingError, RevisionPublisher, RevisionStager
 from rag_mvp.providers.fakes import DeterministicEmbeddingProvider
 from rag_mvp.providers.models import Deadline, ProviderCallContext
 from rag_mvp.retrieval.bm25 import PersistentBm25Index
@@ -54,6 +56,7 @@ def _context(operation: str) -> ProviderCallContext:
 def _chunk(chunk_id: str, source_id: str, version: int, text: str) -> Chunk:
     return Chunk(
         chunk_id=chunk_id,
+        parent_chunk_id=f"parent-{chunk_id}",
         source_id=source_id,
         document_version=version,
         ordinal=0,
@@ -61,6 +64,37 @@ def _chunk(chunk_id: str, source_id: str, version: int, text: str) -> Chunk:
         content_digest=hashlib.sha256(text.encode("utf-8")).hexdigest(),
         locator=ChunkLocator(pages=(version,)),
     )
+
+
+def _parents(chunks: tuple[Chunk, ...]) -> tuple[ParentChunk, ...]:
+    return tuple(
+        ParentChunk(
+            parent_chunk_id=chunk.parent_chunk_id,
+            source_id=chunk.source_id,
+            document_version=chunk.document_version,
+            ordinal=chunk.ordinal,
+            text=chunk.text,
+            content_digest=chunk.content_digest,
+            locator=chunk.locator,
+            token_count=len(token_spans(chunk.text)),
+        )
+        for chunk in chunks
+    )
+
+
+def _register(
+    database: Database,
+    repositories: KnowledgeRepositories,
+    revision: IndexRevision,
+    parents: tuple[ParentChunk, ...],
+) -> None:
+    with database.transaction() as connection:
+        repositories.index_revisions.create(revision, connection=connection)
+        repositories.parent_chunks.insert_many(
+            revision.revision_id,
+            parents,
+            connection=connection,
+        )
 
 
 def _document(source_id: str, source_key: str, title: str) -> Document:
@@ -86,6 +120,32 @@ def _version(source_id: str, version: int) -> DocumentVersion:
         canonical_artifact_path=f"canonical/{source_id}/{version}/document.json",
         extraction_method=ExtractionMethod.TEXT,
     )
+
+
+async def test_publication_rejects_revision_without_persisted_parents(tmp_path: Path) -> None:
+    layout = DataLayout.from_root(tmp_path / "missing-parent")
+    layout.initialize()
+    database = Database(layout.metadata_db)
+    database.initialize()
+    repositories = KnowledgeRepositories.from_database(database)
+    chunk = _chunk("chunk-one", "source-one", 1, "parent integrity")
+
+    with EmbeddingCache(layout.directory("caches") / "embeddings.sqlite3") as cache:
+        revision = await RevisionStager(
+            layout,
+            EmbeddingStage(DeterministicEmbeddingProvider(), cache),
+        ).stage(
+            "revision-missing-parent-row",
+            (chunk,),
+            {"source-one": "One"},
+            {"source-one": 1},
+            _context("missing-parent-row"),
+            parents=_parents((chunk,)),
+        )
+
+    repositories.index_revisions.create(revision)
+    with pytest.raises(IndexingError, match="revision_parent_inventory_mismatch"):
+        RevisionPublisher(layout, repositories.index_revisions).validate(revision)
 
 
 async def test_publication_is_atomic_across_all_failure_points_and_success(
@@ -123,9 +183,10 @@ async def test_publication_is_atomic_across_all_failure_points_and_success(
             old_titles,
             {"source-a": 1, "source-b": 1},
             _context("stage-one"),
+            parents=_parents(old_chunks),
         )
         old_vector = (await embeddings.embed(old_chunks, _context("old-vector"))).vectors[0]
-        repositories.index_revisions.create(revision_one)
+        _register(database, repositories, revision_one, _parents(old_chunks))
         published_one = RevisionPublisher(layout, repositories.index_revisions).publish(
             revision_one.revision_id,
             expected_active_revision_id=None,
@@ -160,6 +221,7 @@ async def test_publication_is_atomic_across_all_failure_points_and_success(
                     new_titles,
                     {"source-a": 2},
                     _context(failed_id),
+                    parents=_parents(new_chunks),
                 )
             assert not layout.index_revision_path(failed_id).exists()
             await assert_revision_one_unchanged()
@@ -170,8 +232,9 @@ async def test_publication_is_atomic_across_all_failure_points_and_success(
             new_titles,
             {"source-a": 2},
             _context("pretransaction"),
+            parents=_parents(new_chunks),
         )
-        repositories.index_revisions.create(pretransaction)
+        _register(database, repositories, pretransaction, _parents(new_chunks))
         with pytest.raises(InjectedFailure, match="pretransaction"):
             RevisionPublisher(
                 layout,
@@ -190,8 +253,9 @@ async def test_publication_is_atomic_across_all_failure_points_and_success(
             new_titles,
             {"source-a": 2},
             _context("inside-transaction"),
+            parents=_parents(new_chunks),
         )
-        repositories.index_revisions.create(inside)
+        _register(database, repositories, inside, _parents(new_chunks))
         with pytest.raises(InjectedFailure, match="inside_transaction"):
             RevisionPublisher(
                 layout,
@@ -210,8 +274,9 @@ async def test_publication_is_atomic_across_all_failure_points_and_success(
             new_titles,
             {"source-a": 2},
             _context("stale-base"),
+            parents=_parents(new_chunks),
         )
-        repositories.index_revisions.create(stale)
+        _register(database, repositories, stale, _parents(new_chunks))
         with pytest.raises(RepositoryConflict, match="active index revision changed"):
             RevisionPublisher(layout, repositories.index_revisions).publish(
                 stale.revision_id,
@@ -232,8 +297,9 @@ async def test_publication_is_atomic_across_all_failure_points_and_success(
             new_titles,
             {"source-a": 2},
             _context("stage-two"),
+            parents=_parents(new_chunks),
         )
-        repositories.index_revisions.create(revision_two)
+        _register(database, repositories, revision_two, _parents(new_chunks))
         queued = IngestionJob(
             job_id="job-publish-two",
             source_key="policy-a",

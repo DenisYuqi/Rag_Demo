@@ -60,14 +60,10 @@ COMPARISON_LEGACY_COST_UNAVAILABLE_REASON = "legacy-cost-completeness-unavailabl
 COMPARISON_PENDING_COST_REASON = "candidate-cost-pending"
 COMPARISON_SELECTION_ELIGIBILITY_GATE_ID = "comparison-selection-eligibility"
 COMPARISON_SELECTION_ELIGIBILITY_GATE_VERSION = "comparison-selection-eligibility-v2"
-_LEGACY_COMPARISON_SELECTION_ELIGIBILITY_GATE_VERSION = (
-    "comparison-selection-eligibility-v1"
-)
+_LEGACY_COMPARISON_SELECTION_ELIGIBILITY_GATE_VERSION = "comparison-selection-eligibility-v1"
 COMPARISON_SELECTION_MAX_P90_MS = 10_000.0
 COMPARISON_RERANKER_MIN_QUALITY_BENEFIT = 0.0
-COMPARISON_RERANKER_BENEFIT_PROFILE_ID = (
-    "registered-retrieval-strategy-v1-selection-eligibility-v2"
-)
+COMPARISON_RERANKER_BENEFIT_PROFILE_ID = "registered-retrieval-strategy-v1-selection-eligibility-v2"
 COMPARISON_RESULT_SCHEMA_VERSION: Literal["comparison-result-v1"] = "comparison-result-v1"
 COMPARISON_ARTIFACT_MANIFEST_SCHEMA_VERSION: Literal["comparison-artifact-manifest-v1"] = (
     "comparison-artifact-manifest-v1"
@@ -141,6 +137,7 @@ _IDENTITY_KEYS: Mapping[str, frozenset[str]] = {
             "ocr_enabled",
             "ocr_languages",
             "overlap_tokens",
+            "parent_target_tokens",
             "target_tokens",
             "tokenizer_version",
             "version",
@@ -1407,12 +1404,16 @@ class ComparisonLogicalAttempt(DomainModel):
                 raise ValueError("comparison_answer_generation_evidence_missing")
         elif self.terminal_kind != "error" or self.safe_error_code is None:
             raise ValueError("comparison_failed_attempt_terminal_invalid")
-        if succeeded and (
-            self.cache_outcome in {CacheOutcome.HIT, CacheOutcome.MISS}
-            or self.terminal_kind == "answer"
-        ) and (
-            isinstance(self.index_revision_id, UnavailableValue)
-            or isinstance(self.retrieval_evidence_digest, UnavailableValue)
+        if (
+            succeeded
+            and (
+                self.cache_outcome in {CacheOutcome.HIT, CacheOutcome.MISS}
+                or self.terminal_kind == "answer"
+            )
+            and (
+                isinstance(self.index_revision_id, UnavailableValue)
+                or isinstance(self.retrieval_evidence_digest, UnavailableValue)
+            )
         ):
             raise ValueError("comparison_retrieval_equivalence_evidence_missing")
         _validate_safe_code(self.safe_error_code)
@@ -3045,11 +3046,7 @@ def _deterministic_recommendation(
                     None
                     if hybrid is None or benefit_metric_id is None
                     else next(
-                        (
-                            item
-                            for item in hybrid.metrics
-                            if item.metric_id == benefit_metric_id
-                        ),
+                        (item for item in hybrid.metrics if item.metric_id == benefit_metric_id),
                         None,
                     )
                 )
@@ -3101,8 +3098,7 @@ def _deterministic_recommendation(
     rationale = [
         (
             "comparison-selection-eligibility-passed"
-            if COMPARISON_SELECTION_ELIGIBILITY_GATE_ID
-            in plan.selection_policy.required_gate_ids
+            if COMPARISON_SELECTION_ELIGIBILITY_GATE_ID in plan.selection_policy.required_gate_ids
             else "mandatory-gates-passed"
         ),
         f"selected-by-{plan.selection_policy.policy_id}",
@@ -3581,9 +3577,7 @@ def build_comparison_selection_eligibility_gate(
     references = tuple(item.attempt_id for item in attempts)
     coverage = observed_count / expected_logical_attempt_count
     error_count = sum(item.status is ComparisonLogicalAttemptStatus.ERROR for item in attempts)
-    timeout_count = sum(
-        item.status is ComparisonLogicalAttemptStatus.TIMEOUT for item in attempts
-    )
+    timeout_count = sum(item.status is ComparisonLogicalAttemptStatus.TIMEOUT for item in attempts)
     p90_ms = nearest_rank_percentile(tuple(item.latency_ms for item in attempts), 90)
     cost_complete = all(item.complete for item in providers)
     unavailable_cost = UnavailableValue(reason="provider-cost-evidence-incomplete")
@@ -3694,17 +3688,11 @@ def build_comparison_selection_eligibility_gate(
         gate_id=COMPARISON_SELECTION_ELIGIBILITY_GATE_ID,
         profile_version=COMPARISON_SELECTION_ELIGIBILITY_GATE_VERSION,
         status=(
-            GateStatus.PASSED
-            if passed
-            else GateStatus.FAILED
-            if valid
-            else GateStatus.UNAVAILABLE
+            GateStatus.PASSED if passed else GateStatus.FAILED if valid else GateStatus.UNAVAILABLE
         ),
         valid=valid,
         passed=passed,
-        case_executions_complete=(
-            observed_count == expected_logical_attempt_count
-        ),
+        case_executions_complete=(observed_count == expected_logical_attempt_count),
         observations=observations,
         failure_reasons=failure_reasons,
     )
@@ -4223,8 +4211,7 @@ def _validate_candidate_evidence_against_plan(
         None,
     )
     gate_required = (
-        COMPARISON_SELECTION_ELIGIBILITY_GATE_ID
-        in plan.selection_policy.required_gate_ids
+        COMPARISON_SELECTION_ELIGIBILITY_GATE_ID in plan.selection_policy.required_gate_ids
     )
     if stored_gate is None and gate_required:
         raise ComparisonDomainError("comparison_selection_eligibility_gate_mismatch")

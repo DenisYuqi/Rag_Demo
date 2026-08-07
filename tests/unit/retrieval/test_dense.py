@@ -17,7 +17,9 @@ from rag_mvp.domain.ingestion import (
     DocumentVersion,
     EmbeddingSpaceIdentity,
     ExtractionMethod,
+    ParentChunk,
 )
+from rag_mvp.ingestion.chunking import token_spans
 from rag_mvp.ingestion.embedding import EmbeddingStage
 from rag_mvp.ingestion.indexing import RevisionStager
 from rag_mvp.providers.fakes import DeterministicEmbeddingProvider
@@ -67,12 +69,26 @@ def _provider_identity(model: str = "embedding-model") -> ProviderEmbeddingSpace
 def _chunk(chunk_id: str, text: str, ordinal: int = 0) -> Chunk:
     return Chunk(
         chunk_id=chunk_id,
+        parent_chunk_id=f"parent-{chunk_id}",
         source_id="source-1",
         document_version=1,
         ordinal=ordinal,
         text=text,
         content_digest=hashlib.sha256(text.encode()).hexdigest(),
         locator=ChunkLocator(pages=(1,)),
+    )
+
+
+def _parent(chunk: Chunk) -> ParentChunk:
+    return ParentChunk(
+        parent_chunk_id=chunk.parent_chunk_id,
+        source_id=chunk.source_id,
+        document_version=chunk.document_version,
+        ordinal=chunk.ordinal,
+        text=chunk.text,
+        content_digest=chunk.content_digest,
+        locator=chunk.locator,
+        token_count=len(token_spans(chunk.text)),
     )
 
 
@@ -153,18 +169,26 @@ async def _bound_snapshot(tmp_path: Path) -> BoundRetrievalSnapshot:
         )
     )
     provider = DeterministicEmbeddingProvider(_provider_identity())
+    chunks = (
+        _chunk("chunk-a", "  annual leave\n", 0),
+        _chunk("chunk-b", "network security", 1),
+    )
     with EmbeddingCache(layout.directory("caches") / "embeddings.sqlite3") as cache:
         staged = await RevisionStager(layout, EmbeddingStage(provider, cache)).stage(
             "revision-bound",
-            (
-                _chunk("chunk-a", "  annual leave\n", 0),
-                _chunk("chunk-b", "network security", 1),
-            ),
+            chunks,
             {"source-1": "Handbook"},
             {"source-1": 1},
             _context(),
+            parents=tuple(_parent(chunk) for chunk in chunks),
         )
-    repositories.index_revisions.create(staged)
+    with database.transaction() as connection:
+        repositories.index_revisions.create(staged, connection=connection)
+        repositories.parent_chunks.insert_many(
+            staged.revision_id,
+            tuple(_parent(chunk) for chunk in chunks),
+            connection=connection,
+        )
     repositories.index_revisions.publish(
         staged.revision_id,
         published_at=datetime.now(UTC),

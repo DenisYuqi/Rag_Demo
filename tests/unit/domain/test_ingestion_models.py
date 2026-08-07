@@ -16,6 +16,7 @@ from rag_mvp.domain.ingestion import (
     IngestionJob,
     IngestionJobStatus,
     IngestionStage,
+    ParentChunk,
 )
 
 
@@ -30,6 +31,7 @@ def test_document_and_chunk_round_trip_json() -> None:
     )
     chunk = Chunk(
         chunk_id="chunk-1",
+        parent_chunk_id="parent-1",
         source_id=document.source_id,
         document_version=1,
         ordinal=0,
@@ -42,6 +44,18 @@ def test_document_and_chunk_round_trip_json() -> None:
     assert Document.model_validate_json(document.model_dump_json()) == document
     assert Chunk.model_validate_json(chunk.model_dump_json()) == chunk
     assert chunk.locator.pages == (1, 2)
+
+    parent = ParentChunk(
+        parent_chunk_id=chunk.parent_chunk_id,
+        source_id=document.source_id,
+        document_version=1,
+        ordinal=0,
+        text="完整的休假 policy 上下文",
+        content_digest="parent-digest-123",
+        locator=ChunkLocator(pages=(1, 2), section_path=("Benefits",)),
+        token_count=8,
+    )
+    assert ParentChunk.model_validate_json(parent.model_dump_json()) == parent
 
 
 @pytest.mark.parametrize(

@@ -29,6 +29,7 @@ def _candidate(
     digest = hashlib.sha256(exact_text.encode()).hexdigest()
     values: dict[str, object] = {
         "chunk_id": chunk_id,
+        "parent_chunk_id": f"parent-{chunk_id}",
         "source_id": source_id,
         "display_title": "Policy",
         "document_version": 1,

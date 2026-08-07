@@ -60,6 +60,7 @@ def _candidate(
 ) -> RankingEvidence:
     return RankingEvidence(
         chunk_id=chunk_id,
+        parent_chunk_id=chunk_id,
         source_id=source_id or f"source-{rank}",
         display_title=f"Policy {rank}",
         document_version=1,

@@ -11,7 +11,9 @@ from rag_mvp.domain.ingestion import (
     ChunkLocator,
     EmbeddingSpaceIdentity,
     IndexRevisionStatus,
+    ParentChunk,
 )
+from rag_mvp.ingestion.chunking import token_spans
 from rag_mvp.ingestion.embedding import EmbeddingStage
 from rag_mvp.ingestion.indexing import IndexingError, RevisionStager
 from rag_mvp.providers.fakes import DeterministicEmbeddingProvider
@@ -42,6 +44,7 @@ def _chunk(
 ) -> Chunk:
     return Chunk(
         chunk_id=chunk_id,
+        parent_chunk_id=f"parent-{chunk_id}",
         source_id=source_id,
         document_version=version,
         ordinal=ordinal,
@@ -53,6 +56,51 @@ def _chunk(
             char_end=ordinal * 100 + len(text),
         ),
     )
+
+
+def _parents(chunks: tuple[Chunk, ...]) -> tuple[ParentChunk, ...]:
+    return tuple(
+        ParentChunk(
+            parent_chunk_id=chunk.parent_chunk_id,
+            source_id=chunk.source_id,
+            document_version=chunk.document_version,
+            ordinal=chunk.ordinal,
+            text=chunk.text,
+            content_digest=chunk.content_digest,
+            locator=chunk.locator,
+            token_count=len(token_spans(chunk.text)),
+        )
+        for chunk in chunks
+    )
+
+
+async def test_staging_rejects_missing_and_orphan_parent_inventory(tmp_path: Path) -> None:
+    layout = DataLayout.from_root(tmp_path / "parent-inventory")
+    layout.initialize()
+    chunk = _chunk("chunk-one", "source-one", "parent integrity", 0)
+    parent = _parents((chunk,))[0]
+    orphan = parent.model_copy(update={"parent_chunk_id": "parent-orphan", "ordinal": 1})
+
+    with EmbeddingCache(layout.directory("caches") / "embeddings.sqlite3") as cache:
+        stager = RevisionStager(
+            layout,
+            EmbeddingStage(DeterministicEmbeddingProvider(), cache),
+        )
+        for revision_id, parents in (
+            ("revision-missing-parent", ()),
+            ("revision-orphan-parent", (parent, orphan)),
+        ):
+            with pytest.raises(IndexingError, match="parent_child_inventory_mismatch"):
+                await stager.stage(
+                    revision_id,
+                    (chunk,),
+                    {"source-one": "One"},
+                    {"source-one": 1},
+                    _context(revision_id),
+                    parents=parents,
+                )
+
+            assert not layout.index_revision_path(revision_id).exists()
 
 
 async def test_bilingual_snapshot_persists_complete_identity_and_metadata(tmp_path: Path) -> None:
@@ -73,6 +121,7 @@ async def test_bilingual_snapshot_persists_complete_identity_and_metadata(tmp_pa
             titles,
             {"source-handbook": 1},
             _context("stage-bilingual"),
+            parents=_parents(chunks),
         )
         vectors = (await embeddings.embed(chunks, _context("read-vectors"))).vectors
 
@@ -149,6 +198,7 @@ async def test_staged_paths_and_snapshots_are_immutable_and_empty_is_supported(
             {"source-one": "One"},
             {"source-one": 1},
             _context("immutable"),
+            parents=_parents((chunk,)),
         )
 
         with pytest.raises(IndexingError, match="revision_path_exists"):
@@ -158,6 +208,7 @@ async def test_staged_paths_and_snapshots_are_immutable_and_empty_is_supported(
                 {"source-one": "One"},
                 {"source-one": 1},
                 _context("duplicate-revision"),
+                parents=_parents((chunk,)),
             )
 
         empty = await stager.stage(
@@ -166,6 +217,7 @@ async def test_staged_paths_and_snapshots_are_immutable_and_empty_is_supported(
             {},
             {},
             _context("empty"),
+            parents=(),
         )
 
     with (
@@ -246,6 +298,7 @@ async def test_missing_and_corrupt_indexes_fail_open_without_creation(tmp_path: 
             {"source-corrupt": "Corrupt"},
             {"source-corrupt": 1},
             _context("corrupt"),
+            parents=_parents((chunk,)),
         )
 
     dense_path = layout.dense_index_path(revision.revision_id)
@@ -266,6 +319,41 @@ async def test_missing_and_corrupt_indexes_fail_open_without_creation(tmp_path: 
             identity=revision.embedding_space,
         )
     assert (dense_path / "chroma.sqlite3").is_file()
+
+
+async def test_dense_parent_mapping_tampering_fails_closed(tmp_path: Path) -> None:
+    layout = DataLayout.from_root(tmp_path / "data-parent-tamper")
+    layout.initialize()
+    provider = DeterministicEmbeddingProvider()
+    chunk = _chunk("chunk-parent-tamper", "source-parent", "parent mapping", 0)
+    with EmbeddingCache(layout.directory("caches") / "embeddings.sqlite3") as cache:
+        revision = await RevisionStager(layout, EmbeddingStage(provider, cache)).stage(
+            "revision-parent-tamper",
+            (chunk,),
+            {"source-parent": "Parent"},
+            {"source-parent": 1},
+            _context("parent-tamper"),
+            parents=_parents((chunk,)),
+        )
+
+    dense_path = layout.dense_index_path(revision.revision_id)
+    client = chromadb.PersistentClient(path=str(dense_path))
+    collection = client.get_collection(
+        PersistentChromaIndex.COLLECTION_NAME,
+        embedding_function=None,
+    )
+    record = collection.get(ids=[chunk.chunk_id], include=["metadatas"])
+    metadata = dict(record["metadatas"][0])
+    metadata["parent_chunk_id"] = "parent-tampered"
+    collection.update(ids=[chunk.chunk_id], metadatas=[metadata])
+    client.close()
+
+    with pytest.raises(DenseIndexError, match="dense_record_digest_mismatch"):
+        PersistentChromaIndex.open_existing(
+            dense_path,
+            revision_id=revision.revision_id,
+            identity=revision.embedding_space,
+        )
 
 
 def _domain_identity(provider: DeterministicEmbeddingProvider) -> EmbeddingSpaceIdentity:

@@ -13,8 +13,10 @@ from rag_mvp.domain.ingestion import (
     DocumentKind,
     DocumentVersion,
     ExtractionMethod,
+    ParentChunk,
 )
 from rag_mvp.domain.retrieval import RetrievalCandidate
+from rag_mvp.ingestion.chunking import token_spans
 from rag_mvp.ingestion.embedding import EmbeddingStage
 from rag_mvp.ingestion.indexing import RevisionStager
 from rag_mvp.providers.fakes import DeterministicEmbeddingProvider
@@ -35,6 +37,7 @@ def candidate(
 ) -> RetrievalCandidate:
     return RetrievalCandidate(
         chunk_id=chunk_id,
+        parent_chunk_id=f"parent-{chunk_id}",
         source_id="source-1",
         display_title="Policy",
         document_version=1,
@@ -58,12 +61,26 @@ def indexed_chunk(
 ) -> Chunk:
     return Chunk(
         chunk_id=chunk_id,
+        parent_chunk_id=f"parent-{chunk_id}",
         source_id=source_id,
         document_version=document_version,
         ordinal=ordinal,
         text=text,
         content_digest=hashlib.sha256(text.encode()).hexdigest(),
         locator=locator or ChunkLocator(char_start=ordinal * 100, char_end=ordinal * 100 + 50),
+    )
+
+
+def parent_for_chunk(chunk: Chunk) -> ParentChunk:
+    return ParentChunk(
+        parent_chunk_id=chunk.parent_chunk_id,
+        source_id=chunk.source_id,
+        document_version=chunk.document_version,
+        ordinal=chunk.ordinal,
+        text=chunk.text,
+        content_digest=chunk.content_digest,
+        locator=chunk.locator,
+        token_count=len(token_spans(chunk.text)),
     )
 
 
@@ -142,8 +159,15 @@ async def build_bound_snapshot(
             resolved_titles,
             active_sources,
             context,
+            parents=tuple(parent_for_chunk(chunk) for chunk in resolved_chunks),
         )
-    repositories.index_revisions.create(staged)
+    with database.transaction() as connection:
+        repositories.index_revisions.create(staged, connection=connection)
+        repositories.parent_chunks.insert_many(
+            revision_id,
+            tuple(parent_for_chunk(chunk) for chunk in resolved_chunks),
+            connection=connection,
+        )
     repositories.index_revisions.publish(
         revision_id,
         published_at=datetime.now(UTC),

@@ -19,6 +19,7 @@ from rag_mvp.retrieval.tokenizer import (
 def _chunk(chunk_id: str, text: str, ordinal: int) -> Chunk:
     return Chunk(
         chunk_id=chunk_id,
+        parent_chunk_id=f"parent-{chunk_id}",
         source_id="source-1",
         document_version=1,
         ordinal=ordinal,
@@ -117,6 +118,12 @@ def test_tokenizer_reuses_the_verified_read_only_backend() -> None:
         (
             lambda payload: payload["records"][0].__setitem__("tokens", ["tampered"]),
             "token_inventory_mismatch",
+        ),
+        (
+            lambda payload: payload["records"][0]["chunk"].__setitem__(
+                "parent_chunk_id", "parent-tampered"
+            ),
+            "record_digest_mismatch",
         ),
         (
             lambda payload: payload["record_digests"].__setitem__("chunk", "0" * 64),

@@ -52,7 +52,7 @@ class LexicalRecord:
 class PersistentBm25Index:
     """An immutable revision-specific lexical index backed by one JSON file."""
 
-    SNAPSHOT_SCHEMA = "bm25-snapshot-v3"
+    SNAPSHOT_SCHEMA = "bm25-snapshot-v4"
     ALGORITHM_VERSION = "bm25-okapi-v1"
     DEFAULT_REVISION_ID = "standalone"
     DEFAULT_K1 = 1.5
@@ -198,6 +198,7 @@ class PersistentBm25Index:
         return tuple(
             RetrievalCandidate(
                 chunk_id=record.chunk.chunk_id,
+                parent_chunk_id=record.chunk.parent_chunk_id,
                 source_id=record.chunk.source_id,
                 display_title=record.display_title,
                 document_version=record.chunk.document_version,

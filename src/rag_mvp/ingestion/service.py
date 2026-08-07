@@ -29,10 +29,15 @@ from rag_mvp.domain.ingestion import (
     IngestionJobStatus,
     IngestionOperation,
     IngestionStage,
+    ParentChunk,
     ReindexCommand,
     UploadCommand,
 )
-from rag_mvp.ingestion.chunking import ChunkingConfig, chunk_document
+from rag_mvp.ingestion.chunking import (
+    ChunkingConfig,
+    chunk_document,
+    chunk_document_hierarchy,
+)
 from rag_mvp.ingestion.embedding import EmbeddingStage, EmbeddingStageError
 from rag_mvp.ingestion.extractors import (
     ExtractedDocument,
@@ -74,6 +79,7 @@ from rag_mvp.storage.artifacts import (
     ArtifactNotFoundError,
     ArtifactStore,
     ArtifactStoreError,
+    StoredVersionArtifacts,
 )
 from rag_mvp.storage.database import Database
 from rag_mvp.storage.embedding_cache import EmbeddingCache
@@ -223,7 +229,11 @@ class IngestionService:
             chunking_version=resolved_chunking.version,
             worker_pools=worker_pools,
         )
-        publisher = RevisionPublisher(layout, repositories.index_revisions)
+        publisher = RevisionPublisher(
+            layout,
+            repositories.index_revisions,
+            repositories.parent_chunks,
+        )
         return cls(
             layout=layout,
             database=database,
@@ -270,6 +280,7 @@ class IngestionService:
         self,
         *,
         revision_id: str,
+        parents: Sequence[ParentChunk],
         chunks: Sequence[Chunk],
         titles: Mapping[str, str],
         active_sources: Mapping[str, int],
@@ -303,9 +314,16 @@ class IngestionService:
                 normalized_titles,
                 normalized_sources,
                 context,
+                parents=tuple(parents),
             )
             try:
-                self._repositories.index_revisions.create(revision)
+                with self._database.transaction() as connection:
+                    self._repositories.index_revisions.create(revision, connection=connection)
+                    self._repositories.parent_chunks.insert_many(
+                        revision_id,
+                        tuple(parents),
+                        connection=connection,
+                    )
             except BaseException:
                 await self._remove_revision_artifacts(revision_id)
                 raise
@@ -485,6 +503,19 @@ class IngestionService:
         async with self._mutation_lock:
             active_id = await self._validate_active_state()
             try:
+                active_revision = self._repositories.index_revisions.get_active()
+                if active_revision is not None:
+                    legacy_deleted = tuple(
+                        document
+                        for document in self._repositories.documents.list(include_deleted=True)
+                        if document.deleted_at is not None
+                    )
+                    for document in legacy_deleted:
+                        await self._purge_deleted_source(
+                            None,
+                            document.source_id,
+                            active_revision,
+                        )
                 jobs = {job.job_id: job for job in self._repositories.ingestion_jobs.list()}
                 for command_job_id in self._artifacts.list_command_job_ids():
                     command_job = jobs.get(command_job_id)
@@ -582,6 +613,24 @@ class IngestionService:
         expected_active_id = active_at_start.revision_id if active_at_start is not None else None
         job = initial_job
         if (
+            isinstance(command, DeleteCommand)
+            and active_at_start is not None
+            and active_at_start.ingestion_job_id == job.job_id
+            and command.source_id not in active_at_start.active_sources
+        ):
+            document = self._repositories.documents.get(command.source_id)
+            if document is None or document.deleted_at is not None:
+                job, started = self._enter_stage(job, IngestionStage.PUBLISHING)
+                job = self._record_stage(job, IngestionStage.PUBLISHING, started)
+                completed = await self._purge_deleted_source(
+                    job,
+                    command.source_id,
+                    active_at_start,
+                )
+                if completed is None:
+                    raise IngestionRecoveryError("delete_job_completion_missing")
+                return completed, active_at_start.revision_id
+        if (
             not isinstance(command, ReindexCommand)
             and active_at_start is not None
             and not self._stager.is_compatible(active_at_start)
@@ -604,7 +653,7 @@ class IngestionService:
         ):
             raise IngestionSubmissionError("reindex_required")
 
-        job, chunks, titles, active_sources = self._build_snapshot(job, versions)
+        job, parents, chunks, titles, active_sources = self._build_snapshot(job, versions)
         revision_id = self._new_opaque_id(self._revision_id_factory, "revision_id")
         context = ProviderCallContext(
             request_id=job.job_id,
@@ -635,6 +684,7 @@ class IngestionService:
                 titles,
                 active_sources,
                 context,
+                parents=parents,
                 ingestion_job_id=job.job_id,
                 progress_hook=progress,
             )
@@ -642,7 +692,17 @@ class IngestionService:
             self._record_stage(current_job, current_job.stage, stage_started)
             raise
         job = self._record_stage(current_job, current_job.stage, stage_started)
-        self._repositories.index_revisions.create(revision)
+        try:
+            with self._database.transaction() as connection:
+                self._repositories.index_revisions.create(revision, connection=connection)
+                self._repositories.parent_chunks.insert_many(
+                    revision_id,
+                    parents,
+                    connection=connection,
+                )
+        except BaseException:
+            await self._remove_revision_artifacts(revision_id)
+            raise
 
         job, publishing_started = self._enter_stage(job, IngestionStage.PUBLISHING)
         await self._chroma_worker_pool.run_cancel_safe(self._publisher.validate, revision)
@@ -651,14 +711,103 @@ class IngestionService:
             self._publisher.publish,
             revision_id,
             expected_active_revision_id=expected_active_id,
-            ingestion_job_id=job.job_id,
-            job_ocr_page_count=job.ocr_page_count,
-            job_chunk_count=job.chunk_count,
+            ingestion_job_id=(None if isinstance(command, DeleteCommand) else job.job_id),
+            job_ocr_page_count=(None if isinstance(command, DeleteCommand) else job.ocr_page_count),
+            job_chunk_count=(None if isinstance(command, DeleteCommand) else job.chunk_count),
         )
-        completed = self._repositories.ingestion_jobs.get(job.job_id)
-        if completed is None:
+        if isinstance(command, DeleteCommand):
+            completed = await self._purge_deleted_source(job, command.source_id, published)
+            if completed is None:
+                raise IngestionRecoveryError("delete_job_completion_missing")
+            return completed, published.revision_id
+        persisted_job = self._repositories.ingestion_jobs.get(job.job_id)
+        if persisted_job is None:
             raise RepositoryNotFound("ingestion_job_not_found")
-        return completed, published.revision_id
+        return persisted_job, published.revision_id
+
+    async def _purge_deleted_source(
+        self,
+        job: IngestionJob | None,
+        source_id: str,
+        active_revision: IndexRevision,
+    ) -> IngestionJob | None:
+        """Remove retired index snapshots, artifacts, and SQLite document rows."""
+
+        persisted_active = self._repositories.index_revisions.get_active()
+        if (
+            persisted_active is None
+            or persisted_active.revision_id != active_revision.revision_id
+            or source_id in persisted_active.active_sources
+        ):
+            raise IngestionRecoveryError("delete_purge_not_safe")
+
+        versions = self._repositories.documents.list_versions(source_id)
+        retired_revisions = tuple(
+            revision
+            for revision in self._repositories.index_revisions.list()
+            if revision.revision_id != active_revision.revision_id
+            and source_id in revision.active_sources
+        )
+
+        for revision in retired_revisions:
+            await self._remove_revision_artifacts(revision.revision_id)
+        for version in versions:
+            self._artifacts.cleanup(
+                StoredVersionArtifacts(
+                    source_artifact_path=version.source_artifact_path,
+                    canonical_artifact_path=version.canonical_artifact_path,
+                )
+            )
+
+        with self._database.transaction() as connection:
+            current = self._repositories.index_revisions.get_active(connection=connection)
+            if (
+                current is None
+                or current.revision_id != active_revision.revision_id
+                or source_id in current.active_sources
+            ):
+                raise IngestionRecoveryError("delete_purge_not_safe")
+
+            completed: IngestionJob | None = None
+            if job is not None:
+                current_job = self._repositories.ingestion_jobs.get(
+                    job.job_id,
+                    connection=connection,
+                )
+                if current_job is None:
+                    raise RepositoryNotFound("ingestion_job_not_found")
+                completed = IngestionJob.model_validate(
+                    {
+                        **current_job.model_dump(),
+                        "status": IngestionJobStatus.SUCCEEDED,
+                        "stage": IngestionStage.COMPLETE,
+                        "active_index_revision": active_revision.revision_id,
+                    }
+                )
+                completed = self._repositories.ingestion_jobs.transition(
+                    completed,
+                    connection=connection,
+                )
+
+            for revision in retired_revisions:
+                persisted = self._repositories.index_revisions.get(
+                    revision.revision_id,
+                    connection=connection,
+                )
+                if persisted is None:
+                    continue
+                if persisted.status is IndexRevisionStatus.ACTIVE:
+                    raise IngestionRecoveryError("delete_purge_not_safe")
+                if source_id in persisted.active_sources:
+                    connection.execute(
+                        "DELETE FROM index_revisions WHERE revision_id = ?",
+                        (persisted.revision_id,),
+                    )
+            self._repositories.documents.delete_permanently(
+                source_id,
+                connection=connection,
+            )
+            return completed
 
     async def _prepare_upload(
         self,
@@ -843,8 +992,15 @@ class IngestionService:
         self,
         job: IngestionJob,
         versions: Mapping[str, DocumentVersion],
-    ) -> tuple[IngestionJob, tuple[Chunk, ...], dict[str, str], dict[str, int]]:
+    ) -> tuple[
+        IngestionJob,
+        tuple[ParentChunk, ...],
+        tuple[Chunk, ...],
+        dict[str, str],
+        dict[str, int],
+    ]:
         job, started = self._enter_stage(job, IngestionStage.CHUNKING)
+        parents: list[ParentChunk] = []
         chunks: list[Chunk] = []
         source_chunk_counts: dict[str, int] = {}
         titles: dict[str, str] = {}
@@ -855,14 +1011,15 @@ class IngestionService:
             if document is None:
                 raise RepositoryNotFound("snapshot_document_missing")
             canonical = self._load_canonical_for(document, version)
-            source_chunks = chunk_document(
+            hierarchy = chunk_document_hierarchy(
                 canonical,
                 source_id=source_id,
                 document_version=version.version,
                 config=self._chunking,
             )
-            chunks.extend(source_chunks)
-            source_chunk_counts[source_id] = len(source_chunks)
+            parents.extend(hierarchy.parents)
+            chunks.extend(hierarchy.children)
+            source_chunk_counts[source_id] = len(hierarchy.children)
             titles[source_id] = document.display_title
             active_sources[source_id] = version.version
         if job.operation is IngestionOperation.UPLOAD and job.source_id is not None:
@@ -877,7 +1034,7 @@ class IngestionService:
             started,
             chunk_count=job_chunk_count,
         )
-        return job, tuple(chunks), titles, active_sources
+        return job, tuple(parents), tuple(chunks), titles, active_sources
 
     def _desired_versions(self, candidate: DocumentVersion) -> dict[str, DocumentVersion]:
         desired = {
@@ -1131,6 +1288,7 @@ def _default_derivation_config(
                 "tokenizer_version": chunking.tokenizer_version,
                 "target_tokens": chunking.target_tokens,
                 "overlap_tokens": chunking.overlap_tokens,
+                "parent_target_tokens": chunking.parent_target_tokens,
             },
             "tokenizer": {"version": BILINGUAL_TOKENIZER_IDENTITY},
         },

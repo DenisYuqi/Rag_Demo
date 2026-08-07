@@ -81,7 +81,7 @@ class PersistentChromaIndex:
     """One Chroma collection whose sealed contents can never be mutated."""
 
     COLLECTION_NAME = "rag_mvp_revision"
-    SCHEMA_VERSION = "chroma-revision-v1"
+    SCHEMA_VERSION = "chroma-revision-v2"
     METRIC = "cosine"
     _PERSISTENCE_MARKER = "chroma.sqlite3"
 
@@ -296,6 +296,7 @@ class PersistentChromaIndex:
                 metadatas.append(
                     {
                         "source_id": chunk.source_id,
+                        "parent_chunk_id": chunk.parent_chunk_id,
                         "display_title": title,
                         "document_version": chunk.document_version,
                         "ordinal": chunk.ordinal,
@@ -414,6 +415,7 @@ class PersistentChromaIndex:
                     raise DenseIndexError("dense_query_record_invalid")
                 chunk = Chunk(
                     chunk_id=str(chunk_id),
+                    parent_chunk_id=_required_string(metadata, "parent_chunk_id"),
                     source_id=_required_string(metadata, "source_id"),
                     document_version=_required_int(metadata, "document_version", minimum=1),
                     ordinal=_required_int(metadata, "ordinal", minimum=0),
@@ -431,6 +433,7 @@ class PersistentChromaIndex:
                 candidates.append(
                     RetrievalCandidate(
                         chunk_id=chunk.chunk_id,
+                        parent_chunk_id=chunk.parent_chunk_id,
                         source_id=chunk.source_id,
                         display_title=title,
                         document_version=chunk.document_version,
@@ -543,6 +546,7 @@ class PersistentChromaIndex:
                     raise DenseIndexError("dense_record_invalid")
                 chunk = Chunk(
                     chunk_id=chunk_id,
+                    parent_chunk_id=_required_string(metadata, "parent_chunk_id"),
                     source_id=_required_string(metadata, "source_id"),
                     document_version=_required_int(metadata, "document_version", minimum=1),
                     ordinal=_required_int(metadata, "ordinal", minimum=0),

@@ -18,6 +18,7 @@ from rag_mvp.domain.retrieval import (
 def _candidate_values() -> dict[str, object]:
     return {
         "chunk_id": "chunk-1",
+        "parent_chunk_id": "parent-1",
         "source_id": "source-1",
         "display_title": "Policy",
         "document_version": 1,
@@ -105,11 +106,7 @@ def test_retrieval_evidence_digest_ignores_runtime_diagnostics_but_binds_output(
         }
     )
     changed = cold.model_copy(
-        update={
-            "evidence": (
-                evidence.model_copy(update={"text": "Different grounded evidence"}),
-            )
-        }
+        update={"evidence": (evidence.model_copy(update={"text": "Different grounded evidence"}),)}
     )
 
     assert retrieval_evidence_digest(cold) == retrieval_evidence_digest(warm)

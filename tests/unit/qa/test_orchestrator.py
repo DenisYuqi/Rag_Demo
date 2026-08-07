@@ -58,6 +58,7 @@ async def _never_sleep(seconds: float) -> None:
 def _evidence(chunk_id: str, rank: int, *, text: str | None = None) -> RankingEvidence:
     return RankingEvidence(
         chunk_id=chunk_id,
+        parent_chunk_id=chunk_id,
         source_id=f"source-{rank}",
         display_title=f"Policy {rank}",
         document_version=1,

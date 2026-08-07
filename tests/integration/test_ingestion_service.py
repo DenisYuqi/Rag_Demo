@@ -239,6 +239,12 @@ async def test_reindex_uses_retained_artifacts_and_same_space_cache(tmp_path: Pa
     assert provider.call_count == calls_before
     assert service.repositories.documents.list_versions(uploaded.source_id or "") == versions_before
     assert await _lexical_terms(root, reindexed.active_index_revision or "", "REINDEX-707")
+    active = _active(service)
+    parent_count, parent_digest, _ = service.repositories.parent_chunks.inventory(
+        active.revision_id
+    )
+    assert parent_count == active.parent_chunk_count > 0
+    assert parent_digest == active.parent_chunk_set_digest
     service.close()
 
 
@@ -298,6 +304,11 @@ async def test_reindex_derivation_change_registers_new_inactive_version_then_pub
     assert reindexed.source_id == uploaded.source_id
     assert reindexed.document_version == 2
     assert _active(changed).active_sources == {uploaded.source_id: 2}
+    changed_active = _active(changed)
+    assert changed.repositories.parent_chunks.inventory(changed_active.revision_id)[:2] == (
+        changed_active.parent_chunk_count,
+        changed_active.parent_chunk_set_digest,
+    )
     assert [
         version.version
         for version in changed.repositories.documents.list_versions(uploaded.source_id)
@@ -314,11 +325,31 @@ async def test_successful_failed_and_last_source_delete(tmp_path: Path) -> None:
         _submit(service, "Second DELETE-B source.", source_key="second").job_id
     )
     assert first.source_id is not None and second.source_id is not None
+    revisions_with_first = tuple(
+        revision
+        for revision in service.repositories.index_revisions.list()
+        if first.source_id in revision.active_sources
+    )
 
     deleted = await service.run(service.submit_delete(first.source_id).job_id)
     assert deleted.status is IngestionJobStatus.SUCCEEDED
     assert _active(service).active_sources == {second.source_id: 1}
     assert await _lexical_terms(root, deleted.active_index_revision or "", "DELETE-A") == ()
+    assert service.repositories.documents.get(first.source_id) is None
+    assert service.repositories.documents.list_versions(first.source_id) == []
+    layout = DataLayout.from_root(root)
+    retired_with_first = [
+        revision
+        for revision in service.repositories.index_revisions.list()
+        if first.source_id in revision.active_sources
+    ]
+    assert retired_with_first == []
+    assert all(
+        not layout.index_revision_path(revision.revision_id).exists()
+        for revision in revisions_with_first
+    )
+    assert not layout.directory("sources").joinpath(first.source_id).exists()
+    assert not layout.directory("canonical").joinpath(first.source_id).exists()
 
     old_revision = _active(service)
 
@@ -346,7 +377,6 @@ async def test_successful_failed_and_last_source_delete(tmp_path: Path) -> None:
     assert last.status is IngestionJobStatus.SUCCEEDED
     assert empty.active_sources == {}
     assert empty.chunk_count == 0
-    layout = DataLayout.from_root(root)
     with PersistentChromaIndex.open_existing(
         layout.dense_index_path(empty.revision_id),
         revision_id=empty.revision_id,
@@ -359,6 +389,40 @@ async def test_successful_failed_and_last_source_delete(tmp_path: Path) -> None:
     )
     assert lexical.chunk_ids == frozenset()
     service.close()
+
+
+@pytest.mark.integration
+async def test_startup_physically_purges_legacy_soft_deleted_source(tmp_path: Path) -> None:
+    root = tmp_path / "data"
+    service, _ = _service(root)
+    uploaded = await service.run(_submit(service, "Legacy soft delete PURGE-909 source.").job_id)
+    assert uploaded.source_id is not None
+    source_id = uploaded.source_id
+    legacy_revisions = tuple(service.repositories.index_revisions.list())
+
+    async def interrupt_purge(*_args: object) -> IngestionJob | None:
+        raise InjectedFailure("simulate legacy soft-delete behavior")
+
+    service._purge_deleted_source = interrupt_purge  # type: ignore[method-assign]
+    failed = await service.run(service.submit_delete(source_id).job_id)
+    soft_deleted = service.repositories.documents.get(source_id)
+    assert failed.status is IngestionJobStatus.FAILED
+    assert soft_deleted is not None and soft_deleted.deleted_at is not None
+    service.close()
+
+    restarted, _ = _service(root)
+    await restarted.recover_startup()
+
+    layout = DataLayout.from_root(root)
+    assert restarted.repositories.documents.get(source_id) is None
+    assert restarted.repositories.documents.list_versions(source_id) == []
+    assert all(
+        not layout.index_revision_path(revision.revision_id).exists()
+        for revision in legacy_revisions
+    )
+    assert not layout.directory("sources").joinpath(source_id).exists()
+    assert not layout.directory("canonical").joinpath(source_id).exists()
+    restarted.close()
 
 
 @pytest.mark.integration
@@ -440,6 +504,7 @@ async def test_recovery_abandons_staged_revision_instead_of_promoting_it(tmp_pat
 
     assert report.abandoned_revision_count == 1
     assert abandoned is not None and abandoned.status is IndexRevisionStatus.FAILED
+    assert restarted.repositories.parent_chunks.list_for_revision("rev_abandoned") == ()
     assert _active(restarted).revision_id == active.revision_id
     assert restarted.get_job(completed.job_id) is not None
     restarted.close()

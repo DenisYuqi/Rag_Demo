@@ -25,8 +25,8 @@ from rag_mvp.domain.ingestion import EmbeddingSpaceIdentity
 from rag_mvp.domain.retrieval import RankingEvidence, RetrievalMode, RetrievalResult
 from rag_mvp.retrieval.request import canonicalize_query
 
-RETRIEVAL_CACHE_IDENTITY_VERSION = "retrieval-cache-key-v2"
-_RETRIEVAL_CACHE_ENVELOPE_VERSION = "retrieval-cache-envelope-v1"
+RETRIEVAL_CACHE_IDENTITY_VERSION = "retrieval-cache-key-v3"
+_RETRIEVAL_CACHE_ENVELOPE_VERSION = "retrieval-cache-envelope-v2"
 _CACHE_KEY = re.compile(r"^[0-9a-f]{64}$")
 
 

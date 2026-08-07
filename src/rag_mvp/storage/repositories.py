@@ -24,6 +24,7 @@ from rag_mvp.domain.ingestion import (
     IngestionJob,
     IngestionJobStatus,
     IngestionStage,
+    ParentChunk,
 )
 from rag_mvp.domain.qa import (
     ConversationSession,
@@ -374,6 +375,28 @@ class DocumentRepository:
             )
             self.update(updated, connection=active)
             return updated
+
+    def delete_permanently(
+        self,
+        source_id: str,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> bool:
+        """Physically remove one document and all of its version metadata."""
+
+        with _write_connection(self._database, connection) as active:
+            document = self.get(source_id, connection=active)
+            if document is None:
+                return False
+            active.execute(
+                "DELETE FROM document_versions WHERE source_id = ?",
+                (source_id,),
+            )
+            cursor = active.execute(
+                "DELETE FROM documents WHERE source_id = ?",
+                (source_id,),
+            )
+            return cursor.rowcount == 1
 
 
 class IngestionJobRepository:
@@ -2154,11 +2177,169 @@ def _comparison_shared_setup_content_hash(
     return f"sha256:{hashlib.sha256(content).hexdigest()}"
 
 
+class ParentChunkRepository:
+    """Immutable parent text inventories scoped to one index revision."""
+
+    _LOOKUP_BATCH_SIZE = 400
+
+    def __init__(self, database: Database) -> None:
+        self._database = database
+
+    def insert_many(
+        self,
+        revision_id: str,
+        parents: Sequence[ParentChunk],
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> None:
+        values = tuple(parents)
+        if not revision_id:
+            raise ValueError("revision_id must be non-empty")
+        if len({parent.parent_chunk_id for parent in values}) != len(values):
+            raise RepositoryConflict("parent chunk identifiers must be unique")
+        if len(
+            {(parent.source_id, parent.document_version, parent.ordinal) for parent in values}
+        ) != len(values):
+            raise RepositoryConflict("parent chunk ordinals must be unique per source version")
+        rows = [
+            (
+                revision_id,
+                parent.parent_chunk_id,
+                parent.source_id,
+                parent.document_version,
+                parent.ordinal,
+                parent.text,
+                parent.content_digest,
+                parent.locator.model_dump_json(),
+                parent.token_count,
+            )
+            for parent in values
+        ]
+        try:
+            with _write_connection(self._database, connection) as active:
+                active.executemany(
+                    """
+                    INSERT INTO parent_chunks(
+                        revision_id, parent_chunk_id, source_id, document_version,
+                        ordinal, text, content_digest, locator_json, token_count
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    rows,
+                )
+        except sqlite3.IntegrityError as error:
+            _raise_conflict("parent chunk", error)
+
+    def get_many(
+        self,
+        revision_id: str,
+        parent_chunk_ids: Sequence[str],
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> dict[str, ParentChunk]:
+        requested = tuple(dict.fromkeys(parent_chunk_ids))
+        if not revision_id:
+            raise ValueError("revision_id must be non-empty")
+        if any(not parent_id for parent_id in requested):
+            raise ValueError("parent chunk identifiers must be non-empty")
+        if not requested:
+            return {}
+        parents: dict[str, ParentChunk] = {}
+        with _read_connection(self._database, connection) as active:
+            for start in range(0, len(requested), self._LOOKUP_BATCH_SIZE):
+                batch = requested[start : start + self._LOOKUP_BATCH_SIZE]
+                placeholders = ",".join("?" for _ in batch)
+                query = f"""
+                    SELECT parent_chunk_id, source_id, document_version, ordinal,
+                           text, content_digest, locator_json, token_count
+                    FROM parent_chunks
+                    WHERE revision_id = ? AND parent_chunk_id IN ({placeholders})
+                    """  # noqa: S608 - placeholders are generated, not user input
+                rows = active.execute(
+                    query,
+                    (revision_id, *batch),
+                ).fetchall()
+                for row in rows:
+                    parent = self._decode_parent(row)
+                    parents[parent.parent_chunk_id] = parent
+        return parents
+
+    def list_for_revision(
+        self,
+        revision_id: str,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> tuple[ParentChunk, ...]:
+        if not revision_id:
+            raise ValueError("revision_id must be non-empty")
+        with _read_connection(self._database, connection) as active:
+            rows = active.execute(
+                """
+                SELECT parent_chunk_id, source_id, document_version, ordinal,
+                       text, content_digest, locator_json, token_count
+                FROM parent_chunks
+                WHERE revision_id = ?
+                ORDER BY source_id, document_version, ordinal, parent_chunk_id
+                """,
+                (revision_id,),
+            ).fetchall()
+        return tuple(self._decode_parent(row) for row in rows)
+
+    def inventory(
+        self,
+        revision_id: str,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> tuple[int, str, dict[str, str]]:
+        # Keep storage importable while the retrieval package initializes.
+        from rag_mvp.retrieval.snapshot import parent_chunk_record_digest, parent_set_digest
+
+        parents = self.list_for_revision(revision_id, connection=connection)
+        records = {parent.parent_chunk_id: parent_chunk_record_digest(parent) for parent in parents}
+        return len(parents), parent_set_digest(records), records
+
+    def delete_revision(
+        self,
+        revision_id: str,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> int:
+        with _write_connection(self._database, connection) as active:
+            cursor = active.execute(
+                "DELETE FROM parent_chunks WHERE revision_id = ?",
+                (revision_id,),
+            )
+        return cursor.rowcount
+
+    @staticmethod
+    def _decode_parent(row: sqlite3.Row) -> ParentChunk:
+        try:
+            text = str(row["text"])
+            digest = str(row["content_digest"])
+            if hashlib.sha256(text.encode("utf-8")).hexdigest() != digest:
+                raise RepositoryError("parent chunk content digest mismatch")
+            parent = ParentChunk(
+                parent_chunk_id=str(row["parent_chunk_id"]),
+                source_id=str(row["source_id"]),
+                document_version=int(row["document_version"]),
+                ordinal=int(row["ordinal"]),
+                text=text,
+                content_digest=digest,
+                locator=json.loads(str(row["locator_json"])),
+                token_count=int(row["token_count"]),
+            )
+            return parent.model_copy(update={"text": text})
+        except RepositoryError:
+            raise
+        except (TypeError, ValueError, json.JSONDecodeError) as error:
+            raise RepositoryError("parent chunk record is invalid") from error
+
+
 @dataclass(frozen=True, slots=True)
 class KnowledgeRepositories:
     documents: DocumentRepository
     ingestion_jobs: IngestionJobRepository
     index_revisions: IndexRevisionRepository
+    parent_chunks: ParentChunkRepository
 
     @classmethod
     def from_database(cls, database: Database) -> KnowledgeRepositories:
@@ -2166,6 +2347,7 @@ class KnowledgeRepositories:
             documents=DocumentRepository(database),
             ingestion_jobs=IngestionJobRepository(database),
             index_revisions=IndexRevisionRepository(database),
+            parent_chunks=ParentChunkRepository(database),
         )
 
 

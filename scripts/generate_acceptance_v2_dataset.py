@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -24,17 +25,16 @@ from rag_mvp.evaluation.dataset import (
     CorpusChunk,
     CorpusDerivation,
     CorpusDocument,
+    CorpusParentChunk,
     CorpusReference,
     CorpusSnapshotFormat,
-    CorpusSnapshotManifestV2,
+    CorpusSnapshotManifestV3,
     CorpusSourceArtifact,
     CorpusSourceManifest,
     DatasetManifestV2,
     EvaluationCaseV2,
     EvaluationCategory,
     EvaluationLanguage,
-    ExpectedFact,
-    RefusalGuidanceExpectation,
     ResponseInstruction,
     SourceArtifactKind,
     StyleExpectation,
@@ -44,7 +44,7 @@ from rag_mvp.evaluation.dataset import (
     calculate_source_manifest_content_hash,
     validate_dataset,
 )
-from rag_mvp.ingestion.chunking import ChunkingConfig, chunk_document
+from rag_mvp.ingestion.chunking import ChunkingConfig, chunk_document_hierarchy
 from rag_mvp.ingestion.extractors import ExtractedBlock, ExtractedDocument, extract_utf8_text
 from rag_mvp.ingestion.normalization import normalize_document
 
@@ -382,12 +382,13 @@ def _case_specs() -> tuple[CaseSpec, ...]:
     )
 
 
-def _write_once_or_verify(path: Path, payload: bytes) -> None:
+def _write_once_or_verify(path: Path, payload: bytes, *, replace: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
-        if path.read_bytes() != payload:
+        if path.read_bytes() != payload and not replace:
             raise RuntimeError(f"immutable artifact differs: {path.relative_to(REPOSITORY_ROOT)}")
-        return
+        if path.read_bytes() == payload:
+            return
     path.write_bytes(payload)
 
 
@@ -454,8 +455,11 @@ def _documents() -> tuple[CorpusDocument, ...]:
     return tuple(documents)
 
 
-def _chunks(documents: tuple[CorpusDocument, ...]) -> tuple[CorpusChunk, ...]:
-    values: list[CorpusChunk] = []
+def _chunks(
+    documents: tuple[CorpusDocument, ...],
+) -> tuple[tuple[CorpusParentChunk, ...], tuple[CorpusChunk, ...]]:
+    parents: list[CorpusParentChunk] = []
+    children: list[CorpusChunk] = []
     language_by_source = {spec.source_id: spec.language for spec in DOCUMENT_SPECS}
     for document in documents:
         if document.snapshot_format is CorpusSnapshotFormat.SOURCE:
@@ -479,17 +483,38 @@ def _chunks(documents: tuple[CorpusDocument, ...]) -> tuple[CorpusChunk, ...]:
                 ),
                 ocr_page_count=1,
             )
-        derived = chunk_document(
+        derived = chunk_document_hierarchy(
             normalize_document(extracted),
             source_id=document.source_id,
             document_version=document.document_version,
-            config=ChunkingConfig(target_tokens=500, overlap_tokens=80),
+            config=ChunkingConfig(
+                target_tokens=512,
+                overlap_tokens=128,
+                parent_target_tokens=1536,
+            ),
         )
-        for chunk in derived:
+        for parent in derived.parents:
+            assert parent.token_count is not None
+            parents.append(
+                CorpusParentChunk(
+                    parent_chunk_id=parent.parent_chunk_id,
+                    source_id=parent.source_id,
+                    document_version=parent.document_version,
+                    ordinal=parent.ordinal,
+                    text=parent.text,
+                    content_digest=parent.content_digest,
+                    locator=parent.locator,
+                    language=language_by_source[document.source_id],
+                    extraction_method=document.extraction_method,
+                    token_count=parent.token_count,
+                )
+            )
+        for chunk in derived.children:
             assert chunk.token_count is not None
-            values.append(
+            children.append(
                 CorpusChunk(
                     chunk_id=chunk.chunk_id,
+                    parent_chunk_id=chunk.parent_chunk_id,
                     source_id=chunk.source_id,
                     document_version=chunk.document_version,
                     ordinal=chunk.ordinal,
@@ -501,7 +526,7 @@ def _chunks(documents: tuple[CorpusDocument, ...]) -> tuple[CorpusChunk, ...]:
                     token_count=chunk.token_count,
                 )
             )
-    return tuple(values)
+    return tuple(parents), tuple(children)
 
 
 def _source_manifest(documents: tuple[CorpusDocument, ...]) -> CorpusSourceManifest:
@@ -544,21 +569,35 @@ def _source_manifest(documents: tuple[CorpusDocument, ...]) -> CorpusSourceManif
 
 def _corpus_manifest(
     documents: tuple[CorpusDocument, ...],
+    parents: tuple[CorpusParentChunk, ...],
     chunks: tuple[CorpusChunk, ...],
     source_manifest: CorpusSourceManifest,
-) -> CorpusSnapshotManifestV2:
-    provisional = CorpusSnapshotManifestV2(
+) -> CorpusSnapshotManifestV3:
+    provisional = CorpusSnapshotManifestV3(
         snapshot_id="acceptance-bilingual-corpus",
         version="2.0.0",
         content_hash=ZERO_DIGEST,
         source_manifest_hash=source_manifest.content_hash,
-        derivation=CorpusDerivation(),
+        derivation=CorpusDerivation(
+            chunking_version="structure-page-parent-child-token-v1",
+            target_tokens=512,
+            overlap_tokens=128,
+            parent_target_tokens=1536,
+        ),
         active_sources={item.source_id: item.document_version for item in documents},
         document_count=len(documents),
+        parent_count=len(parents),
         chunk_count=len(chunks),
     )
     return provisional.model_copy(
-        update={"content_hash": calculate_corpus_content_hash(provisional, documents, chunks)}
+        update={
+            "content_hash": calculate_corpus_content_hash(
+                provisional,
+                documents,
+                chunks,
+                parents,
+            )
+        }
     )
 
 
@@ -646,39 +685,28 @@ def _instructions(
 
 def _cases(chunks: tuple[CorpusChunk, ...]) -> tuple[EvaluationCaseV2, ...]:
     chunk_by_source = {chunk.source_id: chunk for chunk in chunks}
+    existing = {
+        case.case_id: case
+        for case in (
+            EvaluationCaseV2.model_validate_json(line)
+            for line in (DATASET_ROOT / "cases.jsonl").read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        )
+    }
     cases: list[EvaluationCaseV2] = []
     for spec in _case_specs():
         evidence_ids = tuple(chunk_by_source[source_id].chunk_id for source_id in spec.source_ids)
+        original = existing[spec.case_id]
         facts = tuple(
-            ExpectedFact(
-                fact_id=f"{spec.case_id}-fact-{index}",
-                text=text,
-                evidence_ids=evidence_ids,
-            )
-            for index, text in enumerate(spec.fact_texts, start=1)
+            fact.model_copy(update={"evidence_ids": evidence_ids})
+            for fact in original.expected_facts
         )
-        instructions, obligations, styles = _instructions(spec)
         cases.append(
-            EvaluationCaseV2(
-                case_id=spec.case_id,
-                question=spec.question,
-                language=spec.language,
-                answerability=spec.answerability,
-                category=spec.category,
-                expected_facts=facts,
-                authoritative_evidence_ids=evidence_ids if facts else (),
-                style_expectations=styles,
-                history=spec.history,
-                permitted_source_ids=spec.source_ids,
-                response_instructions=instructions,
-                compliance_obligations=obligations,
-                refusal_expectation=RefusalGuidanceExpectation(
-                    expected=spec.answerability is not Answerability.ANSWERABLE,
-                    reason_codes=spec.refusal_reasons,
-                    guidance_required=spec.answerability is not Answerability.ANSWERABLE,
-                    language=spec.language,
-                ),
-                challenge_tags=spec.challenges,
+            original.model_copy(
+                update={
+                    "expected_facts": facts,
+                    "authoritative_evidence_ids": evidence_ids if facts else (),
+                }
             )
         )
     return tuple(cases)
@@ -686,7 +714,7 @@ def _cases(chunks: tuple[CorpusChunk, ...]) -> tuple[EvaluationCaseV2, ...]:
 
 def _dataset_manifest(
     cases: tuple[EvaluationCaseV2, ...],
-    corpus_manifest: CorpusSnapshotManifestV2,
+    corpus_manifest: CorpusSnapshotManifestV3,
 ) -> DatasetManifestV2:
     provisional = DatasetManifestV2(
         contract_version="2.0.0",
@@ -716,43 +744,55 @@ def _dataset_manifest(
 
 
 def main() -> None:
+    replace = "--replace" in sys.argv[1:]
     _prepare_scanned_assets()
     documents = _documents()
-    chunks = _chunks(documents)
+    parents, chunks = _chunks(documents)
     source_manifest = _source_manifest(documents)
-    corpus_manifest = _corpus_manifest(documents, chunks, source_manifest)
+    corpus_manifest = _corpus_manifest(documents, parents, chunks, source_manifest)
     cases = _cases(chunks)
     dataset_manifest = _dataset_manifest(cases, corpus_manifest)
 
     _write_once_or_verify(
         CORPUS_ROOT / "documents.jsonl",
         _jsonl_bytes(tuple(item.model_dump(mode="json") for item in documents)),
+        replace=replace,
+    )
+    _write_once_or_verify(
+        CORPUS_ROOT / "parents.jsonl",
+        _jsonl_bytes(tuple(item.model_dump(mode="json") for item in parents)),
+        replace=replace,
     )
     _write_once_or_verify(
         CORPUS_ROOT / "chunks.jsonl",
         _jsonl_bytes(tuple(item.model_dump(mode="json") for item in chunks)),
+        replace=replace,
     )
     _write_once_or_verify(
         CORPUS_ROOT / "source-manifest.json",
         _json_bytes(source_manifest.model_dump(mode="json")),
+        replace=replace,
     )
     _write_once_or_verify(
         CORPUS_ROOT / "manifest.json",
         _json_bytes(corpus_manifest.model_dump(mode="json")),
+        replace=replace,
     )
     _write_once_or_verify(
         DATASET_ROOT / "cases.jsonl",
         _jsonl_bytes(tuple(item.model_dump(mode="json") for item in cases)),
+        replace=replace,
     )
     _write_once_or_verify(
         DATASET_ROOT / "manifest.json",
         _json_bytes(dataset_manifest.model_dump(mode="json")),
+        replace=replace,
     )
     validated = validate_dataset(DATASET_ROOT)
     print(
         f"validated {validated.manifest.dataset_id} {validated.manifest.version}: "
         f"{len(validated.cases)} cases, {len(validated.corpus.documents)} sources, "
-        f"{len(validated.corpus.chunks)} chunks"
+        f"{len(validated.corpus.parents)} parents, {len(validated.corpus.chunks)} chunks"
     )
 
 

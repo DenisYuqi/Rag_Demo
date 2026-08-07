@@ -20,6 +20,8 @@ from rag_mvp.retrieval.snapshot import (
     RECORD_DIGEST_ALGORITHM,
     chunk_record_digest,
     chunk_set_digest,
+    parent_chunk_record_digest,
+    parent_set_digest,
 )
 from rag_mvp.retrieval.tokenizer import BILINGUAL_TOKENIZER_IDENTITY
 
@@ -47,7 +49,7 @@ class EvaluationSourceVersion(DomainModel):
 class EvaluationIndexReuseKey(DomainModel):
     """Every corpus/chunking/embedding field required for safe index reuse."""
 
-    schema_version: str = "evaluation-index-reuse-v1"
+    schema_version: str = "evaluation-index-reuse-v2"
     corpus_version: Identifier
     corpus_hash: Identifier
     active_sources: tuple[EvaluationSourceVersion, ...]
@@ -55,6 +57,8 @@ class EvaluationIndexReuseKey(DomainModel):
     chunk_set_digest_algorithm: str = CHUNK_SET_DIGEST_ALGORITHM
     record_digest_algorithm: str = RECORD_DIGEST_ALGORITHM
     chunk_count: Annotated[int, Field(gt=0)]
+    parent_chunk_set_digest: Identifier
+    parent_chunk_count: Annotated[int, Field(gt=0)]
     embedding_identity: tuple[EvaluationReuseIdentityEntry, ...]
     chunking_identity: tuple[EvaluationReuseIdentityEntry, ...]
     index_identity: tuple[EvaluationReuseIdentityEntry, ...]
@@ -114,6 +118,12 @@ class EvaluationIndexReuseKey(DomainModel):
             }
         except KeyError:
             raise EvaluationEnvironmentError("evaluation_reuse_chunk_source_missing") from None
+        parent_records = {
+            parent.parent_chunk_id: parent_chunk_record_digest(parent)
+            for parent in dataset.production_parents
+        }
+        if not parent_records:
+            raise EvaluationEnvironmentError("evaluation_reuse_parent_inventory_missing")
         return cls(
             corpus_version=dataset.corpus.manifest.version,
             corpus_hash=dataset.corpus.manifest.content_hash,
@@ -123,16 +133,18 @@ class EvaluationIndexReuseKey(DomainModel):
             ),
             chunk_set_digest=chunk_set_digest(records),
             chunk_count=len(records),
+            parent_chunk_set_digest=parent_set_digest(parent_records),
+            parent_chunk_count=len(parent_records),
             embedding_identity=_entries(plan.identity.embedding_identity),
             chunking_identity=_entries(plan.identity.chunking_identity),
             index_identity=_entries(
                 {
                     "dense_metric": "cosine",
-                    "dense_schema_version": "chroma-revision-v1",
+                    "dense_schema_version": "chroma-revision-v2",
                     "lexical_algorithm_version": "bm25-okapi-v1",
                     "lexical_b": 0.75,
                     "lexical_k1": 1.5,
-                    "lexical_schema_version": "bm25-snapshot-v3",
+                    "lexical_schema_version": "bm25-snapshot-v4",
                     "lexical_tokenizer_identity": BILINGUAL_TOKENIZER_IDENTITY,
                 }
             ),
@@ -152,6 +164,8 @@ class EvaluationIndexReuseKey(DomainModel):
             or revision.active_sources != expected_sources
             or revision.chunk_set_digest != self.chunk_set_digest
             or revision.chunk_count != self.chunk_count
+            or revision.parent_chunk_set_digest != self.parent_chunk_set_digest
+            or revision.parent_chunk_count != self.parent_chunk_count
             or revision.extraction_version != chunking.get("extraction_version")
             or revision.chunking_version != chunking.get("chunking_version")
             or revision.tokenizer_version != index.get("lexical_tokenizer_identity")

@@ -20,6 +20,7 @@ from rag_mvp.qa.prompt import (
 def _evidence(chunk_id: str, rank: int, text: str) -> RankingEvidence:
     return RankingEvidence(
         chunk_id=chunk_id,
+        parent_chunk_id=chunk_id,
         source_id=f"source-{rank}",
         display_title=f"Policy {rank}",
         document_version=rank,
@@ -51,7 +52,8 @@ def test_prompt_uses_versioned_json_generation_contract() -> None:
     assert request.max_output_tokens == 321
     assert [message.role for message in request.messages] == [ChatRole.SYSTEM, ChatRole.USER]
     assert "answer must equal the ordered concatenation" in request.messages[0].content
-    assert request.prompt_version == "grounded-claims-json-v3"
+    assert request.prompt_version == "grounded-claims-json-v4"
+    assert _payload(request)["retrieved_context"][0]["parent_chunk_id"] == "chunk-1"  # type: ignore[index]
     assert "Preserve source identifiers, quantities, units" in request.messages[0].content
     assert "Do not use Markdown" in request.messages[0].content
     assert "exactly one complete factual proposition" in request.messages[0].content

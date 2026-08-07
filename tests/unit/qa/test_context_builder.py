@@ -1,16 +1,48 @@
-from __future__ import annotations
+import hashlib
+from collections.abc import Sequence
 
 import pytest
 
-from rag_mvp.domain.ingestion import ChunkLocator
+from rag_mvp.domain.ingestion import ChunkLocator, ParentChunk
 from rag_mvp.domain.retrieval import RankingEvidence
 from rag_mvp.ingestion.chunking import token_spans
 from rag_mvp.qa.context import ContextBuilder, ContextSelectionError
 
 
+class _Parents:
+    def __init__(self, values: tuple[ParentChunk, ...]) -> None:
+        self.values = {value.parent_chunk_id: value for value in values}
+
+    def get_many(
+        self,
+        revision_id: str,
+        parent_chunk_ids: Sequence[str],
+    ) -> dict[str, ParentChunk]:
+        assert revision_id == "revision-parent-context"
+        return {
+            parent_id: self.values[parent_id]
+            for parent_id in parent_chunk_ids
+            if parent_id in self.values
+        }
+
+
+def _parent(parent_id: str, text: str, *, source_id: str = "source-shared") -> ParentChunk:
+    return ParentChunk(
+        parent_chunk_id=parent_id,
+        source_id=source_id,
+        document_version=1,
+        ordinal=0,
+        text=text,
+        content_digest=hashlib.sha256(text.encode()).hexdigest(),
+        locator=ChunkLocator(pages=(1,)),
+        token_count=len(token_spans(text)),
+    )
+
+
 def _evidence(chunk_id: str, final_rank: int, text: str) -> RankingEvidence:
     return RankingEvidence(
         chunk_id=chunk_id,
+        parent_chunk_id=chunk_id,
         source_id=f"source-{chunk_id}",
         display_title=f"Policy {chunk_id}",
         document_version=1,
@@ -128,3 +160,56 @@ def test_context_rejects_invalid_ranked_evidence(
 ) -> None:
     with pytest.raises(ContextSelectionError, match=code):
         ContextBuilder().build(evidence)
+
+
+def test_context_expands_and_deduplicates_parents_but_keeps_best_child_identity() -> None:
+    parent = _parent("parent-shared", "full parent context with surrounding policy details")
+    evidence = (
+        RankingEvidence(
+            chunk_id="child-best",
+            parent_chunk_id=parent.parent_chunk_id,
+            source_id=parent.source_id,
+            display_title="Policy",
+            document_version=1,
+            locator=ChunkLocator(pages=(1,)),
+            text="policy details",
+            revision_id="revision-parent-context",
+            final_rank=1,
+        ),
+        RankingEvidence(
+            chunk_id="child-second",
+            parent_chunk_id=parent.parent_chunk_id,
+            source_id=parent.source_id,
+            display_title="Policy",
+            document_version=1,
+            locator=ChunkLocator(pages=(1,)),
+            text="surrounding policy",
+            revision_id="revision-parent-context",
+            final_rank=2,
+        ),
+    )
+
+    result = ContextBuilder(parent_resolver=_Parents((parent,))).build(evidence)
+
+    assert len(result.chunks) == 1
+    assert result.chunks[0].text == parent.text
+    assert result.chunks[0].chunk_id == "child-best"
+    assert result.chunks[0].parent_chunk_id == parent.parent_chunk_id
+    assert result.available_evidence_count == 1
+
+
+def test_context_fails_closed_when_parent_is_missing() -> None:
+    evidence = RankingEvidence(
+        chunk_id="child-missing",
+        parent_chunk_id="parent-missing",
+        source_id="source-shared",
+        display_title="Policy",
+        document_version=1,
+        locator=ChunkLocator(pages=(1,)),
+        text="child evidence",
+        revision_id="revision-parent-context",
+        final_rank=1,
+    )
+
+    with pytest.raises(ContextSelectionError, match="parent_chunk_missing"):
+        ContextBuilder(parent_resolver=_Parents(())).build((evidence,))

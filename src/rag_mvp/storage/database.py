@@ -284,6 +284,32 @@ _MIGRATIONS: tuple[str, ...] = (
     ALTER TABLE comparison_shared_setup_evidence_v5
         RENAME TO comparison_shared_setup_evidence;
     """,
+    """
+    CREATE TABLE parent_chunks (
+        revision_id TEXT NOT NULL,
+        parent_chunk_id TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        document_version INTEGER NOT NULL CHECK (document_version > 0),
+        ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+        text TEXT NOT NULL CHECK (length(text) > 0),
+        content_digest TEXT NOT NULL,
+        locator_json TEXT NOT NULL,
+        token_count INTEGER NOT NULL CHECK (token_count > 0),
+        PRIMARY KEY (revision_id, parent_chunk_id),
+        UNIQUE (revision_id, source_id, document_version, ordinal),
+        FOREIGN KEY (revision_id) REFERENCES index_revisions(revision_id)
+            ON DELETE CASCADE
+    );
+
+    CREATE INDEX idx_parent_chunks_source_version
+        ON parent_chunks(revision_id, source_id, document_version, ordinal);
+
+    CREATE TRIGGER parent_chunks_immutable
+    BEFORE UPDATE ON parent_chunks
+    BEGIN
+        SELECT RAISE(ABORT, 'parent chunks are immutable');
+    END;
+    """,
 )
 
 SCHEMA_VERSION = len(_MIGRATIONS)

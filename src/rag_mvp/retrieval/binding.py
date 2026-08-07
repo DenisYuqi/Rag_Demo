@@ -15,7 +15,11 @@ from rag_mvp.retrieval.dense import DenseIndexError, PersistentChromaIndex
 from rag_mvp.retrieval.request import RetrievalRequestError
 from rag_mvp.retrieval.snapshot import RECORD_DIGEST_ALGORITHM
 from rag_mvp.storage.layout import DataLayout, UnsafeDataPathError
-from rag_mvp.storage.repositories import DocumentRepository, IndexRevisionRepository
+from rag_mvp.storage.repositories import (
+    DocumentRepository,
+    IndexRevisionRepository,
+    ParentChunkRepository,
+)
 
 _BOUND_PROOF = object()
 
@@ -67,7 +71,12 @@ class BoundRetrievalSnapshot:
             raise RetrievalRequestError("index_not_ready")
         if revision.status is not IndexRevisionStatus.ACTIVE:
             raise RetrievalRequestError("index_manifest_invalid")
-        return cls._open_captured(layout, revision, _source_kinds(revisions, revision))
+        return cls._open_captured(
+            layout,
+            revision,
+            _source_kinds(revisions, revision),
+            ParentChunkRepository(revisions.database),
+        )
 
     @classmethod
     def open_committed(
@@ -91,7 +100,12 @@ class BoundRetrievalSnapshot:
             IndexRevisionStatus.SUPERSEDED,
         }:
             raise RetrievalRequestError("revision_not_committed")
-        return cls._open_captured(layout, revision, _source_kinds(revisions, revision))
+        return cls._open_captured(
+            layout,
+            revision,
+            _source_kinds(revisions, revision),
+            ParentChunkRepository(revisions.database),
+        )
 
     @classmethod
     def _open_captured(
@@ -99,6 +113,7 @@ class BoundRetrievalSnapshot:
         layout: DataLayout,
         revision: IndexRevision,
         source_kinds: Mapping[str, DocumentKind],
+        parents: ParentChunkRepository,
     ) -> BoundRetrievalSnapshot:
         dense: PersistentChromaIndex | None = None
         try:
@@ -130,7 +145,7 @@ class BoundRetrievalSnapshot:
                 expected_bm25_path,
                 expected_revision_id=revision.revision_id,
             )
-            _validate_manifest(revision, dense, bm25)
+            _validate_manifest(revision, dense, bm25, parents)
             return cls(
                 revision=revision,
                 dense=dense,
@@ -231,6 +246,7 @@ def _validate_manifest(
     revision: IndexRevision,
     dense: PersistentChromaIndex,
     bm25: PersistentBm25Index,
+    parents: ParentChunkRepository,
 ) -> None:
     if dense.revision_id != revision.revision_id or bm25.revision_id != revision.revision_id:
         raise RetrievalRequestError("index_artifact_invalid", detail_code="revision_id_mismatch")
@@ -257,6 +273,28 @@ def _validate_manifest(
         or len(dense.chunk_ids) != revision.chunk_count
     ):
         raise RetrievalRequestError("index_artifact_invalid", detail_code="inventory_mismatch")
+    try:
+        parent_count, parent_digest, _ = parents.inventory(revision.revision_id)
+        parent_records = parents.get_many(
+            revision.revision_id,
+            tuple(record.chunk.parent_chunk_id for record in bm25.records),
+        )
+    except Exception:
+        raise RetrievalRequestError(
+            "index_artifact_invalid",
+            detail_code="parent_inventory_invalid",
+        ) from None
+    referenced_parent_ids = {record.chunk.parent_chunk_id for record in bm25.records}
+    if (
+        parent_count != revision.parent_chunk_count
+        or parent_digest != revision.parent_chunk_set_digest
+        or set(parent_records) != referenced_parent_ids
+        or len(parent_records) != parent_count
+    ):
+        raise RetrievalRequestError(
+            "index_artifact_invalid",
+            detail_code="parent_inventory_mismatch",
+        )
     record_source_ids: set[str] = set()
     for record in bm25.records:
         source_id = record.chunk.source_id
@@ -265,6 +303,15 @@ def _validate_manifest(
             raise RetrievalRequestError(
                 "index_artifact_invalid",
                 detail_code="active_sources_mismatch",
+            )
+        parent = parent_records[record.chunk.parent_chunk_id]
+        if (
+            parent.source_id != source_id
+            or parent.document_version != record.chunk.document_version
+        ):
+            raise RetrievalRequestError(
+                "index_artifact_invalid",
+                detail_code="parent_inventory_mismatch",
             )
     if record_source_ids != set(revision.active_sources):
         raise RetrievalRequestError("index_artifact_invalid", detail_code="active_sources_mismatch")

@@ -189,6 +189,8 @@ def test_build_plan_pins_complete_safe_identity_and_maps_case_history(
         dense_weight=1.2,
         lexical_weight=1.4,
         retrieval_cache_enabled=True,
+        chunk_target_tokens=500,
+        chunk_overlap_tokens=80,
         qa_minimum_support_score=0.72,
         pricing_version="pricing-2026-08",
     )
@@ -252,9 +254,10 @@ def test_build_plan_pins_complete_safe_identity_and_maps_case_history(
         "normalization_version": "unicode-nfc-lines-v1",
         "chunking_version": "structure-page-token-v1",
         "tokenizer_version": "unicode-word-cjk-v1",
-        "target_tokens": 500,
-        "overlap_tokens": 80,
-        "ocr_enabled": True,
+            "target_tokens": 500,
+            "overlap_tokens": 80,
+            "parent_target_tokens": None,
+            "ocr_enabled": True,
         "ocr_languages": "chi_sim+eng",
     }
     assert identity.retrieval_configuration["identity_version"] == PLAN_IDENTITY_VERSION

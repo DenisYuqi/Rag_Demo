@@ -49,6 +49,7 @@ def _chunk(text: str, ordinal: int, *, digest: str | None = None) -> Chunk:
     content_digest = digest or hashlib.sha256(text.encode("utf-8")).hexdigest()
     chunk = Chunk(
         chunk_id=f"chunk-{ordinal}",
+        parent_chunk_id=f"parent-{ordinal}",
         source_id="source-1",
         document_version=1,
         ordinal=ordinal,

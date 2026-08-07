@@ -95,6 +95,7 @@ def test_rrf_requires_config_instance() -> None:
 def test_rrf_rejects_rankless_candidate() -> None:
     rankless = RetrievalCandidate(
         chunk_id="rankless",
+        parent_chunk_id="parent-rankless",
         source_id="source-1",
         display_title="Policy",
         document_version=1,

@@ -16,8 +16,10 @@ from rag_mvp.domain.ingestion import (
     ExtractionMethod,
     IndexRevision,
     IndexRevisionStatus,
+    ParentChunk,
 )
 from rag_mvp.domain.retrieval import RetrievalMode
+from rag_mvp.ingestion.chunking import token_spans
 from rag_mvp.ingestion.embedding import EmbeddingStage
 from rag_mvp.ingestion.indexing import RevisionPublisher, RevisionStager
 from rag_mvp.providers.fakes import DeterministicEmbeddingProvider
@@ -45,6 +47,7 @@ def _provider_context(operation: str) -> ProviderCallContext:
 def _chunk(chunk_id: str, text: str, *, version: int = 1) -> Chunk:
     return Chunk(
         chunk_id=chunk_id,
+        parent_chunk_id=f"parent-{chunk_id}",
         source_id="source-policy",
         document_version=version,
         ordinal=0,
@@ -52,6 +55,33 @@ def _chunk(chunk_id: str, text: str, *, version: int = 1) -> Chunk:
         content_digest=hashlib.sha256(text.encode()).hexdigest(),
         locator=ChunkLocator(pages=(version,)),
     )
+
+
+def _parent(chunk: Chunk) -> ParentChunk:
+    return ParentChunk(
+        parent_chunk_id=chunk.parent_chunk_id,
+        source_id=chunk.source_id,
+        document_version=chunk.document_version,
+        ordinal=chunk.ordinal,
+        text=chunk.text,
+        content_digest=chunk.content_digest,
+        locator=chunk.locator,
+        token_count=len(token_spans(chunk.text)),
+    )
+
+
+def _register(
+    repositories: KnowledgeRepositories,
+    revision: IndexRevision,
+    chunk: Chunk,
+) -> None:
+    with repositories.index_revisions.database.transaction() as connection:
+        repositories.index_revisions.create(revision, connection=connection)
+        repositories.parent_chunks.insert_many(
+            revision.revision_id,
+            (_parent(chunk),),
+            connection=connection,
+        )
 
 
 def _initialize_repository(
@@ -104,6 +134,7 @@ async def _stage(
         {"source-policy": "Policy"},
         {"source-policy": 1},
         _provider_context(revision_id),
+        parents=(_parent(chunk),),
     )
 
 
@@ -203,8 +234,9 @@ def test_normal_bind_rejects_no_active_and_caller_forged_revision_ids() -> None:
 
 async def test_snapshot_context_honors_configured_limit_above_default(tmp_path: Path) -> None:
     layout, repositories, cache, stager = _initialize_repository(tmp_path)
-    staged = await _stage(stager, "revision-limit", _chunk("chunk", "policy"))
-    repositories.index_revisions.create(staged)
+    chunk = _chunk("chunk", "policy")
+    staged = await _stage(stager, "revision-limit", chunk)
+    _register(repositories, staged, chunk)
     RevisionPublisher(layout, repositories.index_revisions).publish(
         staged.revision_id,
         expected_active_revision_id=None,
@@ -267,8 +299,9 @@ async def test_bound_snapshot_survives_publication_and_owns_dense_handle(
 ) -> None:
     layout, repositories, cache, stager = _initialize_repository(tmp_path)
     publisher = RevisionPublisher(layout, repositories.index_revisions)
-    first = await _stage(stager, "revision-1", _chunk("chunk-old", "OLD-101 policy"))
-    repositories.index_revisions.create(first)
+    first_chunk = _chunk("chunk-old", "OLD-101 policy")
+    first = await _stage(stager, "revision-1", first_chunk)
+    _register(repositories, first, first_chunk)
     published_first = publisher.publish(first.revision_id, expected_active_revision_id=None)
     factory = BoundRetrievalSnapshotFactory(layout, repositories.index_revisions)
 
@@ -279,8 +312,9 @@ async def test_bound_snapshot_survives_publication_and_owns_dense_handle(
         mode="hybrid",
         snapshot=snapshot,
     )
-    second = await _stage(stager, "revision-2", _chunk("chunk-new", "NEW-202 policy"))
-    repositories.index_revisions.create(second)
+    second_chunk = _chunk("chunk-new", "NEW-202 policy")
+    second = await _stage(stager, "revision-2", second_chunk)
+    _register(repositories, second, second_chunk)
     publisher.publish(second.revision_id, expected_active_revision_id=published_first.revision_id)
 
     persisted_first = repositories.index_revisions.get(first.revision_id)
@@ -330,6 +364,7 @@ async def test_empty_active_snapshot_is_valid(tmp_path: Path) -> None:
             {},
             {},
             _provider_context("empty"),
+            parents=(),
         )
         repositories.index_revisions.create(staged)
         RevisionPublisher(layout, repositories.index_revisions).publish(
@@ -345,8 +380,9 @@ async def test_empty_active_snapshot_is_valid(tmp_path: Path) -> None:
 
 async def test_corrupt_active_artifact_has_stable_error(tmp_path: Path) -> None:
     layout, repositories, cache, stager = _initialize_repository(tmp_path)
-    staged = await _stage(stager, "revision-corrupt", _chunk("chunk", "policy"))
-    repositories.index_revisions.create(staged)
+    chunk = _chunk("chunk", "policy")
+    staged = await _stage(stager, "revision-corrupt", chunk)
+    _register(repositories, staged, chunk)
     RevisionPublisher(layout, repositories.index_revisions).publish(
         staged.revision_id,
         expected_active_revision_id=None,
@@ -362,8 +398,9 @@ async def test_corrupt_active_artifact_has_stable_error(tmp_path: Path) -> None:
 
 async def test_corrupt_active_manifest_has_distinct_stable_error(tmp_path: Path) -> None:
     layout, repositories, cache, stager = _initialize_repository(tmp_path)
-    staged = await _stage(stager, "revision-manifest", _chunk("chunk", "policy"))
-    repositories.index_revisions.create(staged)
+    chunk = _chunk("chunk", "policy")
+    staged = await _stage(stager, "revision-manifest", chunk)
+    _register(repositories, staged, chunk)
     RevisionPublisher(layout, repositories.index_revisions).publish(
         staged.revision_id,
         expected_active_revision_id=None,

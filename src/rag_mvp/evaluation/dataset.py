@@ -14,12 +14,20 @@ from typing import Annotated, Any, Literal, cast
 from pydantic import Field, StringConstraints, ValidationError, field_validator, model_validator
 
 from rag_mvp.domain._base import DomainModel, Identifier, NonEmptyText
-from rag_mvp.domain.ingestion import Chunk, ChunkLocator, DocumentKind, ExtractionMethod
+from rag_mvp.domain.ingestion import (
+    Chunk,
+    ChunkLocator,
+    DocumentKind,
+    ExtractionMethod,
+    ParentChunk,
+)
 from rag_mvp.ingestion.chunking import (
     CHUNKING_VERSION,
     TOKENIZER_VERSION,
     ChunkingConfig,
     chunk_document,
+    chunk_document_hierarchy,
+    chunk_document_legacy,
 )
 from rag_mvp.ingestion.extractors import ExtractedBlock, ExtractedDocument, extract_utf8_text
 from rag_mvp.ingestion.indexing import INDEX_EXTRACTION_VERSION
@@ -29,6 +37,7 @@ DATASET_SCHEMA_VERSION = "rag-evaluation-dataset-v1"
 CORPUS_SCHEMA_VERSION = "rag-evaluation-corpus-v1"
 DATASET_SCHEMA_VERSION_V2 = "rag-evaluation-dataset-v2"
 CORPUS_SCHEMA_VERSION_V2 = "rag-evaluation-corpus-v2"
+CORPUS_SCHEMA_VERSION_V3 = "rag-evaluation-corpus-v3"
 SOURCE_MANIFEST_SCHEMA_VERSION_V2 = "rag-evaluation-source-manifest-v2"
 HASH_ALGORITHM = "sha256-canonical-json-v1"
 EXPECTED_FACT_SUPPORT_CONTRACT_VERSION: Literal["expected-fact-support-anchors-v1"] = (
@@ -700,6 +709,7 @@ class CorpusDocument(DomainModel):
 
 class CorpusChunk(DomainModel):
     chunk_id: Identifier
+    parent_chunk_id: Identifier | None = None
     source_id: Identifier
     document_version: Annotated[int, Field(gt=0)]
     ordinal: Annotated[int, Field(ge=0)]
@@ -715,6 +725,32 @@ class CorpusChunk(DomainModel):
 
         return Chunk(
             chunk_id=self.chunk_id,
+            parent_chunk_id=self.parent_chunk_id or self.chunk_id,
+            source_id=self.source_id,
+            document_version=self.document_version,
+            ordinal=self.ordinal,
+            text=self.text,
+            content_digest=self.content_digest,
+            locator=self.locator,
+            token_count=self.token_count,
+        )
+
+
+class CorpusParentChunk(DomainModel):
+    parent_chunk_id: Identifier
+    source_id: Identifier
+    document_version: Annotated[int, Field(gt=0)]
+    ordinal: Annotated[int, Field(ge=0)]
+    text: NonEmptyText
+    content_digest: ChunkContentDigest
+    locator: ChunkLocator
+    language: EvaluationLanguage
+    extraction_method: ExtractionMethod
+    token_count: Annotated[int, Field(gt=0)]
+
+    def to_domain_parent(self) -> ParentChunk:
+        return ParentChunk(
+            parent_chunk_id=self.parent_chunk_id,
             source_id=self.source_id,
             document_version=self.document_version,
             ordinal=self.ordinal,
@@ -728,15 +764,26 @@ class CorpusChunk(DomainModel):
 class CorpusDerivation(DomainModel):
     extraction_version: Literal["extraction-v1"] = "extraction-v1"
     normalization_version: Literal["unicode-nfc-lines-v1"] = "unicode-nfc-lines-v1"
-    chunking_version: Literal["structure-page-token-v1"] = "structure-page-token-v1"
+    chunking_version: Literal[
+        "structure-page-token-v1",
+        "structure-page-parent-child-token-v1",
+    ] = "structure-page-token-v1"
     tokenizer_version: Literal["unicode-word-cjk-v1"] = "unicode-word-cjk-v1"
     target_tokens: Annotated[int, Field(gt=0)] = 500
     overlap_tokens: Annotated[int, Field(ge=0)] = 80
+    parent_target_tokens: Annotated[int, Field(gt=0)] | None = None
 
     @model_validator(mode="after")
     def validate_chunk_bounds(self) -> CorpusDerivation:
         if self.overlap_tokens >= self.target_tokens:
             raise ValueError("corpus overlap must be below the target token count")
+        if self.chunking_version == CHUNKING_VERSION:
+            if self.parent_target_tokens is None:
+                raise ValueError("parent-child corpus requires a parent target")
+            if self.parent_target_tokens < self.target_tokens:
+                raise ValueError("corpus parent target must not be below child target")
+        elif self.parent_target_tokens is not None:
+            raise ValueError("legacy corpus cannot declare a parent target")
         return self
 
 
@@ -777,9 +824,33 @@ class CorpusSnapshotManifestV2(DomainModel):
     _safe_source_manifest_file = field_validator("source_manifest_file")(_validate_relative_path)
 
 
+class CorpusSnapshotManifestV3(DomainModel):
+    schema_version: Literal["rag-evaluation-corpus-v3"] = "rag-evaluation-corpus-v3"
+    snapshot_id: Identifier
+    version: SemanticVersion
+    content_hash: Sha256Digest
+    hash_algorithm: Literal["sha256-canonical-json-v1"] = "sha256-canonical-json-v1"
+    documents_file: str = "documents.jsonl"
+    parents_file: str = "parents.jsonl"
+    chunks_file: str = "chunks.jsonl"
+    source_manifest_file: str = "source-manifest.json"
+    source_manifest_hash: Sha256Digest
+    derivation: CorpusDerivation
+    active_sources: dict[Identifier, Annotated[int, Field(gt=0)]]
+    document_count: Annotated[int, Field(gt=0)]
+    parent_count: Annotated[int, Field(gt=0)]
+    chunk_count: Annotated[int, Field(gt=0)]
+
+    _safe_documents_file = field_validator("documents_file")(_validate_relative_path)
+    _safe_parents_file = field_validator("parents_file")(_validate_relative_path)
+    _safe_chunks_file = field_validator("chunks_file")(_validate_relative_path)
+    _safe_source_manifest_file = field_validator("source_manifest_file")(_validate_relative_path)
+
+
 class CorpusSnapshot(DomainModel):
-    manifest: CorpusSnapshotManifest | CorpusSnapshotManifestV2
+    manifest: CorpusSnapshotManifest | CorpusSnapshotManifestV2 | CorpusSnapshotManifestV3
     documents: tuple[CorpusDocument, ...]
+    parents: tuple[CorpusParentChunk, ...] = ()
     chunks: tuple[CorpusChunk, ...]
     source_manifest: CorpusSourceManifest | None = None
 
@@ -812,6 +883,10 @@ class EvaluationDataset(DomainModel):
         """Return the verified chunks for direct staging by ``RevisionStager``."""
 
         return tuple(chunk.to_domain_chunk() for chunk in self.corpus.chunks)
+
+    @property
+    def production_parents(self) -> tuple[ParentChunk, ...]:
+        return tuple(parent.to_domain_parent() for parent in self.corpus.parents)
 
 
 def _canonical_json_bytes(value: Any) -> bytes:
@@ -852,15 +927,31 @@ def calculate_chunk_content_hash(text: str) -> str:
 
 
 def calculate_corpus_content_hash(
-    manifest: CorpusSnapshotManifest | CorpusSnapshotManifestV2,
+    manifest: CorpusSnapshotManifest | CorpusSnapshotManifestV2 | CorpusSnapshotManifestV3,
     documents: tuple[CorpusDocument, ...],
     chunks: tuple[CorpusChunk, ...],
+    parents: tuple[CorpusParentChunk, ...] = (),
 ) -> str:
+    manifest_payload = manifest.model_dump(mode="json", exclude={"content_hash"})
+    if not isinstance(manifest, CorpusSnapshotManifestV3):
+        derivation_payload = manifest_payload.get("derivation")
+        if isinstance(derivation_payload, dict):
+            derivation_payload.pop("parent_target_tokens", None)
     payload = {
-        "manifest": manifest.model_dump(mode="json", exclude={"content_hash"}),
+        "manifest": manifest_payload,
         "documents": [document.model_dump(mode="json") for document in documents],
-        "chunks": [chunk.model_dump(mode="json") for chunk in chunks],
+        "chunks": [
+            chunk.model_dump(
+                mode="json",
+                exclude=None
+                if isinstance(manifest, CorpusSnapshotManifestV3)
+                else {"parent_chunk_id"},
+            )
+            for chunk in chunks
+        ],
     }
+    if isinstance(manifest, CorpusSnapshotManifestV3):
+        payload["parents"] = [parent.model_dump(mode="json") for parent in parents]
     return _sha256_bytes(_canonical_json_bytes(payload))
 
 
@@ -1027,6 +1118,15 @@ def _derive_document_chunks(
 ) -> tuple[Chunk, ...]:
     try:
         normalized = _derive_extracted_document(corpus_root, document)
+        if derivation.chunking_version != CHUNKING_VERSION:
+            return chunk_document_legacy(
+                normalized,
+                source_id=document.source_id,
+                document_version=document.document_version,
+                target_tokens=derivation.target_tokens,
+                overlap_tokens=derivation.overlap_tokens,
+            )
+        assert derivation.parent_target_tokens is not None
         return chunk_document(
             normalized,
             source_id=document.source_id,
@@ -1034,6 +1134,7 @@ def _derive_document_chunks(
             config=ChunkingConfig(
                 target_tokens=derivation.target_tokens,
                 overlap_tokens=derivation.overlap_tokens,
+                parent_target_tokens=derivation.parent_target_tokens,
                 version=derivation.chunking_version,
                 tokenizer_version=derivation.tokenizer_version,
             ),
@@ -1044,15 +1145,15 @@ def _derive_document_chunks(
 
 def _validate_reproduced_chunks(
     corpus_root: Path,
-    manifest: CorpusSnapshotManifest | CorpusSnapshotManifestV2,
+    manifest: CorpusSnapshotManifest | CorpusSnapshotManifestV2 | CorpusSnapshotManifestV3,
     documents: tuple[CorpusDocument, ...],
     chunks: tuple[CorpusChunk, ...],
+    parents: tuple[CorpusParentChunk, ...] = (),
 ) -> None:
     derivation = manifest.derivation
     if (
         derivation.extraction_version != INDEX_EXTRACTION_VERSION
         or derivation.normalization_version != NORMALIZATION_VERSION
-        or derivation.chunking_version != CHUNKING_VERSION
         or derivation.tokenizer_version != TOKENIZER_VERSION
     ):
         raise DatasetValidationError("corpus derivation identity is not supported by this code")
@@ -1080,10 +1181,39 @@ def _validate_reproduced_chunks(
             ):
                 raise DatasetValidationError("corpus chunk does not match production derivation")
 
+    if isinstance(manifest, CorpusSnapshotManifestV3):
+        parents_by_source: dict[str, list[CorpusParentChunk]] = {}
+        for parent in parents:
+            parents_by_source.setdefault(parent.source_id, []).append(parent)
+        for document in documents:
+            normalized = _derive_extracted_document(corpus_root, document)
+            assert derivation.parent_target_tokens is not None
+            hierarchy = chunk_document_hierarchy(
+                normalized,
+                source_id=document.source_id,
+                document_version=document.document_version,
+                config=ChunkingConfig(
+                    target_tokens=derivation.target_tokens,
+                    overlap_tokens=derivation.overlap_tokens,
+                    parent_target_tokens=derivation.parent_target_tokens,
+                    version=derivation.chunking_version,
+                    tokenizer_version=derivation.tokenizer_version,
+                ),
+            )
+            declared_parents = tuple(
+                parent.to_domain_parent()
+                for parent in sorted(
+                    parents_by_source.get(document.source_id, ()),
+                    key=lambda item: item.ordinal,
+                )
+            )
+            if declared_parents != hierarchy.parents:
+                raise DatasetValidationError("corpus parent inventory is not reproducible")
+
 
 def _validate_source_manifest(
     corpus_root: Path,
-    corpus_manifest: CorpusSnapshotManifestV2,
+    corpus_manifest: CorpusSnapshotManifestV2 | CorpusSnapshotManifestV3,
     documents: tuple[CorpusDocument, ...],
 ) -> CorpusSourceManifest:
     value = _read_object(
@@ -1149,10 +1279,14 @@ def _validate_corpus(
         {
             CORPUS_SCHEMA_VERSION: CorpusSnapshotManifest,
             CORPUS_SCHEMA_VERSION_V2: CorpusSnapshotManifestV2,
+            CORPUS_SCHEMA_VERSION_V3: CorpusSnapshotManifestV3,
         },
         label="corpus manifest",
     )
-    assert isinstance(manifest_value, (CorpusSnapshotManifest, CorpusSnapshotManifestV2))
+    assert isinstance(
+        manifest_value,
+        (CorpusSnapshotManifest, CorpusSnapshotManifestV2, CorpusSnapshotManifestV3),
+    )
     manifest = manifest_value
     if (
         manifest.snapshot_id != reference.snapshot_id
@@ -1174,16 +1308,34 @@ def _validate_corpus(
     )
     documents = tuple(value for value in document_values if isinstance(value, CorpusDocument))
     chunks = tuple(value for value in chunk_values if isinstance(value, CorpusChunk))
-    if len(documents) != manifest.document_count or len(chunks) != manifest.chunk_count:
+    parent_values = (
+        _read_jsonl(
+            _resolve_relative(corpus_root, manifest.parents_file),
+            CorpusParentChunk,
+            label="corpus parents",
+        )
+        if isinstance(manifest, CorpusSnapshotManifestV3)
+        else ()
+    )
+    parents = tuple(value for value in parent_values if isinstance(value, CorpusParentChunk))
+    if (
+        len(documents) != manifest.document_count
+        or len(chunks) != manifest.chunk_count
+        or (
+            isinstance(manifest, CorpusSnapshotManifestV3) and len(parents) != manifest.parent_count
+        )
+    ):
         raise DatasetValidationError("corpus record counts do not match its manifest")
 
     source_ids = tuple(document.source_id for document in documents)
     source_keys = tuple(document.source_key for document in documents)
     chunk_ids = tuple(chunk.chunk_id for chunk in chunks)
+    parent_ids = tuple(parent.parent_chunk_id for parent in parents)
     try:
         _require_unique(source_ids, label="corpus source IDs")
         _require_unique(source_keys, label="corpus source keys")
         _require_unique(chunk_ids, label="corpus chunk IDs")
+        _require_unique(parent_ids, label="corpus parent IDs")
     except ValueError as exc:
         raise DatasetValidationError(str(exc)) from exc
 
@@ -1217,20 +1369,35 @@ def _validate_corpus(
             raise DatasetValidationError("corpus chunk references an unknown document version")
         if calculate_chunk_content_hash(chunk.text) != chunk.content_digest:
             raise DatasetValidationError("corpus chunk content hash mismatch")
+        if isinstance(manifest, CorpusSnapshotManifestV3) and (
+            chunk.parent_chunk_id is None or chunk.parent_chunk_id not in parent_ids
+        ):
+            raise DatasetValidationError("corpus chunk references an unknown parent")
 
-    _validate_reproduced_chunks(corpus_root, manifest, documents, chunks)
+    for parent in parents:
+        referenced_document = documents_by_id.get(parent.source_id)
+        if (
+            referenced_document is None
+            or referenced_document.document_version != parent.document_version
+        ):
+            raise DatasetValidationError("corpus parent references an unknown document version")
+        if calculate_chunk_content_hash(parent.text) != parent.content_digest:
+            raise DatasetValidationError("corpus parent content hash mismatch")
 
-    calculated_hash = calculate_corpus_content_hash(manifest, documents, chunks)
+    _validate_reproduced_chunks(corpus_root, manifest, documents, chunks, parents)
+
+    calculated_hash = calculate_corpus_content_hash(manifest, documents, chunks, parents)
     if calculated_hash != manifest.content_hash:
         raise DatasetValidationError("corpus snapshot content hash mismatch")
     source_manifest = (
         _validate_source_manifest(corpus_root, manifest, documents)
-        if isinstance(manifest, CorpusSnapshotManifestV2)
+        if isinstance(manifest, (CorpusSnapshotManifestV2, CorpusSnapshotManifestV3))
         else None
     )
     return CorpusSnapshot(
         manifest=manifest,
         documents=documents,
+        parents=parents,
         chunks=chunks,
         source_manifest=source_manifest,
     )
@@ -1506,11 +1673,13 @@ __all__ = [
     "CorpusChunk",
     "CorpusDerivation",
     "CorpusDocument",
+    "CorpusParentChunk",
     "CorpusReference",
     "CorpusSnapshot",
     "CorpusSnapshotFormat",
     "CorpusSnapshotManifest",
     "CorpusSnapshotManifestV2",
+    "CorpusSnapshotManifestV3",
     "CorpusSourceArtifact",
     "CorpusSourceManifest",
     "DatasetManifest",

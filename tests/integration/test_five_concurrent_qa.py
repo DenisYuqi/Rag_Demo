@@ -19,8 +19,10 @@ from rag_mvp.domain.ingestion import (
     DocumentKind,
     DocumentVersion,
     ExtractionMethod,
+    ParentChunk,
 )
 from rag_mvp.domain.qa import ConversationRole, StreamEventKind, ValidatedStreamEvent
+from rag_mvp.ingestion.chunking import token_spans
 from rag_mvp.ingestion.embedding import EmbeddingStage
 from rag_mvp.ingestion.indexing import RevisionPublisher, RevisionStager
 from rag_mvp.performance.admission import QAAdmissionController
@@ -40,6 +42,7 @@ from rag_mvp.providers.models import (
 )
 from rag_mvp.providers.resilience import RetryPolicy
 from rag_mvp.providers.routing import ModelProviderRouter, ProviderRoute
+from rag_mvp.qa.context import ContextBuilder
 from rag_mvp.qa.deadlines import QAStageBudgets
 from rag_mvp.qa.evidence_assessor import FactAssessmentConfig, SemanticFactEvidenceAssessor
 from rag_mvp.qa.orchestrator import QAOrchestrator, SnapshotRetrievalGateway
@@ -205,12 +208,23 @@ async def _production_qa_harness(
     )
     chunk = Chunk(
         chunk_id=_CHUNK_ID,
+        parent_chunk_id=f"parent-{_CHUNK_ID}",
         source_id=source_id,
         document_version=1,
         ordinal=0,
         text=_SOURCE_TEXT,
         content_digest=_digest(_SOURCE_TEXT),
         locator=ChunkLocator(section_path=("Annual leave",)),
+    )
+    parent = ParentChunk(
+        parent_chunk_id=chunk.parent_chunk_id,
+        source_id=chunk.source_id,
+        document_version=chunk.document_version,
+        ordinal=chunk.ordinal,
+        text=chunk.text,
+        content_digest=chunk.content_digest,
+        locator=chunk.locator,
+        token_count=len(token_spans(chunk.text)),
     )
 
     embedding = DeterministicEmbeddingProvider()
@@ -226,8 +240,15 @@ async def _production_qa_harness(
                 "concurrency-index",
                 Deadline.after(30),
             ),
+            parents=(parent,),
         )
-    repositories.index_revisions.create(staged)
+    with database.transaction() as connection:
+        repositories.index_revisions.create(staged, connection=connection)
+        repositories.parent_chunks.insert_many(
+            revision_id,
+            (parent,),
+            connection=connection,
+        )
     RevisionPublisher(layout, repositories.index_revisions).publish(
         revision_id,
         expected_active_revision_id=None,
@@ -253,6 +274,7 @@ async def _production_qa_harness(
             required_space=embedding.identity,
             config=FactAssessmentConfig(candidate_similarity_floor=0.6),
         ),
+        context_builder=ContextBuilder(parent_resolver=repositories.parent_chunks),
         injection_policy=injection_policy,
         budgets=QAStageBudgets(
             total_seconds=45,

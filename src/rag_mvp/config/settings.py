@@ -117,8 +117,9 @@ class Settings(BaseSettings):
     evaluation_shutdown_grace_seconds: float = Field(default=2.0, ge=0, le=10)
 
     upload_max_bytes: int = Field(default=25 * 1024 * 1024, ge=1)
-    chunk_target_tokens: int = Field(default=500, ge=64, le=4096)
-    chunk_overlap_tokens: int = Field(default=80, ge=0, le=1024)
+    parent_chunk_target_tokens: int = Field(default=1536, ge=64, le=8192)
+    chunk_target_tokens: int = Field(default=512, ge=64, le=4096)
+    chunk_overlap_tokens: int = Field(default=128, ge=0, le=1024)
     ocr_enabled: bool = True
     ocr_languages: str = "chi_sim+eng"
 
@@ -215,6 +216,8 @@ class Settings(BaseSettings):
     def validate_limits(self) -> Settings:
         if self.chunk_overlap_tokens >= self.chunk_target_tokens:
             raise ValueError("chunk overlap must be smaller than chunk target")
+        if self.parent_chunk_target_tokens < self.chunk_target_tokens:
+            raise ValueError("parent chunk target cannot be below child chunk target")
         if self.rerank_candidate_limit < self.context_chunk_limit:
             raise ValueError("rerank candidate limit cannot be below context chunk limit")
         stage_budgets = {

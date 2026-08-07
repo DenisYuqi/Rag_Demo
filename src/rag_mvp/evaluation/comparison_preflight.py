@@ -50,7 +50,7 @@ _GENERATION_OUTPUT_TOKENS = 512
 CACHE_EXPERIMENT_PER_CASE_MARGIN_SECONDS = 10.0
 CACHE_EXPERIMENT_PHASE_MARGIN_SECONDS = 60.0
 MAXIMUM_CACHE_TTL_SECONDS = 86_400.0
-REGISTERED_GENERATION_PROMPT_VERSION = "grounded-claims-json-v3"
+REGISTERED_GENERATION_PROMPT_VERSION = "grounded-claims-json-v4"
 REGISTERED_FAITHFULNESS_SCORER_VERSION = "faithfulness-approved-proposition-support-v4"
 REGISTERED_TEXT_SUPPORT_MATCHER_VERSION = "expected-fact-approved-proposition-v5"
 REGISTERED_TEXT_SUPPORT_NORMALIZATION_VERSION = "nfkc-casefold-proposition-format-v2"
@@ -62,12 +62,12 @@ _PROMPT_BYTE_OVERHEAD_BY_VERSION = {
 REGISTERED_COMPARISON_DATASET_ID = "original-pdf-acceptance"
 REGISTERED_COMPARISON_DATASET_VERSION = "2.0.0"
 REGISTERED_COMPARISON_DATASET_HASH = (
-    "sha256:638d8fa963ce17944985f77d69e2ad0c533a23f2723f0ea39574c3a3891abbb9"
+    "sha256:ad1220c67b0542fef8e02f0a7a537533228b56ec8a82d40a69188e1f9895672d"
 )
 REGISTERED_COMPARISON_CORPUS_ID = "acceptance-bilingual-corpus"
 REGISTERED_COMPARISON_CORPUS_VERSION = "2.0.0"
 REGISTERED_COMPARISON_CORPUS_HASH = (
-    "sha256:3aeeae28fe27695af03eb0390ff035469032ab48d319414bdbf2f5419cc40997"
+    "sha256:019c0b91a453318fc980df3088b1d0fb3ad8802d375a2537d6470c56eb11839e"
 )
 
 
@@ -228,9 +228,7 @@ def validate_registered_comparison_dataset(dataset: EvaluationDataset) -> None:
         or corpus.version != REGISTERED_COMPARISON_CORPUS_VERSION
         or corpus.content_hash != REGISTERED_COMPARISON_CORPUS_HASH
     ):
-        raise ComparisonPreflightError(
-            "comparison_registered_dataset_identity_mismatch"
-        )
+        raise ComparisonPreflightError("comparison_registered_dataset_identity_mismatch")
 
 
 def _validate_cache_experiment(
@@ -240,22 +238,16 @@ def _validate_cache_experiment(
 ) -> tuple[int, float | None]:
     if experiment_plan.axis is not ExperimentAxis.CACHE_BEHAVIOR:
         return 0, None
-    if (
-        experiment_plan.cache_policy is not CachePolicy.USE
-        or tuple(item.axis_value for item in experiment_plan.variants) != ("cold", "warm")
-    ):
+    if experiment_plan.cache_policy is not CachePolicy.USE or tuple(
+        item.axis_value for item in experiment_plan.variants
+    ) != ("cold", "warm"):
         raise ComparisonPreflightError("comparison_cache_plan_invalid")
     if experiment_plan.repeat_order_policy.repeats_per_case != 1:
         raise ComparisonPreflightError("comparison_cache_repeats_invalid")
-    ordered_plans = tuple(
-        candidate_plans[item.variant_id] for item in experiment_plan.variants
-    )
-    first_sequence = tuple(
-        item.source_case_id or item.case_id for item in ordered_plans[0].cases
-    )
+    ordered_plans = tuple(candidate_plans[item.variant_id] for item in experiment_plan.variants)
+    first_sequence = tuple(item.source_case_id or item.case_id for item in ordered_plans[0].cases)
     if not first_sequence or any(
-        tuple(item.source_case_id or item.case_id for item in plan.cases)
-        != first_sequence
+        tuple(item.source_case_id or item.case_id for item in plan.cases) != first_sequence
         for plan in ordered_plans[1:]
     ):
         raise ComparisonPreflightError("comparison_cache_case_order_mismatch")
@@ -271,17 +263,14 @@ def _validate_cache_experiment(
         len(first_sequence) != len(selected_set)
         or canonical_selected != eligible
         or experiment_plan.fixed_identities.case_count != len(eligible)
-        or experiment_plan.fixed_identities.case_set_hash
-        != case_ids_content_hash(eligible)
+        or experiment_plan.fixed_identities.case_set_hash != case_ids_content_hash(eligible)
     ):
         raise ComparisonPreflightError("comparison_cache_case_set_ineligible")
     _require_unique_cache_queries(dataset, eligible)
     runtime_ids = {plan.identity.runtime_configuration_id for plan in ordered_plans}
     if None in runtime_ids or len(runtime_ids) != 1:
         raise ComparisonPreflightError("comparison_cache_runtime_identity_mismatch")
-    retrieval_identities = tuple(
-        plan.identity.retrieval_configuration for plan in ordered_plans
-    )
+    retrieval_identities = tuple(plan.identity.retrieval_configuration for plan in ordered_plans)
     if any(value != retrieval_identities[0] for value in retrieval_identities[1:]):
         raise ComparisonPreflightError("comparison_cache_configuration_mismatch")
     retrieval = retrieval_identities[0]
@@ -389,9 +378,7 @@ def _case_estimate(
         (ModelRole.EMBEDDING, query_tokens + candidate_token_bound, 0),
         (
             ModelRole.GENERATION,
-            _prompt_byte_overhead(evaluation_plan, "generation")
-            + query_tokens
-            + context_tokens,
+            _prompt_byte_overhead(evaluation_plan, "generation") + query_tokens + context_tokens,
             _GENERATION_OUTPUT_TOKENS,
         ),
     ]
@@ -521,10 +508,7 @@ def _retrieval_identity_int(
 
 def _prompt_byte_overhead(plan: EvaluationRunPlan, role: str) -> int:
     version = plan.identity.prompt_versions.get(role)
-    if (
-        role == "generation"
-        and GENERATOR_PROMPT_VERSION != REGISTERED_GENERATION_PROMPT_VERSION
-    ):
+    if role == "generation" and GENERATOR_PROMPT_VERSION != REGISTERED_GENERATION_PROMPT_VERSION:
         raise ComparisonPreflightError("comparison_prompt_overhead_unknown")
     value = _PROMPT_BYTE_OVERHEAD_BY_VERSION.get((role, version or ""))
     if value is None:
@@ -547,10 +531,13 @@ def _rerank_input_byte_bound(
             reverse=True,
         )[:submitted]
     )
-    query_bound = min(
-        truncation.maximum_query_characters,
-        truncation.maximum_query_tokens,
-    ) * 4
+    query_bound = (
+        min(
+            truncation.maximum_query_characters,
+            truncation.maximum_query_tokens,
+        )
+        * 4
+    )
     return _prompt_byte_overhead(plan, "reranking") + query_bound + candidate_bound
 
 
@@ -563,8 +550,7 @@ def _safe_work_id(*parts: str) -> str:
     digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
     prefix = "comparison-work-" + "-".join(parts[:2])
     normalized = "".join(
-        character if character.isalnum() or character in "_.-" else "-"
-        for character in prefix
+        character if character.isalnum() or character in "_.-" else "-" for character in prefix
     )
     return f"{normalized[:220]}.{digest}"
 

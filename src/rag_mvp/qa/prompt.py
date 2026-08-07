@@ -20,7 +20,7 @@ from rag_mvp.qa.context import (
 from rag_mvp.qa.query_rewrite import QueryRewriteError, select_response_language
 from rag_mvp.retrieval.request import RetrievalRequestError, canonicalize_query
 
-GENERATOR_PROMPT_VERSION = "grounded-claims-json-v3"
+GENERATOR_PROMPT_VERSION = "grounded-claims-json-v4"
 GENERATOR_OUTPUT_SCHEMA_VERSION = "grounded-answer-v1"
 MAX_CITATIONS_PER_CLAIM = 16
 MAX_GENERATED_CLAIMS = 64
@@ -98,6 +98,7 @@ class GeneratorPromptBuilder:
             "retrieved_context": [
                 {
                     "chunk_id": chunk.chunk_id,
+                    "parent_chunk_id": chunk.parent_chunk_id,
                     "document_version": chunk.evidence.document_version,
                     "final_rank": chunk.final_rank,
                     "locator": chunk.evidence.locator.model_dump(mode="json", exclude_none=True),

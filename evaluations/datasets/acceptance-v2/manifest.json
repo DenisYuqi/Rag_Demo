@@ -1,10 +1,10 @@
 {
   "case_count": 24,
   "cases_file": "cases.jsonl",
-  "content_hash": "sha256:638d8fa963ce17944985f77d69e2ad0c533a23f2723f0ea39574c3a3891abbb9",
+  "content_hash": "sha256:ad1220c67b0542fef8e02f0a7a537533228b56ec8a82d40a69188e1f9895672d",
   "contract_version": "2.0.0",
   "corpus": {
-    "content_hash": "sha256:3aeeae28fe27695af03eb0390ff035469032ab48d319414bdbf2f5419cc40997",
+    "content_hash": "sha256:019c0b91a453318fc980df3088b1d0fb3ad8802d375a2537d6470c56eb11839e",
     "manifest_file": "corpus/manifest.json",
     "snapshot_id": "acceptance-bilingual-corpus",
     "version": "2.0.0"

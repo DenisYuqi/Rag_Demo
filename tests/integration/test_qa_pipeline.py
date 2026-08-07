@@ -17,6 +17,7 @@ from rag_mvp.domain.ingestion import (
     DocumentKind,
     DocumentVersion,
     ExtractionMethod,
+    ParentChunk,
 )
 from rag_mvp.domain.qa import (
     ConversationRole,
@@ -34,6 +35,7 @@ from rag_mvp.evaluation.answer_metrics import (
     ComplianceAssessment,
     RefusalAppropriatenessScorer,
 )
+from rag_mvp.ingestion.chunking import token_spans
 from rag_mvp.ingestion.embedding import EmbeddingStage
 from rag_mvp.ingestion.indexing import RevisionPublisher, RevisionStager
 from rag_mvp.providers.errors import ProviderError
@@ -56,6 +58,7 @@ from rag_mvp.providers.models import (
 )
 from rag_mvp.providers.resilience import InMemoryAttemptRecorder, RetryPolicy
 from rag_mvp.providers.routing import ModelProviderRouter, ProviderRoute
+from rag_mvp.qa.context import ContextBuilder
 from rag_mvp.qa.deadlines import DeadlineRunner, QAStageBudgets
 from rag_mvp.qa.evidence_assessor import FactAssessmentConfig, SemanticFactEvidenceAssessor
 from rag_mvp.qa.orchestrator import OrchestratedResponse, QAOrchestrator, SnapshotRetrievalGateway
@@ -324,6 +327,7 @@ async def qa_corpus(tmp_path_factory: pytest.TempPathFactory) -> QACorpus:
     repositories = KnowledgeRepositories.from_database(database)
     derivation_digest = _digest("qa-pipeline-fixture-v1")
     chunks: list[Chunk] = []
+    parents: list[ParentChunk] = []
     titles: dict[str, str] = {}
     active_sources: dict[str, int] = {}
     for document in _DOCUMENTS:
@@ -362,12 +366,25 @@ async def qa_corpus(tmp_path_factory: pytest.TempPathFactory) -> QACorpus:
         chunks.append(
             Chunk(
                 chunk_id=document.chunk_id,
+                parent_chunk_id=f"parent-{document.chunk_id}",
                 source_id=document.source_id,
                 document_version=1,
                 ordinal=0,
                 text=document.text,
                 content_digest=_digest(document.text),
                 locator=ChunkLocator(section_path=(document.section,)),
+            )
+        )
+        parents.append(
+            ParentChunk(
+                parent_chunk_id=f"parent-{document.chunk_id}",
+                source_id=document.source_id,
+                document_version=1,
+                ordinal=0,
+                text=document.text,
+                content_digest=_digest(document.text),
+                locator=ChunkLocator(section_path=(document.section,)),
+                token_count=len(token_spans(document.text)),
             )
         )
         titles[document.source_id] = document.title
@@ -389,8 +406,15 @@ async def qa_corpus(tmp_path_factory: pytest.TempPathFactory) -> QACorpus:
                 "qa-index-fixture",
                 Deadline.after(30),
             ),
+            parents=parents,
         )
-    repositories.index_revisions.create(staged)
+    with database.transaction() as connection:
+        repositories.index_revisions.create(staged, connection=connection)
+        repositories.parent_chunks.insert_many(
+            revision_id,
+            parents,
+            connection=connection,
+        )
     active = RevisionPublisher(layout, repositories.index_revisions).publish(
         revision_id,
         expected_active_revision_id=None,
@@ -444,6 +468,7 @@ def _pipeline(
             required_space=corpus.embedding.identity,
             config=FactAssessmentConfig(candidate_similarity_floor=0.6),
         ),
+        context_builder=ContextBuilder(parent_resolver=corpus.repositories.parent_chunks),
         injection_policy=injection_policy,
         budgets=budgets
         or QAStageBudgets(

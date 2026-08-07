@@ -34,6 +34,9 @@ def test_defaults_are_safe_and_offline_ready(tmp_path: object) -> None:
     assert settings.bge_qa_retrieval_budget_seconds == 20
     assert settings.bge_rerank_deadline_seconds == 10
     assert settings.bge_qa_evidence_assessment_budget_seconds == 10
+    assert settings.parent_chunk_target_tokens == 1536
+    assert settings.chunk_target_tokens == 512
+    assert settings.chunk_overlap_tokens == 128
     assert settings.qa_minimum_support_score == 0.45
     assert settings.server_shutdown_grace_seconds == 4
     assert settings.app_shutdown_grace_seconds == 15
@@ -85,6 +88,14 @@ def test_bge_profile_configuration_invariants_are_enforced(tmp_path: Path) -> No
             data_root=tmp_path,
             bge_qa_deadline_seconds=8,
             bge_qa_evidence_assessment_budget_seconds=8,
+            _env_file=None,
+        )
+
+    with pytest.raises(ValidationError, match="parent chunk target"):
+        Settings(
+            data_root=tmp_path,
+            parent_chunk_target_tokens=255,
+            chunk_target_tokens=256,
             _env_file=None,
         )
 

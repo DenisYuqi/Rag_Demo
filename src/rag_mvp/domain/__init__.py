@@ -45,6 +45,7 @@ from rag_mvp.domain.ingestion import (
     IngestionJobStatus,
     IngestionOperation,
     IngestionStage,
+    ParentChunk,
     ReindexCommand,
     UploadCommand,
 )
@@ -124,6 +125,7 @@ __all__ = [
     "ModelPricing",
     "ModelRole",
     "OperationsSummary",
+    "ParentChunk",
     "ProviderAttemptEvidence",
     "QAAnswer",
     "QAError",

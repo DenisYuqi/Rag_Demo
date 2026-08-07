@@ -21,7 +21,7 @@ from rag_mvp.evaluation.dataset import (
     EvaluationDataset,
     materialize_production_documents,
 )
-from rag_mvp.ingestion.chunking import chunk_document
+from rag_mvp.ingestion.chunking import chunk_document_hierarchy
 from rag_mvp.ingestion.extractors import ExtractedDocument
 from rag_mvp.ingestion.service import IngestionService
 from rag_mvp.ingestion.validation import ValidatedUpload
@@ -113,23 +113,35 @@ class EvaluationCorpusInstaller:
                 ):
                     raise EvaluationCorpusInstallError("evaluation_document_identity_mismatch")
 
-            reproduced = tuple(
-                chunk
-                for version in registered_versions
-                for chunk in chunk_document(
+            reproduced_hierarchies = tuple(
+                chunk_document_hierarchy(
                     artifacts.load_canonical(version),
                     source_id=version.source_id,
                     document_version=version.version,
                     config=self.ingestion.chunking_config,
                 )
+                for version in registered_versions
+            )
+            reproduced_parents = tuple(
+                parent for hierarchy in reproduced_hierarchies for parent in hierarchy.parents
+            )
+            reproduced = tuple(
+                child for hierarchy in reproduced_hierarchies for child in hierarchy.children
             )
             expected = {chunk.chunk_id: chunk for chunk in dataset.production_chunks}
             actual = {chunk.chunk_id: chunk for chunk in reproduced}
             if actual != expected or len(actual) != len(reproduced):
                 raise EvaluationCorpusInstallError("evaluation_chunk_identity_mismatch")
+            expected_parents = {
+                parent.parent_chunk_id: parent for parent in dataset.production_parents
+            }
+            actual_parents = {parent.parent_chunk_id: parent for parent in reproduced_parents}
+            if actual_parents != expected_parents or len(actual_parents) != len(reproduced_parents):
+                raise EvaluationCorpusInstallError("evaluation_parent_identity_mismatch")
 
             revision = await self.ingestion.publish_prechunked_snapshot(
                 revision_id=revision_id,
+                parents=dataset.production_parents,
                 chunks=dataset.production_chunks,
                 titles={
                     document.source_id: document.display_title
@@ -189,6 +201,7 @@ class EvaluationCorpusInstaller:
         if (
             declared.target_tokens != active.target_tokens
             or declared.overlap_tokens != active.overlap_tokens
+            or declared.parent_target_tokens != active.parent_target_tokens
             or declared.chunking_version != active.version
             or declared.tokenizer_version != active.tokenizer_version
             or extraction.get("version") != declared.extraction_version
@@ -197,6 +210,7 @@ class EvaluationCorpusInstaller:
             or chunking.get("tokenizer_version") != declared.tokenizer_version
             or chunking.get("target_tokens") != declared.target_tokens
             or chunking.get("overlap_tokens") != declared.overlap_tokens
+            or chunking.get("parent_target_tokens") != declared.parent_target_tokens
         ):
             raise EvaluationCorpusInstallError("evaluation_derivation_mismatch")
 

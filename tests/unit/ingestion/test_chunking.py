@@ -3,7 +3,12 @@ from __future__ import annotations
 import pytest
 
 from rag_mvp.domain.ingestion import DocumentKind
-from rag_mvp.ingestion.chunking import ChunkingConfig, chunk_document, token_spans
+from rag_mvp.ingestion.chunking import (
+    ChunkingConfig,
+    chunk_document,
+    chunk_document_hierarchy,
+    token_spans,
+)
 from rag_mvp.ingestion.extractors import ExtractedBlock, ExtractedDocument
 
 
@@ -62,6 +67,8 @@ def test_chinese_without_spaces_is_tokenized_deterministically() -> None:
         {"target_tokens": True},
         {"overlap_tokens": 1.0},
         {"overlap_tokens": False},
+        {"parent_target_tokens": 4.0},
+        {"parent_target_tokens": True},
     ],
 )
 def test_chunking_config_requires_integer_token_counts(values: dict[str, object]) -> None:
@@ -122,3 +129,51 @@ def test_overlapping_chunk_ranges_are_bounded_and_cover_every_character() -> Non
         previous_end = end
 
     assert all(covered)
+
+
+def test_parent_child_derivation_is_bounded_contained_and_deterministic() -> None:
+    text = " one two three four five six seven eight nine ten "
+    document = ExtractedDocument(
+        kind=DocumentKind.TEXT,
+        blocks=(ExtractedBlock(text=text, section_path=("Policy",)),),
+    )
+    config = ChunkingConfig(
+        parent_target_tokens=6,
+        target_tokens=4,
+        overlap_tokens=1,
+    )
+
+    first = chunk_document_hierarchy(
+        document,
+        source_id="parent-child-source",
+        document_version=3,
+        config=config,
+    )
+    second = chunk_document_hierarchy(
+        document,
+        source_id="parent-child-source",
+        document_version=3,
+        config=config,
+    )
+
+    assert first == second
+    assert len(first.parents) == 2
+    assert "".join(parent.text for parent in first.parents) == text
+    assert all(parent.token_count <= 6 for parent in first.parents)
+    parent_by_id = {parent.parent_chunk_id: parent for parent in first.parents}
+    for child in first.children:
+        parent = parent_by_id[child.parent_chunk_id]
+        assert child.token_count is not None and child.token_count <= 4
+        assert child.text in parent.text
+        assert child.locator.section_path == parent.locator.section_path
+        assert parent.locator.char_start is not None
+        assert parent.locator.char_end is not None
+        assert child.locator.char_start is not None
+        assert child.locator.char_end is not None
+        assert parent.locator.char_start <= child.locator.char_start
+        assert child.locator.char_end <= parent.locator.char_end
+
+
+def test_parent_target_must_not_be_smaller_than_child_target() -> None:
+    with pytest.raises(ValueError, match="parent_target_tokens"):
+        ChunkingConfig(parent_target_tokens=3, target_tokens=4, overlap_tokens=1)

@@ -48,6 +48,7 @@ def test_initialize_creates_current_schema_and_is_idempotent(tmp_path: Path) -> 
         "comparison_results",
         "comparison_shared_setup_evidence",
         "comparison_selections",
+        "parent_chunks",
     }.issubset(tables)
     assert foreign_keys == 1
     assert setup_columns["provider_calls_complete"] == 1

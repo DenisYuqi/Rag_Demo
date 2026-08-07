@@ -292,6 +292,7 @@ def build_evaluation_plan(
             "tokenizer_version": derivation.tokenizer_version,
             "target_tokens": derivation.target_tokens,
             "overlap_tokens": derivation.overlap_tokens,
+            "parent_target_tokens": derivation.parent_target_tokens,
             "ocr_enabled": settings.ocr_enabled,
             "ocr_languages": settings.ocr_languages,
         },
@@ -355,9 +356,7 @@ def evaluation_scorer_versions(dataset: EvaluationDataset) -> dict[str, str]:
     )
     versions = {
         MetricName.FAITHFULNESS.value: (
-            ADJUDICATED_FAITHFULNESS_SCORER_VERSION
-            if advanced
-            else FAITHFULNESS_SCORER_VERSION
+            ADJUDICATED_FAITHFULNESS_SCORER_VERSION if advanced else FAITHFULNESS_SCORER_VERSION
         ),
         MetricName.CONTEXT_PRECISION.value: CONTEXT_PRECISION_SCORER_VERSION,
         MetricName.ANSWER_COMPLETENESS.value: ANSWER_COMPLETENESS_SCORER_VERSION,
@@ -386,14 +385,21 @@ def evaluation_scorer_versions(dataset: EvaluationDataset) -> dict[str, str]:
 
 def _require_matching_derivation(dataset: EvaluationDataset, settings: Settings) -> None:
     derivation = dataset.corpus.manifest.derivation
-    expected = CorpusDerivation(
-        target_tokens=settings.chunk_target_tokens,
-        overlap_tokens=settings.chunk_overlap_tokens,
-    )
+    if derivation.chunking_version == CHUNKING_VERSION:
+        expected = CorpusDerivation(
+            chunking_version=CHUNKING_VERSION,
+            target_tokens=settings.chunk_target_tokens,
+            overlap_tokens=settings.chunk_overlap_tokens,
+            parent_target_tokens=settings.parent_chunk_target_tokens,
+        )
+    else:
+        expected = CorpusDerivation(
+            target_tokens=settings.chunk_target_tokens,
+            overlap_tokens=settings.chunk_overlap_tokens,
+        )
     if derivation != expected or (
         derivation.extraction_version != INDEX_EXTRACTION_VERSION
         or derivation.normalization_version != NORMALIZATION_VERSION
-        or derivation.chunking_version != CHUNKING_VERSION
         or derivation.tokenizer_version != TOKENIZER_VERSION
     ):
         raise EvaluationPlanError("dataset_settings_derivation_mismatch")

@@ -19,8 +19,8 @@ from rag_mvp.domain._base import (
 from rag_mvp.domain.evaluation import ProviderAttemptEvidence, TokenUsage
 from rag_mvp.domain.ingestion import ChunkLocator
 
-RETRIEVAL_EVIDENCE_SCHEMA_VERSION = "ranking-evidence-v1"
-RETRIEVAL_RESULT_SCHEMA_VERSION = "retrieval-result-v1"
+RETRIEVAL_EVIDENCE_SCHEMA_VERSION = "ranking-evidence-v2"
+RETRIEVAL_RESULT_SCHEMA_VERSION = "retrieval-result-v2"
 SafeDiagnosticCode = Annotated[
     str,
     Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_.-]*$"),
@@ -48,6 +48,7 @@ class CachePolicy(StrEnum):
 
 class RetrievalCandidate(DomainModel):
     chunk_id: Identifier
+    parent_chunk_id: Identifier
     source_id: Identifier
     display_title: Identifier
     document_version: Annotated[int, Field(gt=0)]
@@ -143,7 +144,7 @@ def retrieval_evidence_digest(result: RetrievalResult) -> str:
         raise TypeError("retrieval result is required")
     diagnostics = result.diagnostics
     payload = {
-        "schema_version": "retrieval-evidence-digest-v1",
+        "schema_version": "retrieval-evidence-digest-v2",
         "index_revision": diagnostics.index_revision,
         "requested_mode": diagnostics.requested_mode.value,
         "effective_mode": diagnostics.effective_mode.value,

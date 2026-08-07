@@ -354,9 +354,7 @@ def _compose_with_client(
                 reranking_generation,
                 max_candidates=settings.rerank_candidate_limit,
             )
-            reranking_routes = (
-                ProviderRoute("openai-reranking", openai_reranker, retry_policy),
-            )
+            reranking_routes = (ProviderRoute("openai-reranking", openai_reranker, retry_policy),)
     else:
         embedding_identity = EmbeddingSpaceIdentity(
             provider="bge-local",
@@ -407,6 +405,7 @@ def _compose_with_client(
         chunking_config=ChunkingConfig(
             target_tokens=settings.chunk_target_tokens,
             overlap_tokens=settings.chunk_overlap_tokens,
+            parent_target_tokens=settings.parent_chunk_target_tokens,
         ),
         upload_max_bytes=settings.upload_max_bytes,
         ocr_languages=settings.ocr_languages,
@@ -465,7 +464,10 @@ def _compose_qa(
             router,
             required_space=embedding_identity,
         ),
-        context_builder=ContextBuilder(maximum_chunks=settings.context_chunk_limit),
+        context_builder=ContextBuilder(
+            maximum_chunks=settings.context_chunk_limit,
+            parent_resolver=ingestion.repositories.parent_chunks,
+        ),
         injection_policy=injection_policy,
         refusal_policy=RefusalPolicy(
             minimum_support_score=settings.qa_minimum_support_score,
