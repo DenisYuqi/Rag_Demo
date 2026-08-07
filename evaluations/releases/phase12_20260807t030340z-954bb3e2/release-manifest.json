@@ -1,0 +1,282 @@
+{
+  "schema_version": "rag-mvp-release-manifest-v1",
+  "release_id": "20260807t030340z-954bb3e2",
+  "status": "accepted",
+  "generated_at_utc": "2026-08-07T04:08:33.5497421Z",
+  "accepted_runtime_source": {
+    "git_revision": "333150f731f1882b52cd504a44ef62c8b15a7188",
+    "oci_revision": "333150f731f1882b52cd504a44ef62c8b15a7188",
+    "evaluation_package_code_revision": "sha256:5cc2539c409e6eb33cad1f44959a0f5a5abe2e892b1f839be7ad4e8dd96d1cb2",
+    "release_evidence_commit_is_distinct": true
+  },
+  "image": {
+    "reference": "rag-mvp:phase12-333150f731f1",
+    "image_id": "sha256:592adf63fcb0795a2197c67386d9d00e2da012c56bc62a2e303270796e6cfe29",
+    "repo_digest": "rag-mvp@sha256:592adf63fcb0795a2197c67386d9d00e2da012c56bc62a2e303270796e6cfe29",
+    "digest_scope": "local-container-engine",
+    "registry_distribution_verified": false,
+    "platform": "linux/amd64",
+    "runtime_identity": "10001:10001",
+    "build_log_sha256": "sha256:ca28ebec3464b2cfbfd3d94dce1a126ffe451be3230f1ea5d437465a147e7d8c"
+  },
+  "security": {
+    "scanner_version": "0.73.0",
+    "scanner_image": "aquasec/trivy@sha256:7cced7cae583819fc7806d4cbc0dbbc7cad18b99f7d3e235192e6da8c091045c",
+    "raw_high_and_critical_findings": 37,
+    "embedded_secret_findings": 0,
+    "unresolved_critical_findings": 0,
+    "secret_gate_passed": true,
+    "critical_policy_gate_passed": true,
+    "summary_sha256": "sha256:7cc575e948e515946d732351c279c0103962c039d85ed0e652a0bf036af456f1",
+    "raw_scan_sha256": "sha256:ad3cb1b3cbdd22a255d391e744b0d59ca59b39dd9dfe22214873b1a0862cd8b2",
+    "secret_gate_sha256": "sha256:5e6192c239a5451d85d20f8e08cc78e5b2f7e63b9c2cb7091851a44d89642837",
+    "critical_gate_sha256": "sha256:884491d0545ee29727d1b115b1d49a49bcbf53808d3c936c656b8cc4d1c893c2",
+    "raw_reports_published": false,
+    "raw_report_privacy_disposition": "public-third-party-maintainer-metadata-retained-in-external-evidence"
+  },
+  "configuration": {
+    "configuration_id": "d78625c2d01ee0e3",
+    "manifest_hash_algorithm": "sha256",
+    "manifest_hash": "fbac532b2d068a735a8a493ee70d75c37e5b621152245d58fed0886d53ff7d6d",
+    "configuration_file_sha256": "sha256:4a261a358d3cc46acbcb393ed9851afddbace971f557765c1a2ecd4164cb283d",
+    "service_version": "0.1.0",
+    "provider_backend": "openai",
+    "provider_adapter": "openai-compatible-v1",
+    "embedding_model": "text-embedding-3-small",
+    "embedding_dimension": 1536,
+    "generation_model": "gpt-5.4",
+    "reranking_model": "disabled",
+    "provider_timeout_seconds": 8.0,
+    "provider_retry_limit": 1,
+    "qa_deadline_seconds": 9.5,
+    "budgets_seconds": {
+      "retrieval": 5.0,
+      "embedding": 4.5,
+      "evidence_assessment": 5.0,
+      "generation": 5.0,
+      "finalization": 0.1
+    },
+    "cache_policy": "bypass",
+    "pricing_version": "openai-standard-2026-08-07"
+  },
+  "dataset_and_corpus": {
+    "dataset": {
+      "id": "mvp-bilingual-rag",
+      "version": "1.0.0",
+      "content_hash": "sha256:330df745c7df79e106fbb80b6137d1b55fb39ec63215f479aed858f7eb7f05f2"
+    },
+    "corpus": {
+      "id": "mvp-synthetic-corpus",
+      "version": "1.0.0",
+      "content_hash": "sha256:40719423095a14cd0dd5d0c993ba68417135e69a6a00121fdf62f53b5e26d866"
+    }
+  },
+  "quality": {
+    "run_id": "20260807t030340z-954bb3e2-quality",
+    "quality_run_manifest_sha256": "sha256:893f78587786d62ab4389e10d797213ce1ff994935410a07c411af8c3b9a8a88",
+    "offline_verifier_passed": true,
+    "gate_valid": true,
+    "final_gate_passed": true,
+    "metrics": {
+      "faithfulness": {
+        "value": 1.0,
+        "operator": ">",
+        "threshold": 0.85,
+        "passed": true
+      },
+      "context_precision": {
+        "value": 1.0,
+        "operator": ">",
+        "threshold": 0.7,
+        "passed": true
+      },
+      "answer_completeness": {
+        "value": 1.0,
+        "operator": ">=",
+        "threshold": 0.8,
+        "passed": true
+      },
+      "style_consistency": {
+        "value": 0.9583333333333334,
+        "operator": ">=",
+        "threshold": 0.8,
+        "passed": true
+      },
+      "refusal_appropriateness": {
+        "value": 1.0,
+        "operator": ">=",
+        "threshold": 0.8,
+        "passed": true
+      }
+    },
+    "complete_latency_p90_ms": 4745.766521000007,
+    "error_rate": 0.0,
+    "estimated_cost_usd": 0.01346762,
+    "cost_per_1000_calls_usd": 1.68345250,
+    "failed_case_count": 1,
+    "failed_case_disposition": "one-individual-style-miss-aggregate-and-final-gates-passed"
+  },
+  "quota_and_cost_preflight": {
+    "passed": true,
+    "quota_confirmed": true,
+    "spend_confirmed": true,
+    "scenario_file_sha256": "sha256:ec6b59b0edaaf0a07de38fdeea284955daca7d5651f2dba8a7f2aed322a2412d",
+    "workload_digest": "sha256:af1e02ceed740f3e85af145a4922532403115dab6bd666564fd02f9c0471d65f",
+    "pricing_file_sha256": "sha256:5797d5efeb22f9b4da4c34ca6bbd7d0583fb5a875826257d587f98bfc6e607a5",
+    "pricing_evidence_digest": "sha256:7306f33c80227527f20d92bfecb18819e11462220999d8aad31b6645c0e9fc68",
+    "estimated_505_calls_usd": 0.8501435125,
+    "planned_maximum_605_calls_usd": 1.0184887625,
+    "cost_cap_usd": 5.0,
+    "live_probe": {
+      "embedding_http_status": 200,
+      "generation_http_status": 200,
+      "embedding_rate_limit_headers": 6,
+      "generation_rate_limit_headers": 6
+    }
+  },
+  "performance": {
+    "accepted_run_id": "20260807t030340z-954bb3e2-load-attempt02",
+    "measured_attempt_ordinal": 2,
+    "instance_identity": "instance-dc8d6531193f496395e0a2a36e787b9b",
+    "instance_count": 1,
+    "application_restart_count": 0,
+    "application_exit_code": 0,
+    "clean_shutdown_passed": true,
+    "warmup_attempts": 5,
+    "warmup_successes": 5,
+    "warmup_excluded_from_measurement": true,
+    "cache_policy": "bypass",
+    "cache_satisfied_attempts": 0,
+    "configured_concurrency": 5,
+    "observed_peak_concurrency": 5,
+    "attempt_denominator": "all-http-attempts-including-retries",
+    "attempts": 509,
+    "successes": 504,
+    "errors": 5,
+    "retry_attempts": 4,
+    "error_rate": 0.009823182711198428,
+    "latency_ms": {
+      "p50": 2952.2582570000395,
+      "p90": 4268.061692999936,
+      "p95": 4612.737435999975,
+      "p99": 5585.0336670000615,
+      "max": 6604.987299999948
+    },
+    "cost_complete": true,
+    "estimated_cost_usd": 0.76331826,
+    "cost_per_1000_successful_calls_usd": 1.514520357142857142857142857,
+    "provider_attempt_count": 1020,
+    "tokens": {
+      "embedding_input": 77913,
+      "generation_input": 169584,
+      "generation_output": 22520
+    },
+    "failed_diagnostics": 5,
+    "successful_p90_diagnostics": 1,
+    "representative_trace_count": 20,
+    "application_log_sha256": "sha256:76333d6b6daa9657c4107ace782a96bacf212544837fbe8fd3aa58f15b7ca15b",
+    "exact_image_bundle_verification_passed": true,
+    "exact_image_log_stream_verification_passed": true,
+    "decision_valid": true,
+    "decision_passed": true
+  },
+  "rejected_measured_attempt": {
+    "run_id": "20260807t030340z-954bb3e2-load-final",
+    "attempts": 508,
+    "successes": 504,
+    "errors": 4,
+    "error_rate": 0.007874015748031496,
+    "p90_ms": 4055.8595789999572,
+    "cost_complete": false,
+    "decision_valid": false,
+    "decision_passed": false,
+    "reason": "cost-evidence-incomplete",
+    "client_exit_code": 1,
+    "summary_sha256": "sha256:354e14d4f9a265846b333c77bfa6b8c9f6be1eb6a61913dad66e7b391eafce85",
+    "bundle_sha256": "sha256:d20a9f6cb1d3800eb666aa7bf5be2dd67bb9697ed2b845ab3b296371fdbd5e90",
+    "published": false,
+    "disposition": "retained-external-failed-audit"
+  },
+  "privacy": {
+    "fixture_version": "supported-fixtures-v1",
+    "fixture_sha256": "sha256:7ff72f1c9c039109c43567d1866040aa6b0c3dded423a49129a5c9c8e2d46094",
+    "privacy_tests_passed": 107,
+    "publishable_captured_files_scanned": 120,
+    "supported_fixture_matches": 0,
+    "semantic_detector_matches": 0,
+    "scan_errors": 0,
+    "html_semantic_profile": "html-report-structured-numeric-v1",
+    "html_semantic_verifier_sha256": "sha256:744d4ef3ba43aecb606965e018d1ee2e0d710f669f48c171fe9a6a3a89b77a3a",
+    "captured_surface_scan_sha256": "sha256:8184d0a6103f1d5410d44439aa21d109c91ee1030a482f8e9c63cf42ae74a2f8",
+    "final_composite_sha256": "sha256:54c71d5ca6832605ed67a3d0cdbf81f10137ab52ac1facffa651c1c844a7daf7",
+    "release_package_seal": {
+      "performed_after_manifest_creation": true,
+      "profiles": [
+        "artifact-scan-v1-for-five-non-html-files",
+        "html-report-structured-numeric-v1-for-evaluation-html"
+      ],
+      "evidence_location": "external-acceptance-root",
+      "manifest_self_hash_excluded": true
+    },
+    "passed": true
+  },
+  "final_engineering_gates": {
+    "evidence_sha256": "sha256:c2d2669f697844338530987a59099fef5965ddd5ef474e9cf1ab76207036b4af",
+    "ruff_format": {
+      "files_checked": 248,
+      "passed": true
+    },
+    "ruff_check_passed": true,
+    "mypy": {
+      "source_files_checked": 120,
+      "passed": true
+    },
+    "pytest": {
+      "passed": 1086,
+      "skipped": 1,
+      "passed_gate": true
+    },
+    "openspec_strict_passed": true
+  },
+  "artifacts": {
+    "readme": {
+      "path": "README.md",
+      "bytes": 23180,
+      "sha256": "sha256:c3fd31653ce64f51f5d91046ac4a00050b34cea77afedb5dd3fc88bd802a8a59"
+    },
+    "evaluation_json": {
+      "path": "evaluation-report.json",
+      "bytes": 27776,
+      "sha256": "sha256:2a0b29f075531a053ae981ba086297555694ae8740b2f2d2bdc3d48a9ce5bbf0"
+    },
+    "evaluation_html": {
+      "path": "evaluation-report.html",
+      "bytes": 77779,
+      "sha256": "sha256:bfda175955ccf409980da93d160cb2bf9066145dbed0d3fd626f662fe6ff0c03"
+    },
+    "performance_evidence": {
+      "path": "performance-evidence.json",
+      "bytes": 1286939,
+      "sha256": "sha256:672144f0297727453396f1de8573e6f5810941863e7a866eff9c95e1604d7d18"
+    },
+    "privacy_scan": {
+      "path": "privacy-scan.json",
+      "bytes": 8555,
+      "sha256": "sha256:54c71d5ca6832605ed67a3d0cdbf81f10137ab52ac1facffa651c1c844a7daf7"
+    }
+  },
+  "manifest_self_hash": null,
+  "known_limitation_ids": [
+    "local-single-instance-single-writer",
+    "loopback-trusted-use-without-authentication",
+    "local-image-digest-not-registry-distribution",
+    "reranking-disabled",
+    "fixed-eight-case-synthetic-dataset",
+    "supported-pii-detector-not-general-dlp",
+    "provider-latency-quota-output-and-pricing-variance",
+    "accepted-error-rate-close-to-threshold",
+    "one-individual-style-check-miss",
+    "accepted-second-measured-attempt",
+    "raw-third-party-security-metadata-not-published"
+  ]
+}

@@ -1,0 +1,101 @@
+{
+    "schema_version":  "phase12-captured-surfaces-privacy-v2",
+    "candidate_run_id":  "20260807t030340z-954bb3e2",
+    "repository_revision":  "333150f731f1882b52cd504a44ef62c8b15a7188",
+    "image_id":  "sha256:592adf63fcb0795a2197c67386d9d00e2da012c56bc62a2e303270796e6cfe29",
+    "fixture_version":  "supported-fixtures-v1",
+    "fixture_sha256":  "sha256:7ff72f1c9c039109c43567d1866040aa6b0c3dded423a49129a5c9c8e2d46094",
+    "privacy_corpus":  {
+                           "passed":  true,
+                           "passed_tests":  107,
+                           "stdout_sha256":  "sha256:7ea1154b1759268dcb559b04e5a7f8397590741703f882d91d94bd1129da92d0",
+                           "stderr_sha256":  "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                       },
+    "final_engineering_gates":  {
+                                    "passed":  true,
+                                    "evidence_sha256":  "sha256:c2d2669f697844338530987a59099fef5965ddd5ef474e9cf1ab76207036b4af"
+                                },
+    "publishable_captured_surfaces":  {
+                                          "passed":  true,
+                                          "scanned_files":  120,
+                                          "fixture_matches":  0,
+                                          "detector_matches":  0,
+                                          "errors":  0,
+                                          "scan_sha256":  "sha256:8184d0a6103f1d5410d44439aa21d109c91ee1030a482f8e9c63cf42ae74a2f8"
+                                      },
+    "semantic_profiles":  {
+                              "runtime_configuration":  {
+                                                            "source_sha256":  "sha256:4a261a358d3cc46acbcb393ed9851afddbace971f557765c1a2ecd4164cb283d",
+                                                            "raw_fixture_matches":  0,
+                                                            "raw_detector_candidates":  1,
+                                                            "raw_candidate_classification":  "documented-container-wildcard-listen-address",
+                                                            "profile":  "redacted-runtime-config-v1",
+                                                            "semantic_projection_sha256":  "sha256:25f0263a1e2f32da8b7dd69093d466ff2326180c5605a0b069997f2d384e961c",
+                                                            "semantic_fixture_matches":  0,
+                                                            "semantic_detector_matches":  0,
+                                                            "semantic_verifier_sha256":  "sha256:afdc35ce538c194615983a927147d7466743f52f980678462bf1f3f34ae311b1",
+                                                            "raw_scan_sha256":  "sha256:bc9c861adee048bc4e53aa8e953598992da0fa92db5aeea83edefaaa1bef3be9",
+                                                            "semantic_scan_sha256":  "sha256:c860751925188b7d2887feb9c89a0f058e7bbe4655fb9d4578c756daa2a2d4ed",
+                                                            "passed":  true
+                                                        },
+                              "evaluation_html":  {
+                                                      "source_sha256":  "sha256:bfda175955ccf409980da93d160cb2bf9066145dbed0d3fd626f662fe6ff0c03",
+                                                      "raw_fixture_matches":  0,
+                                                      "raw_detector_candidates":  12,
+                                                      "raw_candidate_classification":  "typed-latency-numbers-in-visible-structured-pre-and-canonical-embedded-json",
+                                                      "profile":  "html-report-structured-numeric-v1",
+                                                      "semantic_projection_sha256":  "sha256:c2396f624d54b45ce933ec501d07d5bcaedb6405849a8855c03145ab3abf0b91",
+                                                      "semantic_fixture_matches":  0,
+                                                      "semantic_detector_matches":  0,
+                                                      "semantic_verifier_sha256":  "sha256:744d4ef3ba43aecb606965e018d1ee2e0d710f669f48c171fe9a6a3a89b77a3a",
+                                                      "raw_scan_sha256":  "sha256:c30b69abbc4e3eba8e046e3751c60e3890d9d05ee13e3cf82648efcdf963eeee",
+                                                      "semantic_scan_sha256":  "sha256:10b399876c75aa13b320cb30f71fef484971dd83d8c02fffccf49c58e2769835",
+                                                      "passed":  true
+                                                  }
+                          },
+    "classified_non_application_evidence":  {
+                                                "candidate_build_log":  {
+                                                                            "source_sha256":  "sha256:ca28ebec3464b2cfbfd3d94dce1a126ffe451be3230f1ea5d437465a147e7d8c",
+                                                                            "fixture_matches":  0,
+                                                                            "detector_candidates":  8,
+                                                                            "classification":  "package-manager-option-double-colon-syntax",
+                                                                            "published":  false
+                                                                        },
+                                                "third_party_security_tool_reports":  {
+                                                                                          "scan_sha256":  "sha256:45298a7403ba02508b7cb26b771e3f7cc50b45bc9b67091109429923305948e1",
+                                                                                          "scanned_files":  13,
+                                                                                          "fixture_matches":  0,
+                                                                                          "detector_candidates":  2823,
+                                                                                          "public_maintainer_email_occurrences":  474,
+                                                                                          "unique_public_maintainer_email_values":  78,
+                                                                                          "embedded_secret_detector_matches":  0,
+                                                                                          "classification":  "public-third-party-package-metadata-retained-only-in-external-raw-security-evidence",
+                                                                                          "published":  false,
+                                                                                          "published_summary_sha256":  "sha256:7cc575e948e515946d732351c279c0103962c039d85ed0e652a0bf036af456f1"
+                                                                                      }
+                                            },
+    "excluded_runtime_inputs":  [
+                                    {
+                                        "path":  "operations/quality-runtime.env",
+                                        "reason":  "runtime-input-not-captured-output-and-not-published"
+                                    },
+                                    {
+                                        "path":  "operations/quota-probe.py",
+                                        "reason":  "mounted-probe-source-not-captured-output-and-not-published"
+                                    }
+                                ],
+    "totals":  {
+                   "supported_fixture_matches":  0,
+                   "publishable_semantic_detector_matches":  0,
+                   "scan_errors":  0,
+                   "classified_non_publishable_detector_candidates":  2831
+               },
+    "release_policy":  {
+                           "raw_third_party_security_reports_published":  false,
+                           "raw_build_log_published":  false,
+                           "only_privacy_safe_security_summary_may_be_referenced":  true,
+                           "release_package_requires_separate_final_scan":  true
+                       },
+    "passed":  true,
+    "completed_at_utc":  "2026-08-07T04:01:46.5223421Z"
+}

@@ -148,9 +148,9 @@ Implement and integrate in vertical gates. A gate is complete only when its end-
 
 ## 12. Final Acceptance
 
-- [ ] 12.1 Run formatting, lint, typing, unit, API, integration, UI, and privacy suites from a clean environment with `uv run ruff format --check . && uv run ruff check . && uv run mypy src && uv run pytest`.
-- [ ] 12.2 Run the complete privacy corpus and scan captured output, logs, traces, diagnostics, and reports; verify zero raw supported PII or secret fixture matches.
-- [ ] 12.3 Run the final versioned RAG evaluation against the candidate image; verify Faithfulness `>0.85`, Context Precision `>0.70`, Completeness `>=80%`, Style `>=80%`, and Refusal Appropriateness `>=80%`.
-- [ ] 12.4 Confirm model quota and estimated acceptance-run cost, warm one container, then execute the uncached five-concurrent-request load run until at least 500 requests succeed.
-- [ ] 12.5 Verify the load evidence reports exactly one instance, P90 complete latency `<=10s`, error rate `<1%`, no hidden failed attempts, and correlated safe log/metric/trace evidence.
-- [ ] 12.6 Publish the accepted image digest, configuration manifest, dataset/corpus versions, final JSON/HTML report, performance bundle, cost per 1,000 calls, known limitations, and exact reproduction commands in the release README.
+- [x] 12.1 Run formatting, lint, typing, unit, API, integration, UI, and privacy suites from a clean environment with `uv run ruff format --check . && uv run ruff check . && uv run mypy src && uv run pytest`.
+- [x] 12.2 Run the complete privacy corpus and scan captured output, logs, traces, diagnostics, and reports; verify zero raw supported PII or secret fixture matches.
+- [x] 12.3 Run the final versioned RAG evaluation against the candidate image; verify Faithfulness `>0.85`, Context Precision `>0.70`, Completeness `>=80%`, Style `>=80%`, and Refusal Appropriateness `>=80%`.
+- [x] 12.4 Confirm model quota and estimated acceptance-run cost, warm one container, then execute the uncached five-concurrent-request load run until at least 500 requests succeed.
+- [x] 12.5 Verify the load evidence reports exactly one instance, P90 complete latency `<=10s`, error rate `<1%`, no hidden failed attempts, and correlated safe log/metric/trace evidence.
+- [x] 12.6 Publish the accepted image digest, configuration manifest, dataset/corpus versions, final JSON/HTML report, performance bundle, cost per 1,000 calls, known limitations, and exact reproduction commands in the release README.
