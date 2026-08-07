@@ -1,0 +1,3 @@
+evaluations/releases/**/*.json text eol=lf
+evaluations/releases/**/*.html text eol=lf
+evaluations/releases/**/README.md text eol=lf

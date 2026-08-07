@@ -145,3 +145,105 @@ def test_non_fixture_sensitive_value_is_found_by_the_installed_detectors(
     assert sum(fixture_categories.values()) == 0
     assert detector_categories["email"] == 1
     assert non_fixture_email not in output
+
+
+def test_json_numeric_metrics_do_not_trigger_privacy_detectors(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    json_artifact = tmp_path / "metrics.json"
+    json_artifact.write_text(
+        '{"latency_ms":848.5567909999645,"queue_ms":0.9999999999763531,\n'
+        '"stage_ms":749.556456999926}',
+        encoding="utf-8",
+    )
+    jsonl_artifact = tmp_path / "attempts.jsonl"
+    jsonl_artifact.write_text(
+        '{"score":0.5835019999267388}\n{"latency_ms":1318.758312}\n',
+        encoding="utf-8",
+    )
+
+    exit_code, report, _ = _run_scan(capsys, str(json_artifact), str(jsonl_artifact))
+
+    assert exit_code == 0
+    assert report["passed"] is True
+    counts = report["counts"]
+    categories = report["categories"]
+    assert isinstance(counts, dict)
+    assert isinstance(categories, dict)
+    detector_categories = categories["detector"]
+    assert isinstance(detector_categories, dict)
+    assert counts["scanned"] == 2
+    assert counts["detector_matches"] == 0
+    assert all(count == 0 for count in detector_categories.values())
+
+
+@pytest.mark.parametrize("suffix", [".json", ".jsonl"])
+def test_json_string_values_still_use_fail_safe_detectors(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    suffix: str,
+) -> None:
+    artifact = tmp_path / f"unsafe{suffix}"
+    artifact.write_text('{"contact":"415.5552671"}\n', encoding="utf-8")
+
+    exit_code, report, _ = _run_scan(capsys, str(artifact))
+
+    assert exit_code == 1
+    assert report["passed"] is False
+    categories = report["categories"]
+    assert isinstance(categories, dict)
+    detector_categories = categories["detector"]
+    assert isinstance(detector_categories, dict)
+    assert detector_categories["phone"] == 1
+
+
+def test_mixed_json_log_and_prometheus_samples_ignore_only_typed_numbers(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    log_artifact = tmp_path / "application.log"
+    log_artifact.write_text(
+        "runtime initialization complete\n"
+        '{"duration_ms":848.5567909999645,"status":200}'
+        '{"queue_ms":0.9999999999763531}\n',
+        encoding="utf-8",
+    )
+    metrics_artifact = tmp_path / "metrics.prom"
+    metrics_artifact.write_text(
+        '# TYPE rag_latency_seconds gauge\nrag_latency_seconds{route="qa"} 0.9999999999763531\n',
+        encoding="utf-8",
+    )
+
+    exit_code, report, _ = _run_scan(
+        capsys,
+        str(log_artifact),
+        str(metrics_artifact),
+    )
+
+    assert exit_code == 0
+    assert report["passed"] is True
+    counts = report["counts"]
+    assert isinstance(counts, dict)
+    assert counts["detector_matches"] == 0
+
+
+def test_prometheus_label_values_remain_fail_safe(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    artifact = tmp_path / "unsafe.prom"
+    artifact.write_text(
+        'rag_contact_info{contact="415.5552671"} 1\n',
+        encoding="utf-8",
+    )
+
+    exit_code, report, _ = _run_scan(capsys, str(artifact))
+
+    assert exit_code == 1
+    assert report["passed"] is False
+    categories = report["categories"]
+    assert isinstance(categories, dict)
+    detector_categories = categories["detector"]
+    assert isinstance(detector_categories, dict)
+    assert detector_categories["phone"] == 1

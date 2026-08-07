@@ -19,6 +19,11 @@ from rag_mvp.safety.redactor import DEFAULT_REDACTOR, RedactionError
 
 _SCANNER_VERSION: Final[str] = "artifact-scan-v1"
 _SAFE_LABEL: Final[re.Pattern[str]] = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_PROMETHEUS_SAMPLE: Final[re.Pattern[str]] = re.compile(
+    r"^(?P<prefix>[A-Za-z_:][A-Za-z0-9_:]*(?:\{.*\})?)\s+"
+    r"(?:[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?|NaN|[+-]?Inf)"
+    r"(?:\s+\d+)?\s*$"
+)
 _REDACTED_FIXTURE: Final[str] = "[REDACTED_FIXTURE]"
 _REDACTED_FILE: Final[str] = "[REDACTED_FILE]"
 
@@ -181,12 +186,22 @@ def _decode_artifact(raw: bytes) -> str:
 
 
 def _scan_text(
-    text: str, fixtures: tuple[PrivacyFixture, ...]
+    text: str,
+    fixtures: tuple[PrivacyFixture, ...],
+    *,
+    detector_text: str | None = None,
 ) -> tuple[Counter[str], Counter[str]]:
     normalized_text = text.replace("\r\n", "\n").replace("\r", "\n")
+    normalized_detector_text = (
+        normalized_text
+        if detector_text is None
+        else detector_text.replace("\r\n", "\n").replace("\r", "\n")
+    )
     exact_counts: Counter[str] = Counter()
     for fixture in fixtures:
         count = normalized_text.count(fixture.value)
+        if count == 0 and detector_text is not None:
+            count = normalized_detector_text.count(fixture.value)
         if count:
             exact_counts[fixture.category] += count
 
@@ -194,16 +209,100 @@ def _scan_text(
     for kind in SensitiveKind:
         placeholder_ranges.extend(
             (match.start(), match.end())
-            for match in re.finditer(re.escape(kind.placeholder), normalized_text)
+            for match in re.finditer(re.escape(kind.placeholder), normalized_detector_text)
         )
     detector_counts: Counter[str] = Counter(
         span.kind.value
-        for span in DEFAULT_REDACTOR.detect(normalized_text)
+        for span in DEFAULT_REDACTOR.detect(normalized_detector_text)
         if not any(start <= span.start and span.end <= end for start, end in placeholder_ranges)
     )
-    if has_unclosed_private_key(normalized_text):
+    if has_unclosed_private_key(normalized_detector_text):
         detector_counts[SensitiveKind.SECRET.value] += 1
     return exact_counts, detector_counts
+
+
+def _without_json_numbers(value: object) -> object:
+    """Preserve JSON strings and structure while removing typed numeric values."""
+
+    if value is None or isinstance(value, bool | str):
+        return value
+    if isinstance(value, int | float):
+        return None
+    if isinstance(value, list):
+        return [_without_json_numbers(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            str(key): _without_json_numbers(item)
+            for key, item in cast(dict[str, object], value).items()
+        }
+    raise TypeError("unsupported JSON value")
+
+
+def _mixed_json_lines_without_numbers(content: str) -> str | None:
+    decoder = json.JSONDecoder()
+    normalized_lines: list[str] = []
+    structured_lines = 0
+    for line in content.splitlines():
+        if not line.strip():
+            normalized_lines.append(line)
+            continue
+        cursor = 0
+        parsed_values: list[dict[str, object] | list[object]] = []
+        while cursor < len(line):
+            while cursor < len(line) and line[cursor].isspace():
+                cursor += 1
+            if cursor == len(line):
+                break
+            try:
+                parsed, end = decoder.raw_decode(line, cursor)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                parsed_values.clear()
+                break
+            if not isinstance(parsed, dict | list):
+                parsed_values.clear()
+                break
+            parsed_values.append(parsed)
+            cursor = end
+        if not parsed_values:
+            normalized_lines.append(line)
+            continue
+        structured_lines += 1
+        normalized_lines.append(
+            "".join(
+                json.dumps(
+                    _without_json_numbers(parsed),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+                for parsed in parsed_values
+            )
+        )
+    return "\n".join(normalized_lines) if structured_lines else None
+
+
+def _prometheus_without_samples(content: str) -> str:
+    normalized_lines: list[str] = []
+    for line in content.splitlines():
+        match = _PROMETHEUS_SAMPLE.fullmatch(line)
+        normalized_lines.append(line if match is None else f"{match.group('prefix')} 0")
+    return "\n".join(normalized_lines)
+
+
+def _json_detector_text(artifact: Path, content: str) -> str | None:
+    """Return semantic machine output without numeric nodes or sample values."""
+
+    suffix = artifact.suffix.lower()
+    try:
+        if suffix == ".json":
+            payload = _without_json_numbers(json.loads(content))
+        elif suffix == ".prom":
+            return _prometheus_without_samples(content)
+        else:
+            return _mixed_json_lines_without_numbers(content)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
 
 def _safe_path(path: Path, fixtures: tuple[PrivacyFixture, ...]) -> str:
@@ -242,8 +341,13 @@ def scan_artifacts(
     for artifact in files:
         try:
             content = _decode_artifact(artifact.read_bytes())
+            detector_content = _json_detector_text(artifact, content)
             artifact_exact, artifact_detector = _scan_text(
-                f"{artifact.name}\n{content}", fixture_set.fixtures
+                f"{artifact.name}\n{content}",
+                fixture_set.fixtures,
+                detector_text=(
+                    None if detector_content is None else f"{artifact.name}\n{detector_content}"
+                ),
             )
         except (OSError, RedactionError, TypeError, ValueError, RecursionError):
             scan_errors.add(artifact)

@@ -121,6 +121,16 @@ def test_compose_has_one_hardened_loopback_application_service() -> None:
     ):
         assert setting in compose
         assert setting in _read_repository_file(".env.example")
+    for setting, default in (
+        ("RAG_MVP_QA_DEADLINE_SECONDS", "9.5"),
+        ("RAG_MVP_QA_RETRIEVAL_BUDGET_SECONDS", "5.0"),
+        ("RAG_MVP_QA_EMBEDDING_BUDGET_SECONDS", "4.5"),
+        ("RAG_MVP_QA_EVIDENCE_ASSESSMENT_BUDGET_SECONDS", "5.0"),
+        ("RAG_MVP_QA_GENERATION_BUDGET_SECONDS", "6.0"),
+        ("RAG_MVP_QA_FINALIZATION_BUDGET_SECONDS", "0.6"),
+    ):
+        assert f"{setting}: ${{{setting}:-{default}}}" in compose
+        assert f"{setting}={default}" in _read_repository_file(".env.example")
     assert "RAG_MVP_TELEMETRY_EXPORTER:" in compose
     assert "RAG_MVP_TELEMETRY_OTLP_TRACES_ENDPOINT:" in compose
     assert "RAG_MVP_SERVER_SHUTDOWN_GRACE_SECONDS:" in compose

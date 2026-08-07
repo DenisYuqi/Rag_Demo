@@ -31,5 +31,14 @@ def test_luhn_shaped_digits_inside_an_opaque_identifier_are_not_redacted() -> No
     assert redact_text(value) == value
 
 
+def test_luhn_card_followed_by_decimal_suffix_remains_fail_safe() -> None:
+    value = "4111111111111111.25"
+
+    spans = PaymentCardDetector().detect(value)
+
+    assert len(spans) == 1
+    assert value[spans[0].start : spans[0].end] == "4111111111111111"
+
+
 def test_luhn_helper_ignores_visual_separators() -> None:
     assert PaymentCardDetector.passes_luhn("4111-1111 1111-1111")

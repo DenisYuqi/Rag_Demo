@@ -4,14 +4,22 @@ from pathlib import Path
 
 import pytest
 
+from rag_mvp.domain.evaluation import (
+    ModelAttemptStatus,
+    ModelRole,
+    ProviderAttemptEvidence,
+    TokenUsage,
+)
 from rag_mvp.domain.ingestion import ChunkLocator
 from rag_mvp.domain.qa import (
     AnswerClaim,
     Citation,
     ConversationRole,
     QAAnswer,
+    QAErrorCode,
     QARefusal,
     RefusalReason,
+    SafeQADiagnostics,
     StreamEventKind,
     ValidatedStreamEvent,
 )
@@ -76,9 +84,51 @@ def _assert_safe_failure(
     event = events[0]
     assert event.kind is StreamEventKind.ERROR
     assert event.content == SAFE_UNAVAILABLE_MESSAGE
+    assert event.error_code is QAErrorCode.SAFETY_UNAVAILABLE
+    assert event.retryable is True
     assert event.terminal is True
     assert event.diagnostics.metadata["release_failure_code"]
     assert conversations.list_turns(session_id, "owner-1") == ()
+
+
+def _complete_diagnostics() -> SafeQADiagnostics:
+    return SafeQADiagnostics(
+        trace_id="trace-1",
+        stage_timings_ms={"retrieval": 12.5, "generation": 34.5, "total": 47.0},
+        cache_status={"request-policy": "bypass"},
+        model_identities={"generation": "gpt-5.4"},
+        token_counts={"generation-input": 10, "generation-output": 5},
+        provider_attempts=(
+            ProviderAttemptEvidence(
+                operation_id="qa-generation",
+                route_id="generation-primary",
+                role=ModelRole.GENERATION,
+                provider="openai",
+                model="gpt-5.4",
+                status=ModelAttemptStatus.SUCCEEDED,
+                latency_ms=34.5,
+                usage=TokenUsage(
+                    input_tokens=10,
+                    output_tokens=5,
+                    total_tokens_reported=15,
+                ),
+            ),
+        ),
+        degradation_reasons=("reranking-disabled",),
+        metadata={"release_failure_code": "stale-code", "evidence-version": "v1"},
+    )
+
+
+def _outcome_with_diagnostics(
+    session_id: str,
+    diagnostics: SafeQADiagnostics,
+) -> OrchestratedResponse:
+    outcome = _answer_outcome(session_id)
+    response = outcome.response.model_copy(update={"diagnostics": diagnostics})
+    return OrchestratedResponse._create(
+        response,
+        grounded_answer=outcome.grounded_answer,
+    )
 
 
 def test_grounded_answer_is_emitted_once_then_persisted(
@@ -272,6 +322,60 @@ def test_persistence_must_succeed_before_the_validated_event_is_returned(
     )
 
     _assert_safe_failure(events, service, session_id)
+
+
+def test_release_failure_preserves_safe_diagnostics_and_overrides_failure_code(
+    conversations: tuple[ConversationService, str],
+) -> None:
+    service, session_id = conversations
+    diagnostics = _complete_diagnostics()
+
+    (event,) = CompleteResponseEmitter(service, redactor=None).emit(
+        _outcome_with_diagnostics(session_id, diagnostics),
+        owner_id="owner-1",
+    )
+
+    _assert_safe_failure((event,), service, session_id)
+    assert event.diagnostics == diagnostics.model_copy(
+        update={
+            "metadata": {
+                "release_failure_code": "redactor_unavailable",
+                "evidence-version": "v1",
+            }
+        }
+    )
+    assert diagnostics.metadata["release_failure_code"] == "stale-code"
+
+
+def test_persistence_exception_preserves_diagnostics_without_leaking_exception_text(
+    conversations: tuple[ConversationService, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, session_id = conversations
+    diagnostics = _complete_diagnostics()
+
+    def fail_persistence(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise RuntimeError("dynamic-secret-person@example.com")
+
+    monkeypatch.setattr(service, "append_turn", fail_persistence)
+
+    (event,) = CompleteResponseEmitter(service).emit(
+        _outcome_with_diagnostics(session_id, diagnostics),
+        owner_id="owner-1",
+    )
+
+    _assert_safe_failure((event,), service, session_id)
+    assert event.diagnostics == diagnostics.model_copy(
+        update={
+            "metadata": {
+                "release_failure_code": "response_release_failed",
+                "evidence-version": "v1",
+            }
+        }
+    )
+    assert "dynamic-secret" not in event.model_dump_json()
+    assert "person@example.com" not in event.model_dump_json()
 
 
 def test_safe_refusal_uses_the_same_atomic_path(

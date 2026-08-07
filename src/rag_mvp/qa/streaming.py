@@ -14,7 +14,6 @@ from rag_mvp.domain.qa import (
     QARefusal,
     QAResponse,
     RefusalReason,
-    SafeQADiagnostics,
     StreamEventKind,
     ValidatedStreamEvent,
 )
@@ -256,6 +255,14 @@ class CompleteResponseEmitter:
 
     @staticmethod
     def _failure_event(response: QAResponse, failure_code: str) -> ValidatedStreamEvent:
+        diagnostics = response.diagnostics.model_copy(
+            update={
+                "metadata": {
+                    **response.diagnostics.metadata,
+                    "release_failure_code": failure_code,
+                }
+            }
+        )
         return ValidatedStreamEvent(
             request_id=response.request_id,
             session_id=response.session_id,
@@ -265,9 +272,7 @@ class CompleteResponseEmitter:
             content=SAFE_UNAVAILABLE_MESSAGE,
             error_code=QAErrorCode.SAFETY_UNAVAILABLE,
             retryable=True,
-            diagnostics=SafeQADiagnostics(
-                metadata={"release_failure_code": failure_code},
-            ),
+            diagnostics=diagnostics,
             terminal=True,
         )
 

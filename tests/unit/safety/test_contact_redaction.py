@@ -36,3 +36,12 @@ def test_contact_values_are_completely_replaced(value: str, placeholder: str) ->
 def test_contact_false_positives_are_not_redacted_by_default(value: str) -> None:
     assert EmailDetector().detect(value) == ()
     assert PhoneDetector().detect(value) == ()
+
+
+def test_dot_separated_phone_number_remains_fail_safe() -> None:
+    value = "415.5552671"
+
+    spans = PhoneDetector().detect(value)
+
+    assert len(spans) == 1
+    assert value[spans[0].start : spans[0].end] == value
