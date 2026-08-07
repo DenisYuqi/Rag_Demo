@@ -1247,6 +1247,7 @@ def mount_workbench(
             app,
             demo,
             path=settings.workbench_path,
+            footer_links=[],
             show_error=False,
             max_file_size=settings.upload_max_bytes,
             allowed_paths=[],

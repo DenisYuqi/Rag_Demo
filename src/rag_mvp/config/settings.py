@@ -36,6 +36,7 @@ class Settings(BaseSettings):
         {
             "data_root",
             "evaluation_dataset_root",
+            "evaluation_release_root",
             "evaluation_max_active_jobs",
             "evaluation_shutdown_grace_seconds",
             "host",
@@ -92,6 +93,7 @@ class Settings(BaseSettings):
     retrieval_cache_ttl_seconds: float = Field(default=300.0, gt=0, le=86_400)
 
     evaluation_dataset_root: Path = Path("evaluations/datasets")
+    evaluation_release_root: Path = Path("evaluations/releases")
     evaluation_max_active_jobs: int = Field(default=1, ge=1, le=4)
     evaluation_shutdown_grace_seconds: float = Field(default=2.0, ge=0, le=10)
 

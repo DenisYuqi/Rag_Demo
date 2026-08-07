@@ -29,6 +29,7 @@ if TYPE_CHECKING:
         EvaluationPlanCatalogEntry,
         EvaluationRunSummary,
         FailedCaseDiagnostic,
+        ReleaseEvidenceSnapshot,
         ResolvedEvaluationArtifact,
     )
 
@@ -105,6 +106,8 @@ class EvaluationGateway(Protocol):
         run_id: str,
         artifact_id: str,
     ) -> ResolvedEvaluationArtifact | None: ...
+
+    def release_evidence(self, run_id: str) -> ReleaseEvidenceSnapshot | None: ...
 
     def compare_runs(
         self,

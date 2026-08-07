@@ -7,6 +7,7 @@ import re
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from decimal import Decimal
 from hashlib import sha256
 from pathlib import Path
 from typing import Annotated, Literal, Protocol
@@ -232,6 +233,67 @@ class EvaluationArtifactManifest(DomainModel):
     artifacts: tuple[EvaluationArtifactDescriptor, ...]
 
 
+class ReleaseMetricEvidence(DomainModel):
+    """One read-only metric projected from a sealed pre-v2 release."""
+
+    metric_id: Identifier
+    value: float | None = Field(default=None, allow_inf_nan=False)
+    threshold: float | None = Field(default=None, allow_inf_nan=False)
+    operator: str | None = None
+    denominator: int | None = Field(default=None, ge=0)
+    passed: bool | None = None
+    scorer_version: str | None = None
+
+
+class ReleasePerformanceEvidence(DomainModel):
+    """Accepted load/security evidence retained by a sealed legacy release."""
+
+    attempts: int = Field(gt=0)
+    successes: int = Field(ge=0)
+    errors: int = Field(ge=0)
+    configured_concurrency: int = Field(gt=0)
+    observed_peak_concurrency: int = Field(gt=0)
+    p50_ms: float = Field(ge=0, allow_inf_nan=False)
+    p90_ms: float = Field(ge=0, allow_inf_nan=False)
+    p95_ms: float = Field(ge=0, allow_inf_nan=False)
+    p99_ms: float = Field(ge=0, allow_inf_nan=False)
+    provider_attempt_count: int = Field(ge=0)
+    input_tokens: int = Field(ge=0)
+    output_tokens: int = Field(ge=0)
+    total_cost: Decimal = Field(ge=0)
+    cost_per_1000_attempts: Decimal = Field(ge=0)
+    cost_per_1000_successes: Decimal = Field(ge=0)
+    currency: Identifier
+    refusals: int = Field(ge=0)
+    answered_requests: int = Field(ge=0)
+    security_passed: bool
+
+
+class ReleaseEvidenceSnapshot(DomainModel):
+    """Validated, path-free evidence used to render one sealed release."""
+
+    release_id: Identifier
+    source_schema_version: Identifier
+    run: EvaluationRun
+    corpus_hash: Identifier
+    gate_passed: bool
+    quality_metrics: tuple[ReleaseMetricEvidence, ...]
+    performance: ReleasePerformanceEvidence
+    artifact_manifest: EvaluationArtifactManifest
+
+
+class ReleaseEvidenceStore(Protocol):
+    def list(self) -> tuple[ReleaseEvidenceSnapshot, ...]: ...
+
+    def get(self, run_id: str) -> ReleaseEvidenceSnapshot | None: ...
+
+    def resolve(
+        self,
+        run_id: str,
+        artifact_id: str,
+    ) -> ResolvedEvaluationArtifact | None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class ResolvedEvaluationArtifact:
     artifact_id: str
@@ -333,6 +395,7 @@ class EvaluationApplicationService:
     shutdown_grace_seconds: float = 2.0
     artifact_store: EvaluationArtifactStore | None = None
     legacy_report_store: EvaluationReportStore | None = None
+    release_store: ReleaseEvidenceStore | None = None
     clock: Callable[[], datetime] = field(default=utc_now, repr=False)
     run_id_factory: Callable[[], str] = field(default=_default_run_id, repr=False)
     plan_settings_factory: Callable[[str], Settings] | None = field(
@@ -715,21 +778,41 @@ class EvaluationApplicationService:
             return queued
 
     def get(self, run_id: str) -> EvaluationRun | None:
-        return self.repository.get(run_id)
+        persisted = self.repository.get(run_id)
+        if persisted is not None or self.release_store is None:
+            return persisted
+        release = self.release_store.get(run_id)
+        return None if release is None else release.run
 
     def get_run(self, run_id: str) -> EvaluationRun | None:
         return self.get(run_id)
 
     def list(self) -> tuple[EvaluationRun, ...]:
-        return tuple(reversed(self.repository.list()))
+        persisted = tuple(reversed(self.repository.list()))
+        if self.release_store is None:
+            return persisted
+        persisted_ids = {item.run_id for item in persisted}
+        releases = tuple(
+            item.run for item in self.release_store.list() if item.run.run_id not in persisted_ids
+        )
+        return (*releases, *persisted)
 
     def list_runs(self) -> tuple[EvaluationRun, ...]:
         return self.list()
 
     def summary(self, run_id: str) -> EvaluationRunSummary | None:
-        run = self.get(run_id)
+        persisted = self.repository.get(run_id)
+        release = None if self.release_store is None else self.release_store.get(run_id)
+        run = persisted if persisted is not None else None if release is None else release.run
         if run is None:
             return None
+        if persisted is None and release is not None:
+            return EvaluationRunSummary.from_run(
+                run,
+                corpus_hash=release.corpus_hash,
+                evidence_status="available",
+                gate_status="passed" if release.gate_passed else "failed",
+            )
         runner = EvaluationRunner(self.repository, self.run_artifacts_root, None)
         try:
             corpus_hash = runner.load_manifest(run_id).identity.corpus_hash
@@ -768,7 +851,7 @@ class EvaluationApplicationService:
         )
 
     def failed_cases(self, run_id: str) -> tuple[FailedCaseDiagnostic, ...]:
-        run = self.get(run_id)
+        run = self.repository.get(run_id)
         if run is None:
             return ()
         runner = EvaluationRunner(self.repository, self.run_artifacts_root, None)
@@ -798,7 +881,12 @@ class EvaluationApplicationService:
 
     def artifact_manifest(self, run_id: str) -> EvaluationArtifactManifest | None:
         run = self.get(run_id)
-        if run is None or self.artifact_store is None:
+        if run is None:
+            return None
+        release = None if self.release_store is None else self.release_store.get(run_id)
+        if self.repository.get(run_id) is None and release is not None:
+            return release.artifact_manifest
+        if self.artifact_store is None:
             return None
         manifest = self.artifact_store.manifest(run_id)
         if manifest is not None and (
@@ -808,8 +896,6 @@ class EvaluationApplicationService:
         return manifest
 
     def artifact(self, run_id: str, artifact_id: str) -> ResolvedEvaluationArtifact | None:
-        if self.artifact_store is None:
-            return None
         manifest = self.artifact_manifest(run_id)
         if manifest is None:
             return None
@@ -819,7 +905,19 @@ class EvaluationApplicationService:
         )
         if descriptor is None:
             return None
-        resolved = self.artifact_store.resolve(run_id, artifact_id)
+        is_release = self.repository.get(run_id) is None
+        if is_release:
+            resolved = (
+                None
+                if self.release_store is None
+                else self.release_store.resolve(run_id, artifact_id)
+            )
+        else:
+            resolved = (
+                None
+                if self.artifact_store is None
+                else self.artifact_store.resolve(run_id, artifact_id)
+            )
         if resolved is None:
             raise EvaluationApplicationError("evaluation_artifact_integrity_failed")
         try:
@@ -838,6 +936,13 @@ class EvaluationApplicationService:
         ):
             raise EvaluationApplicationError("evaluation_artifact_integrity_failed")
         return resolved
+
+    def release_evidence(self, run_id: str) -> ReleaseEvidenceSnapshot | None:
+        """Return validated path-free legacy evidence for UI compatibility rendering."""
+
+        if self.release_store is None:
+            return None
+        return self.release_store.get(run_id)
 
     def report(
         self,

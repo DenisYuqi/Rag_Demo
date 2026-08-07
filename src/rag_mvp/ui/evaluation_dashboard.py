@@ -17,6 +17,7 @@ from rag_mvp.evaluation.application import (
     EvaluationPlanCatalogEntry,
     EvaluationRunSummary,
     FailedCaseDiagnostic,
+    ReleaseEvidenceSnapshot,
     ResolvedEvaluationArtifact,
 )
 from rag_mvp.evaluation.json_report import decode_json_report
@@ -182,6 +183,7 @@ def render_evaluation_dashboard(
 
     runs = _runs(service)
     summaries = {run.run_id: _summary(service, run.run_id) for run in runs}
+    releases = {run.run_id: _release_evidence(service, run.run_id) for run in runs}
     run_choices = tuple((_run_choice(run, summaries[run.run_id]), run.run_id) for run in runs)
     requested_run_id = selected_run_id or state.evaluation_run_id
     selected_run = next(
@@ -193,7 +195,10 @@ def render_evaluation_dashboard(
 
     identity_rows = _identity_rows(selected_dataset)
     plan_rows = _plan_rows(selected_plan)
-    run_rows = tuple(_run_row(run, summaries[run.run_id]) for run in runs)
+    run_rows = tuple(
+        _run_row(run, summaries[run.run_id], is_release=releases[run.run_id] is not None)
+        for run in runs
+    )
     failure_rows = (
         ()
         if selected_run is None
@@ -214,6 +219,7 @@ def render_evaluation_dashboard(
     artifact_links = "Artifacts unavailable. / 报告文件不可用。"
 
     if selected_run is not None:
+        release = releases[selected_run.run_id]
         manifest = _manifest(service, selected_run.run_id)
         if manifest is not None:
             _validate_manifest_identity(selected_run, manifest)
@@ -234,18 +240,34 @@ def render_evaluation_dashboard(
             latency_plot_rows = _latency_plot_rows(report)
             kpi_html = _kpi_html(report)
             system_rows = _system_rows(report)
+        elif release is not None:
+            overview_rows = _release_overview_rows(release)
+            quality_plot_rows = _release_quality_plot_rows(release)
+            latency_plot_rows = _release_latency_plot_rows(release)
+            kpi_html = _release_kpi_html(release)
+            system_rows = _release_system_rows(release)
+            gate_markdown = _release_gate_markdown(release)
         else:
             overview_rows = _unavailable_overview_rows()
-        operations_rows, operations_preview = _operations_view(
-            service,
-            selected_run,
-            manifest,
-            report,
-        )
+        if release is not None:
+            operations_rows = _release_operations_rows(release)
+            operations_preview = (
+                "Sealed Phase 12 release (schema v1). V2-only operations fields are "
+                "explicitly unavailable. / 已封存的 Phase 12 release (schema v1); "
+                "仅 v2 提供的运维字段明确标记为不可用。"
+            )
+        else:
+            operations_rows, operations_preview = _operations_view(
+                service,
+                selected_run,
+                manifest,
+                report,
+            )
         if (
             selected_summary is not None
             and selected_summary.evidence_status == "available"
             and report is None
+            and release is None
         ):
             gate_markdown = (
                 "### Evidence unavailable / 证据不可用\n"
@@ -342,6 +364,19 @@ def _summary(service: EvaluationGateway, run_id: str) -> EvaluationRunSummary | 
     return value
 
 
+def _release_evidence(
+    service: EvaluationGateway,
+    run_id: str,
+) -> ReleaseEvidenceSnapshot | None:
+    reader = getattr(service, "release_evidence", None)
+    if not callable(reader):
+        return None
+    value = reader(run_id)
+    if value is not None and not isinstance(value, ReleaseEvidenceSnapshot):
+        raise EvaluationDashboardError("evaluation_release_evidence_invalid")
+    return value
+
+
 def _manifest(
     service: EvaluationGateway,
     run_id: str,
@@ -416,6 +451,8 @@ def _run_choice(run: EvaluationRun, summary: EvaluationRunSummary | None) -> str
 def _run_row(
     run: EvaluationRun,
     summary: EvaluationRunSummary | None,
+    *,
+    is_release: bool = False,
 ) -> tuple[object, ...]:
     remaining = (
         max(0, run.total_cases - run.completed_cases - run.failed_cases)
@@ -424,7 +461,7 @@ def _run_row(
     )
     return (
         run.run_id,
-        "standard-evaluation",
+        "sealed-release-v1" if is_release else "standard-evaluation",
         run.status.value,
         run.completed_cases,
         run.failed_cases,
@@ -854,6 +891,365 @@ def _metric_subset(
     return tuple(by_id[metric_id] for metric_id in metric_ids if metric_id in by_id)
 
 
+def _release_overview_rows(
+    release: ReleaseEvidenceSnapshot,
+) -> tuple[tuple[object, ...], ...]:
+    missing = _unavailable("not-recorded-in-v1-release")
+    quality = {item.metric_id: item for item in release.quality_metrics}
+    rows: list[tuple[object, ...]] = []
+    for metric_id in _QUALITY_METRICS:
+        metric = quality.get(metric_id)
+        if metric is None:
+            rows.append(
+                _metric_row(
+                    metric_id,
+                    missing,
+                    "ratio",
+                    numerator=missing,
+                    denominator=missing,
+                    status="unavailable",
+                    scorer=missing,
+                )
+            )
+            continue
+        threshold = (
+            ""
+            if metric.threshold is None
+            else f"{metric.operator or ''} {metric.threshold}".strip()
+        )
+        rows.append(
+            _metric_row(
+                metric_id,
+                metric.value,
+                "ratio",
+                threshold=threshold,
+                numerator=missing,
+                denominator=metric.denominator if metric.denominator else missing,
+                status=(
+                    "unavailable"
+                    if metric.passed is None
+                    else "passed"
+                    if metric.passed
+                    else "failed"
+                ),
+                scorer=metric.scorer_version or missing,
+            )
+        )
+
+    performance = release.performance
+    latencies = {
+        "p50": performance.p50_ms,
+        "p90": performance.p90_ms,
+        "p95": performance.p95_ms,
+        "p99": performance.p99_ms,
+    }
+    for percentile, value in latencies.items():
+        rows.append(
+            _metric_row(
+                f"all-attempt-latency-{percentile}",
+                value,
+                "ms",
+                threshold="<= 10000" if percentile == "p90" else "",
+                denominator=performance.attempts,
+                status="passed" if percentile == "p90" and value <= 10_000 else "observed",
+                scorer="sealed-release-manifest-v1",
+            )
+        )
+    for percentile in ("p50", "p90", "p95", "p99"):
+        rows.append(
+            _metric_row(
+                f"successful-only-latency-{percentile}",
+                None,
+                "ms",
+                denominator=missing,
+                status="unavailable",
+                scorer=missing,
+            )
+        )
+    success_rate = performance.successes / performance.attempts
+    error_rate = performance.errors / performance.attempts
+    rows.extend(
+        (
+            _metric_row(
+                "total-logical-requests",
+                performance.attempts,
+                "requests",
+                numerator=performance.attempts,
+                denominator=performance.attempts,
+                status="observed",
+                scorer="sealed-release-manifest-v1",
+            ),
+            _metric_row(
+                "successful-logical-requests",
+                performance.successes,
+                "requests",
+                numerator=performance.successes,
+                denominator=performance.attempts,
+                status="observed",
+                scorer="sealed-release-manifest-v1",
+            ),
+            _metric_row(
+                "success-rate",
+                success_rate,
+                "ratio",
+                numerator=performance.successes,
+                denominator=performance.attempts,
+                status="observed",
+                scorer="sealed-release-manifest-v1",
+            ),
+            _metric_row(
+                "observed-peak-concurrency",
+                performance.observed_peak_concurrency,
+                "requests",
+                denominator=performance.attempts,
+                status="observed",
+                scorer="sealed-release-manifest-v1",
+            ),
+            _metric_row(
+                "error-rate",
+                error_rate,
+                "ratio",
+                numerator=performance.errors,
+                denominator=performance.attempts,
+                status="passed" if error_rate < 0.01 else "failed",
+                scorer="sealed-release-manifest-v1",
+            ),
+            _metric_row(
+                "timeout-rate",
+                None,
+                "ratio",
+                denominator=missing,
+                status="unavailable",
+                scorer=missing,
+            ),
+            _metric_row(
+                "provider-attempt-count",
+                performance.provider_attempt_count,
+                "attempts",
+                denominator=performance.attempts,
+                status="observed",
+                scorer="sealed-release-manifest-v1",
+            ),
+            _metric_row(
+                "input-tokens",
+                performance.input_tokens,
+                "tokens",
+                denominator=performance.provider_attempt_count,
+                status="observed",
+                scorer="sealed-release-manifest-v1",
+            ),
+            _metric_row(
+                "output-tokens",
+                performance.output_tokens,
+                "tokens",
+                denominator=performance.provider_attempt_count,
+                status="observed",
+                scorer="sealed-release-manifest-v1",
+            ),
+            _metric_row(
+                "total-cost",
+                performance.total_cost,
+                performance.currency,
+                denominator=performance.provider_attempt_count,
+                status="observed",
+                scorer="sealed-release-manifest-v1",
+            ),
+            _metric_row(
+                "cost-per-1000-logical-attempts",
+                performance.cost_per_1000_attempts,
+                f"{performance.currency}/1000-attempts",
+                denominator=performance.attempts,
+                status="observed",
+                scorer="derived-from-sealed-release-v1",
+            ),
+            _metric_row(
+                "cost-per-1000-successes",
+                performance.cost_per_1000_successes,
+                f"{performance.currency}/1000-successes",
+                denominator=performance.successes,
+                status="observed",
+                scorer="sealed-release-manifest-v1",
+            ),
+        )
+    )
+    return tuple(rows)
+
+
+def _release_quality_plot_rows(
+    release: ReleaseEvidenceSnapshot,
+) -> tuple[tuple[str, float], ...]:
+    return tuple(
+        (item.metric_id, item.value * 100.0)
+        for item in release.quality_metrics
+        if item.metric_id in _QUALITY_METRICS and item.value is not None
+    )
+
+
+def _release_latency_plot_rows(
+    release: ReleaseEvidenceSnapshot,
+) -> tuple[tuple[str, int, float], ...]:
+    performance = release.performance
+    return tuple(
+        ("all attempts", percentile, value)
+        for percentile, value in (
+            (50, performance.p50_ms),
+            (90, performance.p90_ms),
+            (95, performance.p95_ms),
+            (99, performance.p99_ms),
+        )
+    )
+
+
+def _release_system_rows(
+    release: ReleaseEvidenceSnapshot,
+) -> tuple[tuple[object, ...], ...]:
+    performance = release.performance
+    missing = _unavailable("not-recorded-in-v1-release")
+    return (
+        (
+            "observed-peak-concurrency",
+            performance.observed_peak_concurrency,
+            "requests",
+            "observed",
+            "sealed release manifest",
+        ),
+        (
+            "measured-http-attempts",
+            performance.attempts,
+            "attempts",
+            "observed",
+            "sealed release manifest",
+        ),
+        (
+            "successful-logical-requests",
+            performance.successes,
+            "requests",
+            "observed",
+            "sealed release manifest",
+        ),
+        ("active-requests", missing, "requests", "unavailable", "historical release"),
+        ("queue-depth", missing, "requests", "unavailable", "historical release"),
+        ("cpu-utilization", missing, "percent", "unavailable", "not recorded in v1"),
+        ("memory-usage", missing, "bytes", "unavailable", "not recorded in v1"),
+    )
+
+
+def _release_operations_rows(
+    release: ReleaseEvidenceSnapshot,
+) -> tuple[tuple[object, ...], ...]:
+    performance = release.performance
+    missing = _unavailable("not-recorded-in-v1-release")
+    values: dict[str, tuple[object, object, object, str, str]] = {
+        "total-logical-requests": (
+            performance.attempts,
+            performance.attempts,
+            performance.attempts,
+            "observed",
+            "sealed-release-manifest-v1",
+        ),
+        "successful-logical-requests": (
+            performance.successes,
+            performance.successes,
+            performance.attempts,
+            "observed",
+            "sealed-release-manifest-v1",
+        ),
+        "all-attempt-latency-p50-ms": (
+            performance.p50_ms,
+            "",
+            performance.attempts,
+            "observed",
+            "sealed-release-manifest-v1",
+        ),
+        "all-attempt-latency-p95-ms": (
+            performance.p95_ms,
+            "",
+            performance.attempts,
+            "observed",
+            "sealed-release-manifest-v1",
+        ),
+        "input-tokens": (
+            performance.input_tokens,
+            performance.input_tokens,
+            performance.provider_attempt_count,
+            "observed",
+            "sealed-release-manifest-v1",
+        ),
+        "output-tokens": (
+            performance.output_tokens,
+            performance.output_tokens,
+            performance.provider_attempt_count,
+            "observed",
+            "sealed-release-manifest-v1",
+        ),
+        "refusals": (
+            performance.refusals,
+            performance.refusals,
+            release.run.total_cases,
+            "observed",
+            "evaluation-report-v1",
+        ),
+        "answered-requests": (
+            performance.answered_requests,
+            performance.answered_requests,
+            release.run.total_cases,
+            "observed",
+            "evaluation-report-v1",
+        ),
+        "refusal-rate": (
+            performance.refusals / release.run.total_cases,
+            performance.refusals,
+            release.run.total_cases,
+            "observed",
+            "derived-from-evaluation-report-v1",
+        ),
+        "cost-per-1000-logical-attempts": (
+            performance.cost_per_1000_attempts,
+            "",
+            performance.attempts,
+            "observed",
+            "derived-from-sealed-release-v1",
+        ),
+        "cost-per-1000-successes": (
+            performance.cost_per_1000_successes,
+            "",
+            performance.successes,
+            "observed",
+            "sealed-release-manifest-v1",
+        ),
+    }
+    rows: list[tuple[object, ...]] = []
+    for metric in OPERATIONS_METRIC_ORDER:
+        metric_id = metric.value
+        value = values.get(metric_id)
+        if value is None:
+            rows.append(
+                _metric_row(
+                    metric_id,
+                    None,
+                    _operations_unit(metric_id),
+                    numerator=missing,
+                    denominator=missing,
+                    status="unavailable",
+                    scorer=missing,
+                )
+            )
+            continue
+        observed, numerator, denominator, status, scorer = value
+        rows.append(
+            _metric_row(
+                metric_id,
+                observed,
+                _operations_unit(metric_id),
+                numerator=numerator,
+                denominator=denominator,
+                status=status,
+                scorer=scorer,
+            )
+        )
+    return tuple(rows)
+
+
 def _quality_plot_rows(report: EvaluationReportV2) -> tuple[tuple[str, float], ...]:
     gate = next(item for item in report.gates if item.gate_id == report.acceptance_gate_id)
     by_id = {item.metric_id: item for item in gate.observations}
@@ -904,6 +1300,71 @@ def _system_rows(report: EvaluationReportV2 | None) -> tuple[tuple[object, ...],
         ("queue-depth", unavailable, "requests", "unavailable", "live-only metric"),
         ("cpu-utilization", unavailable, "percent", "unavailable", "not collected"),
         ("memory-usage", unavailable, "bytes", "unavailable", "not collected"),
+    )
+
+
+def _release_kpi_html(release: ReleaseEvidenceSnapshot) -> str:
+    performance = release.performance
+    passed = sum(item.passed is True for item in release.quality_metrics)
+    quality_total = len(release.quality_metrics)
+    success_rate = performance.successes / performance.attempts
+    cards = (
+        (
+            "Quality gates / 质量门槛",
+            f"{passed}/{quality_total} v1",
+            "Phase 12 PASS" if release.gate_passed else "Phase 12 FAIL",
+            "passed" if release.gate_passed else "failed",
+        ),
+        (
+            "All-attempt P95 / 全请求 P95",
+            f"{performance.p95_ms / 1000:.2f}s",
+            f"{performance.attempts} accepted-load attempts",
+            "observed",
+        ),
+        (
+            "Cost / 1k QA",
+            f"{performance.currency} {performance.cost_per_1000_attempts:.4f}",
+            "all logical attempts",
+            "observed",
+        ),
+        (
+            "Success rate / 成功率",
+            f"{success_rate * 100:.2f}%",
+            f"{performance.successes}/{performance.attempts}",
+            "observed",
+        ),
+        (
+            "Security / 安全",
+            "PASS" if performance.security_passed else "FAIL",
+            "secret + critical + privacy gates",
+            "passed" if performance.security_passed else "failed",
+        ),
+    )
+    return (
+        '<div class="rag-kpi-grid">'
+        + "".join(
+            '<section class="rag-kpi-card rag-kpi-'
+            + escape(state)
+            + '"><span>'
+            + escape(label)
+            + "</span><strong>"
+            + escape(value)
+            + "</strong><small>"
+            + escape(note)
+            + "</small></section>"
+            for label, value, note, state in cards
+        )
+        + "</div>"
+    )
+
+
+def _release_gate_markdown(release: ReleaseEvidenceSnapshot) -> str:
+    status = "ACCEPTED" if release.gate_passed else "FAILED"
+    return (
+        f"### {status} sealed release / {status} 已封存发布\n"
+        f"Release: `{release.release_id}` · source schema: `{release.source_schema_version}`. "
+        "V2-only metrics remain unavailable and are not inferred. / "
+        "仅 v2 提供的指标保持不可用, 不会推断或补零。"
     )
 
 

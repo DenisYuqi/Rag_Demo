@@ -31,6 +31,7 @@ from rag_mvp.evaluation.production import (
     ProductionEvaluationJobExecutor,
     VerifiedLegacyReportStore,
 )
+from rag_mvp.evaluation.release_evidence import VerifiedReleaseEvidenceStore
 from rag_mvp.ingestion.chunking import ChunkingConfig
 from rag_mvp.ingestion.extractors import OcrAdapter
 from rag_mvp.ingestion.service import IngestionService
@@ -229,6 +230,10 @@ def compose_openai_services(
             legacy_report_store=VerifiedLegacyReportStore(
                 runtime_repositories.report_manifests,
                 run_root,
+            ),
+            release_store=VerifiedReleaseEvidenceStore(
+                settings.evaluation_release_root,
+                redactor,
             ),
             plan_settings_factory=evaluation_executor.isolated_settings,
             comparison_catalog=comparison_catalog,

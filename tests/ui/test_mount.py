@@ -30,11 +30,14 @@ def test_workbench_mount_coexists_with_health_and_api_routes(tmp_path: Path) -> 
 
     with TestClient(app, raise_server_exceptions=False) as client:
         workbench = client.get("/assistant/")
+        workbench_config = client.get("/assistant/config")
         health = client.get("/healthz")
         api = client.get("/api/v1/documents")
 
     assert workbench.status_code == 200
     assert "RAG Assistant Workbench" in workbench.text
+    assert workbench_config.status_code == 200
+    assert workbench_config.json()["footer_links"] == []
     assert health.status_code == 200
     assert health.json()["status"] == "alive"
     assert api.status_code == 503
