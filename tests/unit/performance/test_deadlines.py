@@ -105,6 +105,34 @@ async def test_generation_does_not_start_without_full_budget_and_finalization_re
 
 
 @pytest.mark.asyncio
+async def test_acceptance_generation_budget_preserves_the_measured_frontend_window() -> None:
+    budgets = QALatencyBudgets(
+        total_seconds=9.5,
+        generation_seconds=4.0,
+        finalization_seconds=0.1,
+    )
+    now = [5.2]
+    controller = DeadlineController(budgets, clock=lambda: now[0], started_at=0.0)
+    calls = 0
+
+    async def measured_generation() -> str:
+        nonlocal calls
+        calls += 1
+        now[0] += 3.44
+        return "complete"
+
+    assert await controller.run_generation(measured_generation) == "complete"
+    assert calls == 1
+    assert controller.remaining_seconds == pytest.approx(0.86)
+
+    now[0] = 5.401
+    rejected = DeadlineController(budgets, clock=lambda: now[0], started_at=0.0)
+    with pytest.raises(DeadlineExceededError):
+        await rejected.run_generation(measured_generation)
+    assert calls == 1
+
+
+@pytest.mark.asyncio
 async def test_parent_cancellation_is_never_converted_to_optional_degradation() -> None:
     controller = DeadlineController()
     operation_started = asyncio.Event()
