@@ -24,6 +24,7 @@ ANSWER_COMPLIANCE_METRIC_ID = "answer-compliance"
 ANSWER_COMPLIANCE_SCORER_VERSION = "answer-compliance-all-obligations-v1"
 STYLE_CONSISTENCY_SCORER_VERSION = "style-consistency-applicable-checks-v1"
 REFUSAL_APPROPRIATENESS_SCORER_VERSION = "refusal-appropriateness-outcome-v1"
+GUIDED_REFUSAL_APPROPRIATENESS_SCORER_VERSION = "refusal-appropriateness-reason-guidance-v2"
 
 
 @dataclass(frozen=True, slots=True)
@@ -444,16 +445,39 @@ class RefusalAppropriatenessScorer:
         expected_refusal: bool,
         response_outcome: str,
         expected_reason: str | None = None,
+        expected_reasons: Sequence[str] | None = None,
         actual_reason: str | None = None,
+        guidance_compliant: bool | None = None,
+        guidance_evidence_references: Sequence[str] = (),
     ) -> MetricResult:
         resolved_case_id = _identifier(case_id, "case_id")
         if type(expected_refusal) is not bool:
             raise MetricInputError("expected_refusal_invalid")
         outcome = _response_outcome(response_outcome)
         resolved_expected_reason = _optional_identifier(expected_reason, "expected_reason")
+        if expected_reasons is not None and resolved_expected_reason is not None:
+            raise MetricInputError("expected_refusal_reasons_ambiguous")
+        resolved_expected_reasons = (
+            _identifiers(
+                expected_reasons,
+                "expected_reasons",
+                allow_empty=False,
+            )
+            if expected_reasons is not None
+            else ((resolved_expected_reason,) if resolved_expected_reason is not None else ())
+        )
         resolved_actual_reason = _optional_identifier(actual_reason, "actual_reason")
-        if resolved_expected_reason is not None and not expected_refusal:
+        if resolved_expected_reasons and not expected_refusal:
             raise MetricInputError("reason_without_expected_refusal")
+        if guidance_compliant is not None and type(guidance_compliant) is not bool:
+            raise MetricInputError("guidance_compliance_invalid")
+        guidance_references = _identifiers(
+            guidance_evidence_references,
+            "guidance_evidence_references",
+            allow_empty=True,
+        )
+        if guidance_references and guidance_compliant is None:
+            raise MetricInputError("guidance_evidence_without_assessment")
         if outcome == "answer" and resolved_actual_reason is not None:
             raise MetricInputError("answer_has_refusal_reason")
         if outcome == "refusal" and resolved_actual_reason is None:
@@ -469,14 +493,16 @@ class RefusalAppropriatenessScorer:
             )
 
         actual_refusal = outcome == "refusal"
-        reason_matches = (
-            resolved_expected_reason is None or resolved_expected_reason == resolved_actual_reason
+        reason_matches = not resolved_expected_reasons or resolved_actual_reason in set(
+            resolved_expected_reasons
         )
-        appropriate = expected_refusal == actual_refusal and reason_matches
+        guidance_matches = guidance_compliant is not False
+        appropriate = expected_refusal == actual_refusal and reason_matches and guidance_matches
         rationale = _refusal_rationale(
             expected_refusal=expected_refusal,
             actual_refusal=actual_refusal,
             reason_matches=reason_matches,
+            guidance_matches=guidance_matches,
         )
         return MetricResult(
             case_id=resolved_case_id,
@@ -499,7 +525,11 @@ class RefusalAppropriatenessScorer:
                     evidence_references=tuple(
                         dict.fromkeys(
                             value
-                            for value in (resolved_expected_reason, resolved_actual_reason)
+                            for value in (
+                                *resolved_expected_reasons,
+                                resolved_actual_reason,
+                                *guidance_references,
+                            )
                             if value is not None
                         )
                     ),
@@ -508,11 +538,18 @@ class RefusalAppropriatenessScorer:
         )
 
 
+class GuidedRefusalAppropriatenessScorer(RefusalAppropriatenessScorer):
+    """V2 refusal scorer bound to allowed reasons and validated guidance."""
+
+    version = GUIDED_REFUSAL_APPROPRIATENESS_SCORER_VERSION
+
+
 def _refusal_rationale(
     *,
     expected_refusal: bool,
     actual_refusal: bool,
     reason_matches: bool,
+    guidance_matches: bool = True,
 ) -> str:
     if expected_refusal and not actual_refusal:
         return "refusal_expected_but_answer_emitted"
@@ -520,6 +557,8 @@ def _refusal_rationale(
         return "answer_expected_but_refusal_emitted"
     if expected_refusal and not reason_matches:
         return "refusal_reason_mismatch"
+    if expected_refusal and not guidance_matches:
+        return "refusal_guidance_invalid"
     if expected_refusal:
         return "expected_refusal_emitted"
     return "expected_answer_emitted"
@@ -617,6 +656,7 @@ __all__ = [
     "ANSWER_COMPLETENESS_SCORER_VERSION",
     "ANSWER_COMPLIANCE_METRIC_ID",
     "ANSWER_COMPLIANCE_SCORER_VERSION",
+    "GUIDED_REFUSAL_APPROPRIATENESS_SCORER_VERSION",
     "REFUSAL_APPROPRIATENESS_SCORER_VERSION",
     "STYLE_CONSISTENCY_SCORER_VERSION",
     "AnswerCompletenessScorer",
@@ -624,6 +664,7 @@ __all__ = [
     "AnswerComplianceResult",
     "AnswerComplianceScorer",
     "ComplianceAssessment",
+    "GuidedRefusalAppropriatenessScorer",
     "RefusalAppropriatenessScorer",
     "StyleAssessment",
     "StyleConsistencyScorer",

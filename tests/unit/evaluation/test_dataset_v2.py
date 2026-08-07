@@ -94,6 +94,22 @@ def test_loads_discriminating_acceptance_v2_dataset() -> None:
     assert all(
         isinstance(case, EvaluationCaseV2) and case.compliance_obligations for case in dataset.cases
     )
+    cases = {case.case_id: case for case in dataset.cases}
+    zh_code = cases["accept-zh-001"]
+    zh_travel = cases["accept-zh-003"]
+    en_endpoint = cases["accept-en-004"]
+    assert isinstance(zh_code, EvaluationCaseV2)
+    assert isinstance(zh_travel, EvaluationCaseV2)
+    assert isinstance(en_endpoint, EvaluationCaseV2)
+    assert "权威的 RAG 升级代码是 `OPS-RAG-7421`。" in (
+        zh_code.expected_facts[0].approved_propositions
+    )
+    assert "当前有效政策规定\N{FULLWIDTH COMMA}境内航班经济舱票价报销上限为人民币 1,800 元。" in (
+        zh_travel.expected_facts[0].approved_propositions
+    )
+    assert "The production query endpoint is `POST /v2/knowledge/query`." in (
+        en_endpoint.expected_facts[0].approved_propositions
+    )
 
 
 def test_acceptance_v2_rejects_challenge_coverage_below_declared_minimum(
@@ -108,6 +124,95 @@ def test_acceptance_v2_rejects_challenge_coverage_below_declared_minimum(
     _write_cases_and_refresh_hash(copied, payloads)
 
     with pytest.raises(DatasetValidationError, match="challenge coverage"):
+        load_dataset(copied)
+
+
+@pytest.mark.parametrize("defect", ["required-guidance-absent", "answer-guidance-present"])
+def test_acceptance_v2_rejects_inconsistent_refusal_guidance_obligations(
+    tmp_path: Path,
+    defect: str,
+) -> None:
+    copied = _copy_dataset(tmp_path)
+    payloads = _load_case_payloads(copied)
+    if defect == "required-guidance-absent":
+        payload = next(item for item in payloads if item["case_id"] == "accept-en-009")
+        obligation = next(
+            item for item in payload["compliance_obligations"] if item["kind"] == "refusal-guidance"
+        )
+        obligation["expected_values"] = ["absent"]
+    else:
+        payload = next(item for item in payloads if item["case_id"] == "accept-en-001")
+        payload["response_instructions"].append(
+            {
+                "instruction_id": "unexpected-guidance",
+                "text": "Include refusal guidance.",
+            }
+        )
+        payload["compliance_obligations"].append(
+            {
+                "obligation_id": "unexpected-guidance-v2",
+                "version": "2.0.0",
+                "instruction_id": "unexpected-guidance",
+                "kind": "refusal-guidance",
+                "description": "Unexpected answer guidance requirement.",
+                "expected_values": ["present"],
+            }
+        )
+    (copied / "cases.jsonl").write_text(
+        "\n".join(json.dumps(item, ensure_ascii=False) for item in payloads) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(DatasetValidationError, match="invalid schema in evaluation cases"):
+        load_dataset(copied)
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "missing",
+        "unrelated",
+        "trivial",
+        "unbound-alternative",
+        "missing-propositions",
+        "salad-proposition",
+        "reversed-proposition",
+        "reversed-activation-proposition",
+    ],
+)
+def test_acceptance_v2_rejects_untrusted_expected_fact_support_anchors(
+    tmp_path: Path,
+    defect: str,
+) -> None:
+    copied = _copy_dataset(tmp_path)
+    payloads = _load_case_payloads(copied)
+    fact = payloads[0]["expected_facts"][0]
+    if defect == "missing":
+        fact.pop("support_anchor_groups")
+    elif defect == "unrelated":
+        fact["support_anchor_groups"][0]["alternatives"] = ["moon cheese"]
+    elif defect == "trivial":
+        fact["support_anchor_groups"][0]["alternatives"].append("the")
+    elif defect == "unbound-alternative":
+        fact["support_anchor_groups"][0]["alternatives"].append("moon cheese")
+    elif defect == "missing-propositions":
+        fact.pop("approved_propositions")
+    elif defect == "salad-proposition":
+        fact["approved_propositions"].append("moon cheese OPS-RAG-7421")
+    elif defect == "reversed-proposition":
+        owner_fact = payloads[-1]["expected_facts"][0]
+        owner_fact["approved_propositions"].append("Escalation owns the RAG Operations Desk.")
+    else:
+        activation_fact = payloads[13]["expected_facts"][0]
+        activation_fact["approved_propositions"].append(
+            "A validated index activates one atomic revision switch."
+        )
+    (copied / "cases.jsonl").write_text(
+        "\n".join(json.dumps(item, ensure_ascii=False) for item in payloads) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(DatasetValidationError, match="invalid schema in evaluation cases"):
         load_dataset(copied)
 
 
@@ -159,5 +264,31 @@ async def test_invalid_dataset_fails_before_settings_or_provider_preflight(
             data_root=tmp_path / "data",
             output_root=tmp_path / "results",
             run_id="fail-fast-dataset",
+            profile="accepted",
+        )
+
+
+async def test_invalid_v2_support_contract_fails_before_provider_preflight(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    copied = _copy_dataset(tmp_path)
+    payloads = _load_case_payloads(copied)
+    payloads[0]["expected_facts"][0].pop("support_anchor_groups")
+    (copied / "cases.jsonl").write_text(
+        "\n".join(json.dumps(item, ensure_ascii=False) for item in payloads) + "\n",
+        encoding="utf-8",
+    )
+
+    def unexpected_settings(*args: object, **kwargs: object) -> None:
+        raise AssertionError("provider settings must not be inspected before dataset validation")
+
+    monkeypatch.setattr(run_evaluation, "_settings", unexpected_settings)
+    with pytest.raises(DatasetValidationError, match="invalid schema in evaluation cases"):
+        await run_evaluation.run_real_evaluation(
+            dataset_path=copied,
+            data_root=tmp_path / "data",
+            output_root=tmp_path / "results",
+            run_id="fail-fast-support-contract",
             profile="accepted",
         )

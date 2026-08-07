@@ -11,6 +11,7 @@ from rag_mvp.domain.retrieval import (
     RetrievalDiagnostics,
     RetrievalMode,
     RetrievalResult,
+    retrieval_evidence_digest,
 )
 
 
@@ -79,3 +80,38 @@ def test_retrieval_diagnostics_reject_failed_attempts_outside_ledger() -> None:
             provider_attempt_counts={"embedding": 1},
             provider_failed_attempt_counts={"embedding": 2},
         )
+
+
+def test_retrieval_evidence_digest_ignores_runtime_diagnostics_but_binds_output() -> None:
+    evidence = RankingEvidence.model_validate({**_candidate_values(), "final_rank": 1})
+    diagnostics = RetrievalDiagnostics(
+        request_id="request-1",
+        requested_mode=RetrievalMode.HYBRID,
+        effective_mode=RetrievalMode.HYBRID,
+        index_revision="revision-1",
+        candidate_counts={"dense": 1, "final": 1},
+        cache_status={"retrieval": CacheOutcome.MISS},
+    )
+    cold = RetrievalResult(evidence=(evidence,), diagnostics=diagnostics)
+    warm = cold.model_copy(
+        update={
+            "diagnostics": diagnostics.model_copy(
+                update={
+                    "stage_timings_ms": {"cache": 0.1},
+                    "cache_status": {"retrieval": CacheOutcome.HIT},
+                    "provider_attempt_counts": {},
+                }
+            )
+        }
+    )
+    changed = cold.model_copy(
+        update={
+            "evidence": (
+                evidence.model_copy(update={"text": "Different grounded evidence"}),
+            )
+        }
+    )
+
+    assert retrieval_evidence_digest(cold) == retrieval_evidence_digest(warm)
+    assert retrieval_evidence_digest(cold) != retrieval_evidence_digest(changed)
+    assert "Grounded evidence" not in retrieval_evidence_digest(cold)

@@ -313,6 +313,8 @@ class RetrievalCachePayload(DomainModel):
     index_revision: str
     candidate_counts: dict[str, int]
     provider_identities: dict[str, str]
+    pre_rerank_chunk_ids: tuple[str, ...]
+    post_rerank_chunk_ids: tuple[str, ...]
 
     @model_validator(mode="after")
     def validate_stable_evidence(self) -> Self:
@@ -326,6 +328,14 @@ class RetrievalCachePayload(DomainModel):
             range(1, len(self.evidence) + 1)
         ):
             raise ValueError("cached evidence ranks are invalid")
+        for label, chunk_ids in (
+            ("pre-rerank", self.pre_rerank_chunk_ids),
+            ("post-rerank", self.post_rerank_chunk_ids),
+        ):
+            if len(chunk_ids) != len(set(chunk_ids)):
+                raise ValueError(f"cached {label} evidence is invalid")
+        if set(self.pre_rerank_chunk_ids) != set(self.post_rerank_chunk_ids):
+            raise ValueError("cached pre/post-rerank candidates differ")
         return self
 
     @classmethod
@@ -342,6 +352,8 @@ class RetrievalCachePayload(DomainModel):
             index_revision=diagnostics.index_revision,
             candidate_counts=dict(diagnostics.candidate_counts),
             provider_identities=dict(diagnostics.provider_identities),
+            pre_rerank_chunk_ids=diagnostics.pre_rerank_chunk_ids,
+            post_rerank_chunk_ids=diagnostics.post_rerank_chunk_ids,
         )
 
 

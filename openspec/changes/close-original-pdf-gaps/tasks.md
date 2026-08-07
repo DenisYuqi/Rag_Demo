@@ -31,19 +31,19 @@
 
 ## 3. Phase 15 — Controlled Comparisons and Comparison UI
 
-- [ ] 3.1 Add persisted comparison/suite states, candidate references, progress, partial-failure handling, immutable plan hashes, and historical list/get repositories.
-- [ ] 3.2 Implement candidate execution through normal evaluation plans with isolated data roots when identities differ, safe immutable-index reuse when identities match, seeded ordering, cache bypass, and bounded provider work.
-- [ ] 3.3 Implement compatibility validation that fixes every controlled identity, permits only the declared experimental axis, reports precise incompatibilities, and does not require equal configuration IDs.
-- [ ] 3.4 Implement comparison aggregation, absolute/baseline-delta metrics, challenge-category results, reranker invocation/discrimination proof, gate profiles, deterministic recommendations, and no-recommendation reasons.
-- [ ] 3.5 Add registered model, dense/hybrid/hybrid-rerank, and cold/warm cache experiment plans with exact provider/model variants, fixed datasets/corpora/scorers/prompts, cost caps, and predeclared selection policies.
-- [ ] 3.6 Add comparison catalog/list/start/get/artifact API routes that accept only registered plan IDs, return 202 with progress locations, and preserve failed candidates and safe error evidence.
-- [ ] 3.7 Implement the Compare secondary UI with persisted experiment selectors, controlled-dimension and compatibility displays, authoritative candidate/delta tables, compact plots, category drill-down, gate states, and recommendation rationale.
-- [ ] 3.8 Add unit, API, UI, integration, privacy, compatibility, cost-cap, partial-failure, non-discriminating-reranker, restart-history, and cross-format comparison-report tests.
-- [ ] 3.9 Preflight and execute the real generation-model comparison, validate aligned quality/latency/token/cost/error evidence, and select a model only through the registered decision policy.
-- [ ] 3.10 Using the selected model, execute the real dense, hybrid, and hybrid-rerank matrix with cache bypass and verify a real reranker call plus a discriminating rerank-sensitive case.
-- [ ] 3.11 Execute the separate cold/warm cache experiment and validate hit rate, provider-call reduction, latency delta, corpus revision, and cached/uncached output equivalence without using it for the official SLA.
-- [ ] 3.12 Verify that model, retrieval, and cache results, deltas, conclusions, provenance, failures, and JSON/HTML evidence are visible and downloadable from the workbench after an application restart.
-- [ ] 3.13 Run the complete Phase 15 repository, UI, API, integration, privacy, report-integrity, and OpenSpec gates, then commit the completed phase as `phase 15: publish model and retrieval comparisons in UI`.
+- [x] 3.1 Add persisted comparison/suite states, candidate references, progress, partial-failure handling, immutable plan hashes, and historical list/get repositories.
+- [x] 3.2 Implement candidate execution through normal evaluation plans with isolated data roots when identities differ, safe immutable-index reuse when identities match, seeded ordering, cache bypass, and bounded provider work.
+- [x] 3.3 Implement compatibility validation that fixes every controlled identity, permits only the declared experimental axis, reports precise incompatibilities, and does not require equal configuration IDs.
+- [x] 3.4 Implement comparison aggregation, absolute/baseline-delta metrics, challenge-category results, reranker invocation/discrimination proof, gate profiles, deterministic recommendations, and no-recommendation reasons.
+- [x] 3.5 Add registered model, dense/hybrid/hybrid-rerank, and cold/warm cache experiment plans with exact provider/model variants, fixed datasets/corpora/scorers/prompts, cost caps, and predeclared selection policies.
+- [x] 3.6 Add comparison catalog/list/start/get/artifact API routes that accept only registered plan IDs, return 202 with progress locations, and preserve failed candidates and safe error evidence.
+- [x] 3.7 Implement the Compare secondary UI with persisted experiment selectors, controlled-dimension and compatibility displays, authoritative candidate/delta tables, compact plots, category drill-down, gate states, and recommendation rationale.
+- [x] 3.8 Add unit, API, UI, integration, privacy, compatibility, cost-cap, partial-failure, non-discriminating-reranker, restart-history, and cross-format comparison-report tests.
+- [x] 3.9 Preflight and execute the real generation-model comparison, validate aligned quality/latency/token/cost/error evidence, and select a model only through the registered decision policy.
+- [x] 3.10 Using the selected model, execute the real dense, hybrid, and hybrid-rerank matrix with cache bypass and verify a real reranker call plus a discriminating rerank-sensitive case.
+- [x] 3.11 Execute the separate cold/warm cache experiment and validate hit rate, provider-call reduction, latency delta, corpus revision, and cached/uncached output equivalence without using it for the official SLA.
+- [x] 3.12 Verify that model, retrieval, and cache results, deltas, conclusions, provenance, failures, and JSON/HTML evidence are visible and downloadable from the workbench after an application restart.
+- [x] 3.13 Run the complete Phase 15 repository, UI, API, integration, privacy, report-integrity, and OpenSpec gates, then commit the completed phase as `phase 15: publish model and retrieval comparisons in UI`.
 
 ## 4. Phase 16 — Final Acceptance and Release v2
 

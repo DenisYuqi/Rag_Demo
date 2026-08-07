@@ -542,6 +542,10 @@ class RetrievalService:
             provider_failed_attempt_counts=failed_attempt_counts,
             provider_unknown_usage_attempt_counts=unknown_usage_attempt_counts,
             provider_attempts=tuple(provider_attempts),
+            pre_rerank_chunk_ids=tuple(
+                candidate.chunk_id for candidate in (stages.fused or stages.dense)
+            ),
+            post_rerank_chunk_ids=tuple(candidate.chunk_id for candidate in stages.ordered),
             degradation_reasons=stages.degradation_reasons,
             failed_stages=stages.failed_stages,
         )
@@ -608,6 +612,9 @@ class RetrievalService:
             allowed_identity_keys.add("reranker")
         if not set(payload.provider_identities).issubset(allowed_identity_keys):
             raise ValueError("cached retrieval provider identities are invalid")
+        final_ids = tuple(item.chunk_id for item in payload.evidence)
+        if payload.post_rerank_chunk_ids[: len(final_ids)] != final_ids:
+            raise ValueError("cached final evidence differs from post-rerank order")
         self._evidence_assembler.validate_cached_evidence(payload.evidence)
 
     def _cache_identity(self, context: RetrievalRequestContext) -> RetrievalCacheIdentity:
@@ -1278,6 +1285,8 @@ def _render_cached_result(
             stage_timings_ms=timings,
             cache_status=_cache_status(CacheOutcome.HIT),
             provider_identities=dict(payload.provider_identities),
+            pre_rerank_chunk_ids=payload.pre_rerank_chunk_ids,
+            post_rerank_chunk_ids=payload.post_rerank_chunk_ids,
         ),
     )
 

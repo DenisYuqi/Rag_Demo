@@ -32,6 +32,26 @@ class Settings(BaseSettings):
     )
 
     CONTAINER_STOP_GRACE_SECONDS: ClassVar[float] = 20.0
+    _EVALUATION_RUNTIME_ONLY_FIELDS: ClassVar[frozenset[str]] = frozenset(
+        {
+            "data_root",
+            "evaluation_dataset_root",
+            "evaluation_max_active_jobs",
+            "evaluation_shutdown_grace_seconds",
+            "host",
+            "log_level",
+            "openai_api_key_file",
+            "port",
+            "server_shutdown_grace_seconds",
+            "shutdown_grace_seconds",
+            "telemetry_export_timeout_seconds",
+            "telemetry_exporter",
+            "telemetry_otlp_traces_endpoint",
+            "upload_max_bytes",
+            "workbench_enabled",
+            "workbench_path",
+        }
+    )
 
     service_name: str = "rag-mvp"
     service_version: str = __version__
@@ -85,16 +105,16 @@ class Settings(BaseSettings):
     qa_max_queue: int = Field(default=10, ge=0, le=1000)
     qa_deadline_seconds: float = Field(default=9.5, gt=0, le=60)
     qa_queue_budget_seconds: float = Field(default=0.2, gt=0, le=60)
-    qa_validation_budget_seconds: float = Field(default=0.2, gt=0, le=60)
-    qa_retrieval_budget_seconds: float = Field(default=1.8, gt=0, le=60)
+    qa_validation_budget_seconds: float = Field(default=0.8, gt=0, le=60)
+    qa_retrieval_budget_seconds: float = Field(default=4.0, gt=0, le=60)
     qa_embedding_budget_seconds: float = Field(default=0.8, gt=0, le=60)
     qa_dense_retrieval_budget_seconds: float = Field(default=0.8, gt=0, le=60)
     qa_bm25_budget_seconds: float = Field(default=0.8, gt=0, le=60)
     qa_fusion_budget_seconds: float = Field(default=0.2, gt=0, le=60)
-    rerank_deadline_seconds: float = Field(default=1.2, gt=0, le=10)
-    qa_evidence_assessment_budget_seconds: float = Field(default=2.0, gt=0, le=60)
-    qa_minimum_support_score: float = Field(default=0.55, gt=0, le=1)
-    qa_generation_budget_seconds: float = Field(default=4.7, gt=0, le=60)
+    rerank_deadline_seconds: float = Field(default=3.0, gt=0, le=10)
+    qa_evidence_assessment_budget_seconds: float = Field(default=4.0, gt=0, le=60)
+    qa_minimum_support_score: float = Field(default=0.45, gt=0, le=1)
+    qa_generation_budget_seconds: float = Field(default=6.0, gt=0, le=60)
     qa_grounding_budget_seconds: float = Field(default=0.3, gt=0, le=60)
     qa_redaction_budget_seconds: float = Field(default=0.2, gt=0, le=60)
     qa_serialization_budget_seconds: float = Field(default=0.1, gt=0, le=60)
@@ -243,11 +263,38 @@ class Settings(BaseSettings):
 
     @property
     def configuration_identity(self) -> str:
-        """Hash non-secret configuration for logs, caches, and reports."""
+        """Backward-compatible alias for the complete runtime configuration hash."""
+
+        return self.runtime_configuration_identity
+
+    @property
+    def runtime_configuration_identity(self) -> str:
+        """Hash all non-secret runtime configuration for logs and cache isolation."""
+
         payload = self.safe_dump()
         payload.pop("openai_api_key", None)
-        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+        return _configuration_digest(payload)
+
+    @property
+    def evaluation_configuration_identity(self) -> str:
+        """Hash behaviorally relevant evaluation settings independent of runtime paths.
+
+        Evaluation workspaces are unique per run. Their storage paths, UI settings,
+        lifecycle budgets, and telemetry destinations must not make otherwise identical
+        experiment candidates incomparable. The complete runtime hash remains available
+        separately for operational diagnostics.
+        """
+
+        payload = self.safe_dump()
+        payload.pop("openai_api_key", None)
+        for field_name in self._EVALUATION_RUNTIME_ONLY_FIELDS:
+            payload.pop(field_name, None)
+        return _configuration_digest(payload)
+
+
+def _configuration_digest(payload: dict[str, Any]) -> str:
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
 
 @lru_cache(maxsize=1)

@@ -238,7 +238,10 @@ async def test_catalog_queue_duplicate_capacity_and_missing_evidence_state(
     await executor.entered.wait()
     assert queued.status is EvaluationRunStatus.QUEUED
     persisted_plan = EvaluationRunner(repository, tmp_path / "runs", None).load_plan(queued.run_id)
-    assert persisted_plan.identity.configuration_id == service.settings.configuration_identity
+    assert (
+        persisted_plan.identity.configuration_id
+        == service.settings.evaluation_configuration_identity
+    )
 
     with pytest.raises(EvaluationConflictError, match="evaluation_duplicate"):
         await service.start("mvp-bilingual-rag", "1.0.0")
@@ -463,7 +466,7 @@ def test_production_plan_identity_uses_exact_isolated_runtime_without_online_ind
     dataset = EvaluationDatasetRegistry(_DATASETS).resolve("mvp-bilingual-rag", "1.0.0")
     plan = build_evaluation_plan(dataset, isolated, "identity_run")
 
-    assert plan.identity.configuration_id == isolated.configuration_identity
+    assert plan.identity.configuration_id == isolated.evaluation_configuration_identity
     assert isolated.data_root != settings.data_root
     assert isolated.data_root.is_relative_to(settings.data_root / "evaluations" / "workspaces")
     assert not isolated.data_root.is_relative_to(settings.data_root / "indexes")

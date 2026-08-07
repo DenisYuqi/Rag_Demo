@@ -43,6 +43,7 @@ from rag_mvp.domain.retrieval import (
     RankingEvidence,
     RetrievalMode,
     RetrievalResult,
+    retrieval_evidence_digest,
 )
 from rag_mvp.observability.costs import PricingCatalog
 from rag_mvp.performance.worker_pools import RagWorkerPools
@@ -73,6 +74,7 @@ from rag_mvp.qa.grounding import (
 from rag_mvp.qa.prompt import GeneratorPromptBuilder, PromptBuildError
 from rag_mvp.qa.query_rewrite import QueryRewriteError, QueryRewriter, select_response_language
 from rag_mvp.qa.refusal import (
+    PARTIAL_EVIDENCE_MESSAGES,
     EvidenceDecision,
     EvidenceDecisionKind,
     FactEvidence,
@@ -114,10 +116,6 @@ _ERROR_MESSAGES = {
         QAErrorCode.DEADLINE_EXPIRED: "请求已超过截止时间.",
         QAErrorCode.INTERNAL: "无法安全地完成请求.",
     },
-}
-_PARTIAL_MESSAGES = {
-    "en": "Some requested information is not supported by the available evidence.",
-    "zh-CN": "现有证据仅支持请求中的部分信息.",
 }
 
 
@@ -195,6 +193,10 @@ class OrchestratedResponse:
     application_suffix: str | None = field(default=None, repr=False)
     retrieved_chunk_ids: tuple[str, ...] = field(default=(), repr=False)
     context_chunk_ids: tuple[str, ...] = field(default=(), repr=False)
+    pre_rerank_chunk_ids: tuple[str, ...] = field(default=(), repr=False)
+    post_rerank_chunk_ids: tuple[str, ...] = field(default=(), repr=False)
+    reranking_attempts: tuple[ProviderAttemptEvidence, ...] = field(default=(), repr=False)
+    retrieval_evidence_digest: str | None = field(default=None, repr=False)
     _proof: object | None = field(default=None, repr=False, compare=False)
 
     @classmethod
@@ -206,6 +208,10 @@ class OrchestratedResponse:
         application_suffix: str | None = None,
         retrieved_chunk_ids: tuple[str, ...] = (),
         context_chunk_ids: tuple[str, ...] = (),
+        pre_rerank_chunk_ids: tuple[str, ...] = (),
+        post_rerank_chunk_ids: tuple[str, ...] = (),
+        reranking_attempts: tuple[ProviderAttemptEvidence, ...] = (),
+        retrieval_evidence_digest: str | None = None,
     ) -> OrchestratedResponse:
         return cls(
             response=response,
@@ -213,6 +219,10 @@ class OrchestratedResponse:
             application_suffix=application_suffix,
             retrieved_chunk_ids=retrieved_chunk_ids,
             context_chunk_ids=context_chunk_ids,
+            pre_rerank_chunk_ids=pre_rerank_chunk_ids,
+            post_rerank_chunk_ids=post_rerank_chunk_ids,
+            reranking_attempts=reranking_attempts,
+            retrieval_evidence_digest=retrieval_evidence_digest,
             _proof=_ORCHESTRATION_PROOF,
         )
 
@@ -603,6 +613,14 @@ class QAOrchestrator:
                     context_chunk_ids=tuple(
                         evidence.chunk_id for evidence in retrieval_result.evidence
                     ),
+                    pre_rerank_chunk_ids=(retrieval_result.diagnostics.pre_rerank_chunk_ids),
+                    post_rerank_chunk_ids=(retrieval_result.diagnostics.post_rerank_chunk_ids),
+                    reranking_attempts=tuple(
+                        attempt
+                        for attempt in retrieval_result.diagnostics.provider_attempts
+                        if attempt.role is EvidenceModelRole.RERANKING
+                    ),
+                    retrieval_evidence_digest=retrieval_evidence_digest(retrieval_result),
                 )
 
             approved_evidence = self._approved_evidence(
@@ -679,7 +697,7 @@ class QAOrchestrator:
                     answer_text = grounded.answer
                     application_suffix = None
                     if decision.kind is EvidenceDecisionKind.PARTIAL:
-                        application_suffix = _PARTIAL_MESSAGES[language]
+                        application_suffix = PARTIAL_EVIDENCE_MESSAGES[language]
                         answer_text = f"{answer_text.rstrip()}\n\n{application_suffix}"
                     self._ensure_deadline(finalization_deadline)
             except (StructuredAnswerError, GroundingValidationError) as error:
@@ -715,6 +733,14 @@ class QAOrchestrator:
                     evidence.chunk_id for evidence in retrieval_result.evidence
                 ),
                 context_chunk_ids=tuple(chunk.chunk_id for chunk in context.chunks),
+                pre_rerank_chunk_ids=retrieval_result.diagnostics.pre_rerank_chunk_ids,
+                post_rerank_chunk_ids=retrieval_result.diagnostics.post_rerank_chunk_ids,
+                reranking_attempts=tuple(
+                    attempt
+                    for attempt in retrieval_result.diagnostics.provider_attempts
+                    if attempt.role is EvidenceModelRole.RERANKING
+                ),
+                retrieval_evidence_digest=retrieval_evidence_digest(retrieval_result),
             )
         except asyncio.CancelledError:
             raise

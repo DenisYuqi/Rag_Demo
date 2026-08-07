@@ -117,8 +117,14 @@ class ProductionEvaluationJobExecutor:
 
     async def execute(self, plan: EvaluationRunPlan, dataset: EvaluationDataset) -> None:
         isolated = self.isolated_settings(plan.run_id)
-        if plan.identity.configuration_id != isolated.configuration_identity:
+        if plan.identity.configuration_id != isolated.evaluation_configuration_identity:
             raise EvaluationProductionError("evaluation_configuration_identity_mismatch")
+        if (
+            plan.identity.runtime_configuration_id is not None
+            and plan.identity.runtime_configuration_id
+            != isolated.runtime_configuration_identity
+        ):
+            raise EvaluationProductionError("evaluation_runtime_identity_mismatch")
         workspace = isolated.data_root.resolve()
         if workspace.exists() or workspace.is_symlink():
             raise EvaluationProductionError("evaluation_workspace_exists")

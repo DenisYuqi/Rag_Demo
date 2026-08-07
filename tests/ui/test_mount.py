@@ -65,6 +65,7 @@ def test_workbench_exposes_four_primary_tabs_and_bilingual_controls(tmp_path: Pa
         "Evaluation",
         "Run / 运行",
         "Overview / 结果总览",
+        "Compare / 对比",
         "Operations / 运维",
         "Artifacts / 报告下载",
         "Diagnostics",
@@ -75,6 +76,8 @@ def test_workbench_exposes_four_primary_tabs_and_bilingual_controls(tmp_path: Pa
         "Retrieval mode / 检索模式",
         "Active documents / 活跃文档",
         "Run history / 运行历史",
+        "Registered experiment plan / 已注册实验计划",
+        "Compact baseline-delta plot / 紧凑基线差值图",
         "Canonical operations measures / 规范运维指标",
         "TXT/CSV download status / TXT/CSV 下载状态",
         "Same-origin API downloads / 同源 API 下载",
@@ -86,11 +89,13 @@ def test_workbench_exposes_four_primary_tabs_and_bilingual_controls(tmp_path: Pa
         "Cancel / 取消",
         "Upload and index / 上传并索引",
         "Start evaluation / 启动评估",
+        "Start comparison / 启动对比",
         "Refresh health / 刷新健康状态",
     }
     assert api_names >= {
         "chat_submit",
         "documents_upload",
         "evaluation_start",
+        "comparison_start",
         "diagnostics_request",
     }

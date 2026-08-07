@@ -10,6 +10,7 @@ from rag_mvp.evaluation.answer_metrics import (
     AnswerCompletenessScorer,
     AnswerComplianceScorer,
     ComplianceAssessment,
+    GuidedRefusalAppropriatenessScorer,
     RefusalAppropriatenessScorer,
     StyleAssessment,
     StyleConsistencyScorer,
@@ -349,6 +350,32 @@ def test_response_errors_are_not_silently_scored_as_appropriate() -> None:
     assert not result.eligible
     assert result.score is None
     assert result.rationale == "response_error"
+
+
+def test_guided_refusal_requires_an_allowed_reason_and_validated_guidance() -> None:
+    scorer = GuidedRefusalAppropriatenessScorer()
+
+    wrong_reason = scorer.score(
+        case_id="case-wrong-reason",
+        expected_refusal=True,
+        response_outcome="refusal",
+        expected_reasons=("conflicting-evidence", "prompt-injection"),
+        actual_reason="out-of-scope",
+        guidance_compliant=True,
+    )
+    invalid_guidance = scorer.score(
+        case_id="case-invalid-guidance",
+        expected_refusal=True,
+        response_outcome="refusal",
+        expected_reasons=("out-of-scope",),
+        actual_reason="out-of-scope",
+        guidance_compliant=False,
+    )
+
+    assert wrong_reason.score == 0.0
+    assert wrong_reason.rationale == "refusal_reason_mismatch"
+    assert invalid_guidance.score == 0.0
+    assert invalid_guidance.rationale == "refusal_guidance_invalid"
 
 
 def test_refusal_aggregate_preserves_exact_eighty_percent_boundary() -> None:

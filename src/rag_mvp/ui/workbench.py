@@ -14,6 +14,7 @@ from .callbacks import WorkbenchCallbacks
 from .models import (
     BrowserSessionState,
     ChatRender,
+    ComparisonRender,
     DiagnosticsRender,
     DocumentsRender,
     EvaluationRender,
@@ -93,6 +94,54 @@ def _diagnostic_outputs(
     )
 
 
+def _comparison_plot(render: ComparisonRender) -> dict[str, object]:
+    """Build Gradio's native plot payload without a transitive pandas import."""
+
+    return {
+        "columns": ["candidate", "metric", "delta"],
+        "data": [list(row) for row in render.plot_rows],
+        "datatypes": {
+            "candidate": "nominal",
+            "metric": "nominal",
+            "delta": "quantitative",
+        },
+        "mark": "bar",
+    }
+
+
+def _comparison_outputs(render: ComparisonRender) -> tuple[Any, ...]:
+    return (
+        gr.update(
+            choices=list(render.plan_choices),
+            value=render.selected_plan_id,
+            interactive=bool(render.plan_choices),
+        ),
+        gr.update(
+            choices=list(render.comparison_choices),
+            value=render.selected_comparison_id,
+            interactive=bool(render.comparison_choices),
+        ),
+        [list(row) for row in render.plan_rows],
+        [list(row) for row in render.history_rows],
+        render.progress_markdown,
+        render.gate_markdown,
+        [list(row) for row in render.controlled_rows],
+        [list(row) for row in render.shared_setup_rows],
+        [list(row) for row in render.comparison_metric_rows],
+        render.cache_conclusion_markdown,
+        [list(row) for row in render.candidate_rows],
+        _comparison_plot(render),
+        [list(row) for row in render.category_rows],
+        render.recommendation_markdown,
+        [list(row) for row in render.artifact_rows],
+        render.artifact_links_markdown,
+        render.status_markdown,
+        gr.update(interactive=render.start_enabled),
+        gr.update(active=render.poll_active),
+        render.state,
+    )
+
+
 def create_workbench(
     settings: Settings,
     services: WorkbenchServices,
@@ -103,6 +152,7 @@ def create_workbench(
 
     controller = callbacks or WorkbenchCallbacks(services)
     initial_evaluation = controller.refresh_evaluations(None)
+    initial_comparison = controller.refresh_comparisons(None)
     with gr.Blocks(title="RAG Assistant Workbench") as demo:
         # Gradio deep-copies the state factory.  A controller-bound method would
         # recursively copy the production service graph, including non-copyable
@@ -311,6 +361,215 @@ def create_workbench(
                             type="array",
                         )
 
+                    with gr.Tab("Compare / 对比", id="evaluation-compare-tab"):
+                        comparison_timer = gr.Timer(
+                            value=2.0,
+                            active=initial_comparison.poll_active,
+                        )
+                        comparison_plan_select = gr.Dropdown(
+                            choices=list(initial_comparison.plan_choices),
+                            value=initial_comparison.selected_plan_id,
+                            label="Registered experiment plan / 已注册实验计划",
+                            interactive=bool(initial_comparison.plan_choices),
+                        )
+                        comparison_plan_table = gr.Dataframe(
+                            headers=[
+                                "plan_id",
+                                "axis",
+                                "dataset",
+                                "version",
+                                "candidates",
+                                "baseline",
+                                "cases",
+                                "repeats",
+                                "max_logical_calls",
+                                "max_provider_calls",
+                                "cache_policy",
+                                "cost_estimate",
+                                "cost_cap",
+                                "launchable",
+                                "blocking_codes",
+                                "corpus",
+                                "corpus_version",
+                                "candidate_configurations",
+                            ],
+                            value=[list(row) for row in initial_comparison.plan_rows],
+                            label="Immutable comparison plan / 不可变对比计划",
+                            interactive=False,
+                            type="array",
+                        )
+                        with gr.Row():
+                            start_comparison = gr.Button(
+                                "Start comparison / 启动对比",
+                                variant="primary",
+                                interactive=initial_comparison.start_enabled,
+                            )
+                            refresh_comparison = gr.Button(
+                                "Refresh comparison evidence / 刷新对比证据"
+                            )
+                        comparison_select = gr.Dropdown(
+                            choices=list(initial_comparison.comparison_choices),
+                            value=initial_comparison.selected_comparison_id,
+                            label="Persisted comparison history / 持久化对比历史",
+                            interactive=bool(initial_comparison.comparison_choices),
+                        )
+                        comparison_history_table = gr.Dataframe(
+                            headers=[
+                                "comparison_id",
+                                "plan_id",
+                                "status",
+                                "completed",
+                                "failed",
+                                "remaining",
+                                "total",
+                                "started_at",
+                                "completed_at",
+                                "safe_error",
+                                "dataset",
+                                "dataset_version",
+                                "corpus",
+                                "corpus_version",
+                                "candidate_configurations",
+                                "active",
+                                "completed_cases",
+                                "failed_cases",
+                                "provider_calls",
+                                "incurred_cost",
+                                "evidence",
+                                "gate",
+                            ],
+                            value=[list(row) for row in initial_comparison.history_rows],
+                            label="Comparison status and progress / 对比状态和进度",
+                            interactive=False,
+                            type="array",
+                        )
+                        comparison_progress = gr.Markdown(
+                            initial_comparison.progress_markdown,
+                            label="Background comparison progress / 后台对比进度",
+                        )
+                        comparison_gate = gr.Markdown(
+                            initial_comparison.gate_markdown,
+                            label="Comparison gate / 对比门槛",
+                        )
+                        controlled_dimensions = gr.Dataframe(
+                            headers=["controlled dimension", "fixed value or state"],
+                            value=[list(row) for row in initial_comparison.controlled_rows],
+                            label="Controlled dimensions and compatibility / 控制维度和兼容性",
+                            interactive=False,
+                            type="array",
+                        )
+                        comparison_shared_setup = gr.Dataframe(
+                            headers=["scope", "field", "value or unavailable reason"],
+                            value=[list(row) for row in initial_comparison.shared_setup_rows],
+                            label="Shared setup and inclusive totals / 共享设置与包含总计",
+                            interactive=False,
+                            type="array",
+                        )
+                        comparison_level_metrics = gr.Dataframe(
+                            headers=[
+                                "metric",
+                                "value",
+                                "unit",
+                                "numerator",
+                                "denominator",
+                                "state",
+                                "gate",
+                            ],
+                            value=[list(row) for row in initial_comparison.comparison_metric_rows],
+                            label="Comparison-level evidence / 对比级证据",
+                            interactive=False,
+                            type="array",
+                        )
+                        cache_conclusion = gr.Markdown(
+                            initial_comparison.cache_conclusion_markdown,
+                            label="Cache revision and equivalence / 缓存版本和等价性",
+                        )
+                        comparison_candidates = gr.Dataframe(
+                            headers=[
+                                "candidate_id",
+                                "candidate",
+                                "status",
+                                "baseline",
+                                "metric",
+                                "absolute_value",
+                                "unit",
+                                "numerator",
+                                "denominator",
+                                "gate",
+                                "baseline_delta",
+                                "safe_error",
+                                "axis_value",
+                                "configuration_id",
+                                "evaluation_run_id",
+                                "evidence_status",
+                                "failed_cases",
+                                "provider_calls",
+                                "known_partial_cost",
+                                "total_cost",
+                                "cost_complete",
+                                "cost_unknown_reasons",
+                            ],
+                            value=[list(row) for row in initial_comparison.candidate_rows],
+                            label="Authoritative candidate and delta table / 权威候选和差值表",
+                            interactive=False,
+                            type="array",
+                        )
+                        comparison_plot = gr.BarPlot(
+                            value=cast(Any, _comparison_plot(initial_comparison)),
+                            x="metric",
+                            y="delta",
+                            color="candidate",
+                            title="Baseline deltas in metric-native units",
+                            x_title="Metric / 指标",
+                            y_title="Baseline delta / 基线差值",
+                            height=320,
+                            label="Compact baseline-delta plot / 紧凑基线差值图",
+                        )
+                        comparison_categories = gr.Dataframe(
+                            headers=[
+                                "candidate_id",
+                                "category",
+                                "cases",
+                                "metric",
+                                "value",
+                                "unit",
+                                "denominator",
+                                "baseline_delta",
+                                "state",
+                            ],
+                            value=[list(row) for row in initial_comparison.category_rows],
+                            label="Challenge-category drill-down / 挑战分类下钻",
+                            interactive=False,
+                            type="array",
+                        )
+                        comparison_recommendation = gr.Markdown(
+                            initial_comparison.recommendation_markdown,
+                            label="Measured recommendation rationale / 测量推荐理由",
+                        )
+                        comparison_artifacts = gr.Dataframe(
+                            headers=[
+                                "artifact_id",
+                                "format",
+                                "schema",
+                                "media_type",
+                                "digest",
+                                "bytes",
+                                "created_at",
+                            ],
+                            value=[list(row) for row in initial_comparison.artifact_rows],
+                            label="Comparison artifact manifest / 对比制品清单",
+                            interactive=False,
+                            type="array",
+                        )
+                        comparison_artifact_links = gr.Markdown(
+                            initial_comparison.artifact_links_markdown,
+                            label="Validated comparison downloads / 已验证对比下载",
+                        )
+                        comparison_status = gr.Markdown(
+                            initial_comparison.status_markdown,
+                            label="Comparison status / 对比状态",
+                        )
+
                     with gr.Tab("Operations / 运维", id="evaluation-operations-tab"):
                         operations_table = gr.Dataframe(
                             headers=[
@@ -443,6 +702,27 @@ def create_workbench(
                 )
             )
 
+        async def on_start_comparison(
+            selected_plan: str | None,
+            raw_state: BrowserSessionState | None,
+        ) -> tuple[Any, ...]:
+            return _comparison_outputs(
+                await controller.start_registered_comparison(selected_plan, raw_state)
+            )
+
+        def on_refresh_comparison(
+            selected_plan: str | None,
+            selected_comparison: str | None,
+            raw_state: BrowserSessionState | None,
+        ) -> tuple[Any, ...]:
+            return _comparison_outputs(
+                controller.preview_comparison(
+                    selected_plan,
+                    selected_comparison,
+                    raw_state,
+                )
+            )
+
         def on_health() -> tuple[list[list[Any]], list[list[Any]], str]:
             return _diagnostic_outputs(controller.refresh_health())
 
@@ -558,6 +838,68 @@ def create_workbench(
             on_refresh_evaluation,
             inputs=evaluation_inputs,
             outputs=evaluation_outputs,
+            api_name=None,
+            show_progress="hidden",
+        )
+
+        comparison_outputs = [
+            comparison_plan_select,
+            comparison_select,
+            comparison_plan_table,
+            comparison_history_table,
+            comparison_progress,
+            comparison_gate,
+            controlled_dimensions,
+            comparison_shared_setup,
+            comparison_level_metrics,
+            cache_conclusion,
+            comparison_candidates,
+            comparison_plot,
+            comparison_categories,
+            comparison_recommendation,
+            comparison_artifacts,
+            comparison_artifact_links,
+            comparison_status,
+            start_comparison,
+            comparison_timer,
+            session_state,
+        ]
+        comparison_inputs = [comparison_plan_select, comparison_select, session_state]
+        start_comparison.click(
+            on_start_comparison,
+            inputs=[comparison_plan_select, session_state],
+            outputs=comparison_outputs,
+            api_name="comparison_start",
+        )
+        refresh_comparison.click(
+            on_refresh_comparison,
+            inputs=comparison_inputs,
+            outputs=comparison_outputs,
+            api_name="comparison_refresh",
+        )
+        comparison_plan_select.input(
+            on_refresh_comparison,
+            inputs=comparison_inputs,
+            outputs=comparison_outputs,
+            api_name=None,
+        )
+        comparison_select.input(
+            on_refresh_comparison,
+            inputs=comparison_inputs,
+            outputs=comparison_outputs,
+            api_name=None,
+        )
+        comparison_timer.tick(
+            on_refresh_comparison,
+            inputs=comparison_inputs,
+            outputs=comparison_outputs,
+            api_name=None,
+            show_progress="hidden",
+        )
+        demo.load(
+            on_refresh_comparison,
+            inputs=comparison_inputs,
+            outputs=comparison_outputs,
             api_name=None,
             show_progress="hidden",
         )

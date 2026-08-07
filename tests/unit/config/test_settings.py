@@ -15,6 +15,8 @@ def test_defaults_are_safe_and_offline_ready(tmp_path: object) -> None:
     assert settings.provider_readiness_errors() == ()
     assert settings.safe_dump()["openai_api_key"] is None
     assert len(settings.configuration_identity) == 16
+    assert len(settings.runtime_configuration_identity) == 16
+    assert len(settings.evaluation_configuration_identity) == 16
     assert not settings.allow_single_retriever_degradation
     assert not settings.retrieval_cache_enabled
     assert settings.retrieval_cache_max_entries == 256
@@ -22,6 +24,7 @@ def test_defaults_are_safe_and_offline_ready(tmp_path: object) -> None:
     assert settings.evaluation_max_active_jobs == 1
     assert settings.evaluation_shutdown_grace_seconds == 2
     assert settings.reranking_model is None
+    assert settings.qa_minimum_support_score == 0.45
     assert settings.server_shutdown_grace_seconds == 4
     assert settings.app_shutdown_grace_seconds == 15
     assert settings.total_shutdown_budget_seconds == 19
@@ -87,6 +90,53 @@ def test_secret_never_appears_in_repr_or_safe_dump(tmp_path: object) -> None:
     assert raw_secret not in repr(settings)
     assert raw_secret not in str(settings.safe_dump())
     assert settings.safe_dump()["openai_api_key"] == "[REDACTED_SECRET]"
+
+
+def test_evaluation_identity_excludes_runtime_paths_ui_and_lifecycle(tmp_path: Path) -> None:
+    baseline = Settings(data_root=tmp_path / "online", _env_file=None)
+    isolated = baseline.model_copy(
+        update={
+            "data_root": tmp_path / "evaluations" / "workspaces" / "run-001",
+            "evaluation_dataset_root": tmp_path / "datasets-copy",
+            "workbench_enabled": False,
+            "workbench_path": "/operator",
+            "evaluation_max_active_jobs": 4,
+            "evaluation_shutdown_grace_seconds": 7.0,
+            "telemetry_exporter": "console",
+        }
+    )
+
+    assert baseline.runtime_configuration_identity != isolated.runtime_configuration_identity
+    assert baseline.configuration_identity == baseline.runtime_configuration_identity
+    assert isolated.configuration_identity == isolated.runtime_configuration_identity
+    assert baseline.evaluation_configuration_identity == isolated.evaluation_configuration_identity
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("generation_model", "generation-alternative"),
+        ("default_retrieval_mode", "dense"),
+        ("dense_candidate_limit", 21),
+        ("provider_retry_limit", 2),
+        ("retrieval_cache_enabled", True),
+        ("chunk_target_tokens", 640),
+        ("pricing_version", "pricing-v2"),
+        ("qa_max_active", 6),
+        ("qa_max_queue", 11),
+        ("qa_minimum_support_score", 0.55),
+        ("environment", "production"),
+    ],
+)
+def test_evaluation_identity_includes_behavioral_configuration(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    baseline = Settings(data_root=tmp_path, _env_file=None)
+    changed = baseline.model_copy(update={field: value})
+
+    assert baseline.evaluation_configuration_identity != changed.evaluation_configuration_identity
 
 
 def test_openai_backend_reports_safe_missing_credentials(tmp_path: object) -> None:
@@ -167,6 +217,20 @@ def test_limit_invariants_are_validated(tmp_path: object) -> None:
 
 
 def test_qa_stage_budgets_are_configurable_and_bounded_by_total(tmp_path: object) -> None:
+    defaults = Settings(data_root=tmp_path, _env_file=None)
+    assert defaults.qa_validation_budget_seconds == 0.8
+    assert defaults.qa_retrieval_budget_seconds == 4.0
+    assert defaults.qa_evidence_assessment_budget_seconds == 4.0
+    assert defaults.qa_generation_budget_seconds == 6.0
+    assert all(
+        stage < defaults.qa_deadline_seconds
+        for stage in (
+            defaults.qa_retrieval_budget_seconds,
+            defaults.qa_evidence_assessment_budget_seconds,
+            defaults.qa_generation_budget_seconds,
+        )
+    )
+
     settings = Settings(
         data_root=tmp_path,
         qa_generation_budget_seconds=4.5,

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from enum import StrEnum
 from typing import Annotated, Self
 
@@ -97,6 +99,8 @@ class RetrievalDiagnostics(DomainModel):
         default_factory=dict
     )
     provider_attempts: tuple[ProviderAttemptEvidence, ...] = ()
+    pre_rerank_chunk_ids: tuple[Identifier, ...] = ()
+    post_rerank_chunk_ids: tuple[Identifier, ...] = ()
     degradation_reasons: Annotated[tuple[SafeDiagnosticCode, ...], Field(max_length=16)] = ()
     failed_stages: Annotated[tuple[SafeDiagnosticCode, ...], Field(max_length=8)] = ()
 
@@ -112,9 +116,46 @@ class RetrievalDiagnostics(DomainModel):
                 for role, count in counts.items()
             ):
                 raise ValueError(f"{label} provider attempts exceed the attempt ledger")
+        for label, chunk_ids in (
+            ("pre-rerank", self.pre_rerank_chunk_ids),
+            ("post-rerank", self.post_rerank_chunk_ids),
+        ):
+            if len(chunk_ids) != len(set(chunk_ids)):
+                raise ValueError(f"{label} chunk identifiers must be unique")
+        if bool(self.pre_rerank_chunk_ids) != bool(self.post_rerank_chunk_ids):
+            raise ValueError("pre/post-rerank evidence must be present together")
+        if self.pre_rerank_chunk_ids and set(self.pre_rerank_chunk_ids) != set(
+            self.post_rerank_chunk_ids
+        ):
+            raise ValueError("pre/post-rerank evidence must contain the same candidates")
         return self
 
 
 class RetrievalResult(DomainModel):
     evidence: tuple[RankingEvidence, ...]
     diagnostics: RetrievalDiagnostics
+
+
+def retrieval_evidence_digest(result: RetrievalResult) -> str:
+    """Hash deterministic validated retrieval output without retaining query or text."""
+
+    if not isinstance(result, RetrievalResult):
+        raise TypeError("retrieval result is required")
+    diagnostics = result.diagnostics
+    payload = {
+        "schema_version": "retrieval-evidence-digest-v1",
+        "index_revision": diagnostics.index_revision,
+        "requested_mode": diagnostics.requested_mode.value,
+        "effective_mode": diagnostics.effective_mode.value,
+        "candidate_counts": diagnostics.candidate_counts,
+        "pre_rerank_chunk_ids": diagnostics.pre_rerank_chunk_ids,
+        "post_rerank_chunk_ids": diagnostics.post_rerank_chunk_ids,
+        "evidence": [item.model_dump(mode="json") for item in result.evidence],
+    }
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(canonical).hexdigest()}"

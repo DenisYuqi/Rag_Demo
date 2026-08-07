@@ -17,6 +17,8 @@ from rag_mvp.storage.embedding_cache import (
 )
 from rag_mvp.storage.layout import DataLayout, UnsafeDataPathError
 from rag_mvp.storage.repositories import (
+    ComparisonRepository,
+    ComparisonSelectionRecord,
     DocumentRepository,
     EvaluationRunRepository,
     IndexRevisionRepository,
@@ -41,6 +43,8 @@ __all__ = [
     "ArtifactNotFoundError",
     "ArtifactStore",
     "ArtifactStoreError",
+    "ComparisonRepository",
+    "ComparisonSelectionRecord",
     "DataLayout",
     "DataRootWriterLock",
     "DataRootWriterLockError",

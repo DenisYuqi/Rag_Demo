@@ -50,9 +50,15 @@ from rag_mvp.performance.load_test import (
     parse_qa_response,
 )
 from rag_mvp.performance.pricing import (
+    OPENAI_COMPARISON_PRICING_ASSUMPTIONS,
+    OPENAI_COMPARISON_PRICING_PROVIDER,
+    OPENAI_COMPARISON_PRICING_SOURCES,
+    OPENAI_COMPARISON_PRICING_VERSION,
     PerformancePricingEvidence,
     PerformanceRolePricing,
+    PricingPreflightError,
     calculate_performance_cost,
+    preflight_openai_comparison_pricing,
 )
 from rag_mvp.performance.worker_pools import (
     BoundedWorkerPool,
@@ -68,6 +74,10 @@ __all__ = [
     "EVIDENCE_SCHEMA_URI",
     "EVIDENCE_SCHEMA_VERSION",
     "MINIMUM_SUCCESSFUL_REQUESTS",
+    "OPENAI_COMPARISON_PRICING_ASSUMPTIONS",
+    "OPENAI_COMPARISON_PRICING_PROVIDER",
+    "OPENAI_COMPARISON_PRICING_SOURCES",
+    "OPENAI_COMPARISON_PRICING_VERSION",
     "P90_LATENCY_THRESHOLD_MS",
     "AdmissionClosedError",
     "AdmissionLease",
@@ -94,6 +104,7 @@ __all__ = [
     "PerformancePricingEvidence",
     "PerformanceRateEvidence",
     "PerformanceRolePricing",
+    "PricingPreflightError",
     "QAAdmissionController",
     "QALatencyBudgets",
     "RagWorkerPools",
@@ -108,6 +119,7 @@ __all__ = [
     "load_performance_evidence_bundle",
     "nearest_rank_percentile",
     "parse_qa_response",
+    "preflight_openai_comparison_pricing",
     "validate_performance_evidence_bundle",
     "write_performance_evidence_bundle",
 ]

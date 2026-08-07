@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
@@ -11,31 +12,39 @@ from typing import cast
 from rag_mvp.domain.qa import StreamEventKind, ValidatedStreamEvent
 from rag_mvp.evaluation.answer_metrics import (
     AnswerCompletenessScorer,
+    GuidedRefusalAppropriatenessScorer,
     RefusalAppropriatenessScorer,
     StyleAssessment,
     StyleConsistencyScorer,
 )
+from rag_mvp.evaluation.compliance import assess_compliance_obligations
 from rag_mvp.evaluation.dataset import (
     Answerability,
+    ComplianceObligationKind,
     EvaluationCase,
+    EvaluationCaseV2,
     EvaluationDataset,
     EvaluationLanguage,
     StyleExpectation,
 )
 from rag_mvp.evaluation.grounding_metrics import (
+    AdjudicatedFaithfulnessScorer,
     ContextPrecisionScorer,
     FactSupportAssessment,
     FaithfulnessScorer,
     MetricAggregate,
     MetricName,
     MetricResult,
+    adjudicated_text_support,
     aggregate_metric,
 )
 from rag_mvp.evaluation.quality_gate import QualityGate, QualityGateResult
 from rag_mvp.evaluation.runner import EvaluationCaseExecution, PersistedCaseResult
+from rag_mvp.qa.refusal import PARTIAL_EVIDENCE_MESSAGES, EvidenceDecisionCode
 from rag_mvp.safety.redactor import RedactionError, Redactor
 
 SCORING_PIPELINE_VERSION = "deterministic-evaluation-scoring-v1"
+ADVANCED_SCORING_PIPELINE_VERSION = "deterministic-evaluation-scoring-v3"
 MAX_CONCISE_CHARACTERS = 1_200
 MAX_REFUSAL_CONCISE_CHARACTERS = 240
 
@@ -146,6 +155,7 @@ class EvaluationScorer:
     style: StyleConsistencyScorer = field(default_factory=StyleConsistencyScorer)
     refusal: RefusalAppropriatenessScorer = field(default_factory=RefusalAppropriatenessScorer)
     quality_gate: QualityGate = field(default_factory=QualityGate)
+    scoring_version: str = SCORING_PIPELINE_VERSION
 
     @property
     def scorer_versions(self) -> Mapping[MetricName, str]:
@@ -167,6 +177,11 @@ class EvaluationScorer:
         if not isinstance(dataset, EvaluationDataset):
             raise EvaluationScoringError("evaluation_dataset_invalid")
         registry, run_id = _result_registry(dataset, results)
+        corpus_text_by_chunk_id = (
+            {chunk.chunk_id: chunk.text for chunk in dataset.corpus.chunks}
+            if isinstance(self.faithfulness, AdjudicatedFaithfulnessScorer)
+            else {}
+        )
         per_case: list[MetricResult] = []
         failed_case_ids: list[str] = []
 
@@ -180,7 +195,13 @@ class EvaluationScorer:
             if execution is None:
                 raise EvaluationScoringError("successful_case_execution_missing")
             _validate_execution(case, persisted, execution)
-            per_case.extend(self._score_case(case, execution))
+            per_case.extend(
+                self._score_case(
+                    case,
+                    execution,
+                    corpus_text_by_chunk_id=corpus_text_by_chunk_id,
+                )
+            )
 
         aggregates = tuple(
             aggregate_metric(
@@ -203,20 +224,79 @@ class EvaluationScorer:
             per_case=tuple(per_case),
             aggregates=aggregates,
             quality_gate=quality_gate,
+            scoring_version=self.scoring_version,
         )
 
     def _score_case(
         self,
         case: EvaluationCase,
         execution: EvaluationCaseExecution,
+        *,
+        corpus_text_by_chunk_id: Mapping[str, str],
     ) -> tuple[MetricResult, ...]:
         event = execution.event
         outcome = _outcome(event)
         answerable = case.answerability is Answerability.ANSWERABLE
         context_ids = set(execution.context_chunk_ids)
-        factual_units = _fact_support_assessments(event, context_ids)
-        covered_fact_ids = _covered_fact_ids(case, event, context_ids)
+        advanced_case = (
+            case
+            if isinstance(case, EvaluationCaseV2)
+            and isinstance(self.faithfulness, AdjudicatedFaithfulnessScorer)
+            else None
+        )
+        factual_units = (
+            _adjudicated_fact_support_assessments(
+                advanced_case,
+                event,
+                context_ids,
+                corpus_text_by_chunk_id,
+            )
+            if advanced_case is not None
+            else _fact_support_assessments(event, context_ids)
+        )
+        covered_fact_ids = (
+            _covered_fact_ids_v2(
+                advanced_case,
+                event,
+                context_ids,
+                corpus_text_by_chunk_id,
+            )
+            if advanced_case is not None
+            else _covered_fact_ids(case, event, context_ids)
+        )
         actual_reason = event.reason.value if event.reason is not None else None
+        expected_reasons: tuple[str, ...] | None = None
+        guidance_compliant: bool | None = None
+        guidance_references: tuple[str, ...] = ()
+        if isinstance(case, EvaluationCaseV2) and isinstance(
+            self.refusal,
+            GuidedRefusalAppropriatenessScorer,
+        ):
+            expected_reasons = case.refusal_expectation.reason_codes or None
+            if case.refusal_expectation.guidance_required:
+                assessments = assess_compliance_obligations(
+                    case,
+                    event,
+                    redactor=self.redactor,
+                )
+                guidance_assessment = next(
+                    (
+                        assessment
+                        for obligation, assessment in zip(
+                            case.compliance_obligations,
+                            assessments,
+                            strict=True,
+                        )
+                        if obligation.kind is ComplianceObligationKind.REFUSAL_GUIDANCE
+                    ),
+                    None,
+                )
+                guidance_compliant = bool(
+                    guidance_assessment is not None and guidance_assessment.satisfied
+                )
+                guidance_references = (
+                    () if guidance_assessment is None else guidance_assessment.evidence_references
+                )
 
         return (
             self.faithfulness.score(
@@ -247,7 +327,10 @@ class EvaluationScorer:
                 case_id=case.case_id,
                 expected_refusal=not answerable,
                 response_outcome=outcome,
+                expected_reasons=expected_reasons,
                 actual_reason=actual_reason,
+                guidance_compliant=guidance_compliant,
+                guidance_evidence_references=guidance_references,
             ),
         )
 
@@ -394,6 +477,12 @@ def _validate_execution(
     if persisted.succeeded:
         if event.kind not in {StreamEventKind.ANSWER, StreamEventKind.REFUSAL}:
             raise EvaluationScoringError("successful_case_outcome_invalid")
+        if (
+            isinstance(case, EvaluationCaseV2)
+            and event.kind is StreamEventKind.ANSWER
+            and not _answer_has_exact_claim_coverage(event)
+        ):
+            raise EvaluationScoringError("case_answer_claim_coverage_invalid")
     elif event.kind is not StreamEventKind.ERROR:
         raise EvaluationScoringError("failed_case_outcome_invalid")
 
@@ -406,6 +495,32 @@ def _outcome(event: ValidatedStreamEvent) -> str:
     if event.kind is StreamEventKind.ERROR:
         return "error"
     raise EvaluationScoringError("terminal_event_kind_invalid")
+
+
+def _answer_coverage_key(value: str) -> str:
+    return "".join(unicodedata.normalize("NFC", value).split())
+
+
+def _answer_has_exact_claim_coverage(event: ValidatedStreamEvent) -> bool:
+    content = event.content or ""
+    claim_content = "".join(claim.text for claim in event.claims)
+    if _answer_coverage_key(content) == _answer_coverage_key(claim_content):
+        return True
+    if (
+        event.diagnostics.metadata.get("decision_code")
+        != EvidenceDecisionCode.PARTIAL_EVIDENCE.value
+    ):
+        return False
+    partial_message = PARTIAL_EVIDENCE_MESSAGES.get(event.response_language)
+    if partial_message is None:
+        return False
+    exact_suffix = f"\n\n{partial_message}"
+    if not content.endswith(exact_suffix):
+        return False
+    grounded_content = content[: -len(exact_suffix)]
+    return grounded_content == grounded_content.rstrip() and _answer_coverage_key(
+        grounded_content
+    ) == _answer_coverage_key(claim_content)
 
 
 def _fact_support_assessments(
@@ -429,6 +544,50 @@ def _fact_support_assessments(
     )
 
 
+def _adjudicated_fact_support_assessments(
+    case: EvaluationCaseV2,
+    event: ValidatedStreamEvent,
+    context_ids: set[str],
+    corpus_text_by_chunk_id: Mapping[str, str],
+) -> tuple[FactSupportAssessment, ...]:
+    if event.kind is not StreamEventKind.ANSWER:
+        return ()
+    authoritative = set(case.authoritative_evidence_ids)
+    corpus_ids = set(corpus_text_by_chunk_id)
+    assessments: list[FactSupportAssessment] = []
+    for ordinal, claim in enumerate(event.claims, start=1):
+        citation_ids = tuple(dict.fromkeys(claim.citation_chunk_ids))
+        cited = set(citation_ids)
+        citations_valid = bool(cited) and cited <= context_ids & authoritative & corpus_ids
+        matched_fact_ids = tuple(
+            fact.fact_id
+            for fact in case.expected_facts
+            if cited.intersection(fact.evidence_ids)
+            and adjudicated_text_support(
+                claim.text,
+                fact.text,
+                support_anchor_groups=tuple(
+                    group.alternatives for group in fact.support_anchor_groups
+                ),
+                approved_propositions=fact.approved_propositions,
+            )
+        )
+        supported = citations_valid and bool(matched_fact_ids)
+        assessments.append(
+            FactSupportAssessment(
+                fact_id=f"claim-{ordinal:04d}",
+                supported=supported,
+                rationale=(
+                    "claim_matches_adjudicated_fact_and_authoritative_citation"
+                    if supported
+                    else "claim_lacks_adjudicated_fact_support"
+                ),
+                evidence_chunk_ids=citation_ids,
+            )
+        )
+    return tuple(assessments)
+
+
 def _covered_fact_ids(
     case: EvaluationCase,
     event: ValidatedStreamEvent,
@@ -446,6 +605,36 @@ def _covered_fact_ids(
         fact.fact_id
         for fact in case.expected_facts
         if proven_citation_ids.intersection(fact.evidence_ids)
+    )
+
+
+def _covered_fact_ids_v2(
+    case: EvaluationCaseV2,
+    event: ValidatedStreamEvent,
+    context_ids: set[str],
+    corpus_text_by_chunk_id: Mapping[str, str],
+) -> tuple[str, ...]:
+    if event.kind is not StreamEventKind.ANSWER:
+        return ()
+    authoritative = set(case.authoritative_evidence_ids)
+    corpus_ids = set(corpus_text_by_chunk_id)
+    return tuple(
+        fact.fact_id
+        for fact in case.expected_facts
+        if any(
+            bool(cited := set(claim.citation_chunk_ids))
+            and cited <= context_ids & authoritative & corpus_ids
+            and bool(cited.intersection(fact.evidence_ids))
+            and adjudicated_text_support(
+                claim.text,
+                fact.text,
+                support_anchor_groups=tuple(
+                    group.alternatives for group in fact.support_anchor_groups
+                ),
+                approved_propositions=fact.approved_propositions,
+            )
+            for claim in event.claims
+        )
     )
 
 
@@ -482,6 +671,7 @@ def _visible_output_strings(event: ValidatedStreamEvent) -> tuple[str, ...]:
 
 
 __all__ = [
+    "ADVANCED_SCORING_PIPELINE_VERSION",
     "MAX_CONCISE_CHARACTERS",
     "MAX_REFUSAL_CONCISE_CHARACTERS",
     "SCORING_PIPELINE_VERSION",

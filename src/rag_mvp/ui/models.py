@@ -115,12 +115,15 @@ class ComparisonRender:
     plan_rows: tuple[tuple[Any, ...], ...] = ()
     history_rows: tuple[tuple[Any, ...], ...] = ()
     controlled_rows: tuple[tuple[Any, ...], ...] = ()
+    shared_setup_rows: tuple[tuple[Any, ...], ...] = ()
     candidate_rows: tuple[tuple[Any, ...], ...] = ()
+    comparison_metric_rows: tuple[tuple[Any, ...], ...] = ()
     category_rows: tuple[tuple[Any, ...], ...] = ()
     plot_rows: tuple[tuple[str, str, float], ...] = ()
     artifact_rows: tuple[tuple[Any, ...], ...] = ()
     progress_markdown: str = ""
     gate_markdown: str = ""
+    cache_conclusion_markdown: str = ""
     recommendation_markdown: str = ""
     artifact_links_markdown: str = ""
     status_markdown: str = ""

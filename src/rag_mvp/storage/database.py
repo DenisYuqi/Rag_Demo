@@ -141,6 +141,149 @@ _MIGRATIONS: tuple[str, ...] = (
     CREATE INDEX idx_document_versions_digest
         ON document_versions(source_id, content_digest, derivation_config_digest);
     """,
+    """
+    CREATE TABLE comparison_plans (
+        comparison_id TEXT PRIMARY KEY,
+        plan_id TEXT NOT NULL,
+        plan_content_hash TEXT NOT NULL,
+        axis TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        payload_json TEXT NOT NULL
+    );
+
+    CREATE TABLE comparison_runs (
+        comparison_id TEXT NOT NULL,
+        revision INTEGER NOT NULL CHECK (revision >= 0),
+        status TEXT NOT NULL,
+        recorded_at TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        PRIMARY KEY (comparison_id, revision),
+        FOREIGN KEY (comparison_id) REFERENCES comparison_plans(comparison_id)
+            ON DELETE RESTRICT
+    );
+
+    CREATE TABLE comparison_candidate_bindings (
+        comparison_id TEXT NOT NULL,
+        variant_id TEXT NOT NULL,
+        axis_value TEXT NOT NULL,
+        configuration_id TEXT NOT NULL,
+        evaluation_run_id TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (comparison_id, variant_id),
+        UNIQUE (comparison_id, variant_id, evaluation_run_id),
+        FOREIGN KEY (comparison_id) REFERENCES comparison_plans(comparison_id)
+            ON DELETE RESTRICT,
+        FOREIGN KEY (evaluation_run_id) REFERENCES evaluation_runs(run_id)
+            ON DELETE RESTRICT
+    );
+
+    CREATE TABLE comparison_candidates (
+        comparison_id TEXT NOT NULL,
+        variant_id TEXT NOT NULL,
+        revision INTEGER NOT NULL CHECK (revision >= 0),
+        evaluation_run_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        recorded_at TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        PRIMARY KEY (comparison_id, variant_id, revision),
+        FOREIGN KEY (comparison_id, variant_id, evaluation_run_id)
+            REFERENCES comparison_candidate_bindings(
+                comparison_id, variant_id, evaluation_run_id
+            )
+            ON DELETE RESTRICT
+    );
+
+    CREATE TABLE comparison_results (
+        comparison_id TEXT PRIMARY KEY,
+        plan_content_hash TEXT NOT NULL,
+        result_content_hash TEXT NOT NULL,
+        completed_at TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        FOREIGN KEY (comparison_id) REFERENCES comparison_plans(comparison_id)
+            ON DELETE RESTRICT
+    );
+
+    CREATE TABLE comparison_shared_setup_evidence (
+        comparison_id TEXT PRIMARY KEY,
+        plan_content_hash TEXT NOT NULL,
+        status TEXT NOT NULL,
+        provider_call_count INTEGER NOT NULL CHECK (provider_call_count >= 0),
+        known_partial_cost TEXT NOT NULL,
+        total_cost TEXT,
+        currency TEXT NOT NULL,
+        recorded_at TEXT NOT NULL,
+        evidence_content_hash TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        FOREIGN KEY (comparison_id) REFERENCES comparison_plans(comparison_id)
+            ON DELETE RESTRICT
+    );
+
+    CREATE TABLE comparison_selections (
+        selection_sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+        comparison_id TEXT NOT NULL UNIQUE,
+        axis TEXT NOT NULL,
+        plan_id TEXT NOT NULL,
+        plan_content_hash TEXT NOT NULL,
+        result_content_hash TEXT NOT NULL,
+        selected_variant_id TEXT NOT NULL,
+        selected_axis_value TEXT NOT NULL,
+        selected_configuration_id TEXT NOT NULL,
+        selected_evaluation_run_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        FOREIGN KEY (comparison_id) REFERENCES comparison_results(comparison_id)
+            ON DELETE RESTRICT,
+        FOREIGN KEY (
+            comparison_id, selected_variant_id, selected_evaluation_run_id
+        ) REFERENCES comparison_candidate_bindings(
+            comparison_id, variant_id, evaluation_run_id
+        )
+            ON DELETE RESTRICT
+    );
+
+    CREATE INDEX idx_comparison_plans_plan_id
+        ON comparison_plans(plan_id, created_at);
+    CREATE INDEX idx_comparison_runs_status
+        ON comparison_runs(status, recorded_at);
+    CREATE INDEX idx_comparison_candidates_run
+        ON comparison_candidates(evaluation_run_id, recorded_at);
+    CREATE INDEX idx_comparison_selections_axis
+        ON comparison_selections(axis, selection_sequence DESC);
+    """,
+    """
+    CREATE TABLE comparison_shared_setup_evidence_v5 (
+        comparison_id TEXT PRIMARY KEY,
+        plan_content_hash TEXT NOT NULL,
+        status TEXT NOT NULL,
+        provider_calls_complete INTEGER NOT NULL
+            CHECK (provider_calls_complete IN (0, 1)),
+        provider_call_count INTEGER CHECK (
+            provider_call_count IS NULL OR provider_call_count >= 0
+        ),
+        known_partial_cost TEXT NOT NULL,
+        total_cost TEXT,
+        currency TEXT NOT NULL,
+        recorded_at TEXT NOT NULL,
+        evidence_content_hash TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        FOREIGN KEY (comparison_id) REFERENCES comparison_plans(comparison_id)
+            ON DELETE RESTRICT
+    );
+
+    INSERT INTO comparison_shared_setup_evidence_v5(
+        comparison_id, plan_content_hash, status, provider_calls_complete,
+        provider_call_count, known_partial_cost, total_cost, currency,
+        recorded_at, evidence_content_hash, payload_json
+    )
+    SELECT comparison_id, plan_content_hash, status, 1, provider_call_count,
+           known_partial_cost, total_cost, currency, recorded_at,
+           evidence_content_hash, payload_json
+    FROM comparison_shared_setup_evidence;
+
+    DROP TABLE comparison_shared_setup_evidence;
+    ALTER TABLE comparison_shared_setup_evidence_v5
+        RENAME TO comparison_shared_setup_evidence;
+    """,
 )
 
 SCHEMA_VERSION = len(_MIGRATIONS)

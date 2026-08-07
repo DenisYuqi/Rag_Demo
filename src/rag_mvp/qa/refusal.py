@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import cast
+from types import MappingProxyType
+from typing import Final, cast
 
 from rag_mvp.domain.qa import RefusalReason
 from rag_mvp.domain.retrieval import RankingEvidence
@@ -15,6 +16,13 @@ from rag_mvp.domain.retrieval import RankingEvidence
 LEGACY_REFUSAL_POLICY_VERSION = "normalized-fact-support-v1"
 REFUSAL_POLICY_VERSION = "normalized-fact-support-v2"
 DEFAULT_MINIMUM_SUPPORT_SCORE = 0.55
+PARTIAL_EVIDENCE_MESSAGES: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "en": "Some requested information is not supported by the available evidence.",
+        "zh": "现有证据仅支持请求中的部分信息.",
+        "zh-CN": "现有证据仅支持请求中的部分信息.",
+    }
+)
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$")
 
 

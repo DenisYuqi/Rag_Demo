@@ -6,7 +6,7 @@ import asyncio
 import re
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
 from typing import Annotated, Literal, Protocol
@@ -25,8 +25,32 @@ from rag_mvp.evaluation.artifacts_v2 import (
     artifact_download_filename_v2,
     artifact_media_type_v2,
 )
+from rag_mvp.evaluation.comparison import (
+    ComparisonArtifactManifest,
+    ComparisonCandidateStatus,
+    ComparisonResult,
+    ComparisonStatus,
+)
+from rag_mvp.evaluation.comparison_application import (
+    ComparisonApplicationError,
+    ComparisonArtifactManifestView,
+    ComparisonArtifactStore,
+    ComparisonCapacityError,
+    ComparisonConflictError,
+    ComparisonJobExecutor,
+    ComparisonLaunchCatalog,
+    ComparisonNotFoundError,
+    ComparisonPlanCatalogEntry,
+    ComparisonRunEntry,
+    ComparisonRunStore,
+    ComparisonSummary,
+    ComparisonUnavailableError,
+    ComparisonValidationError,
+    PreparedComparisonLaunch,
+    ResolvedComparisonDownload,
+)
 from rag_mvp.evaluation.dataset import EvaluationDataset
-from rag_mvp.evaluation.json_report import decode_json_report
+from rag_mvp.evaluation.json_report import canonical_json_value, decode_json_report
 from rag_mvp.evaluation.plan import (
     EvaluationDatasetRegistry,
     EvaluationPlanError,
@@ -42,6 +66,7 @@ from rag_mvp.evaluation.runner import (
 STANDARD_EVALUATION_PLAN_ID: Literal["standard-evaluation-v1"] = "standard-evaluation-v1"
 STANDARD_EVALUATION_PLAN_VERSION: Literal["1.0.0"] = "1.0.0"
 _SAFE_ERROR_CODE = re.compile(r"^[a-z][a-z0-9_.-]{0,63}$")
+_SAFE_COMPARISON_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$")
 _TERMINAL_STATUSES = frozenset(
     {
         EvaluationRunStatus.COMPLETED,
@@ -291,6 +316,10 @@ def _default_run_id() -> str:
     return f"eval_{uuid4().hex}"
 
 
+def _default_comparison_id() -> str:
+    return f"comparison_{uuid4().hex}"
+
+
 @dataclass(slots=True)
 class EvaluationApplicationService:
     """One application boundary shared by API, workbench, CLI, and acceptance flows."""
@@ -310,6 +339,14 @@ class EvaluationApplicationService:
         default=None,
         repr=False,
     )
+    comparison_catalog: ComparisonLaunchCatalog | None = None
+    comparison_repository: ComparisonRunStore | None = None
+    comparison_executor: ComparisonJobExecutor | None = None
+    comparison_artifact_store: ComparisonArtifactStore | None = None
+    comparison_id_factory: Callable[[], str] = field(
+        default=_default_comparison_id,
+        repr=False,
+    )
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
     _tasks: dict[str, asyncio.Task[None]] = field(default_factory=dict, init=False, repr=False)
     _launches: dict[tuple[str, str, str, str], str] = field(
@@ -317,6 +354,7 @@ class EvaluationApplicationService:
         init=False,
         repr=False,
     )
+    _comparison_launches: dict[str, str] = field(default_factory=dict, init=False, repr=False)
     _accepting: bool = field(default=False, init=False, repr=False)
     _reconciled: bool = field(default=False, init=False, repr=False)
 
@@ -326,6 +364,15 @@ class EvaluationApplicationService:
             raise ValueError("evaluation_active_limit_invalid")
         if not 0 <= self.shutdown_grace_seconds <= 10:
             raise ValueError("evaluation_shutdown_grace_invalid")
+        configured = (
+            self.comparison_catalog,
+            self.comparison_repository,
+            self.comparison_executor,
+        )
+        if any(item is not None for item in configured) and any(
+            item is None for item in configured
+        ):
+            raise ValueError("comparison_service_configuration_incomplete")
 
     async def startup(self) -> None:
         """Reconcile work whose provider outcome became unknowable after a restart."""
@@ -345,6 +392,46 @@ class EvaluationApplicationService:
                                 safe_error_code="evaluation_interrupted",
                             )
                         )
+                if self.comparison_repository is not None:
+                    for suite in self.comparison_repository.list():
+                        if suite.status in {
+                            ComparisonStatus.QUEUED,
+                            ComparisonStatus.RUNNING,
+                        }:
+                            for history in suite.candidates:
+                                if history.latest.status in {
+                                    ComparisonCandidateStatus.COMPLETED,
+                                    ComparisonCandidateStatus.FAILED,
+                                    ComparisonCandidateStatus.INTERRUPTED,
+                                }:
+                                    continue
+                                latest = history.latest
+                                suite = suite.transition_candidate(
+                                    history.reference.variant_id,
+                                    status=ComparisonCandidateStatus.INTERRUPTED,
+                                    completed_cases=latest.completed_cases,
+                                    failed_cases=latest.failed_cases,
+                                    provider_calls=latest.provider_calls,
+                                    incurred_cost=latest.incurred_cost,
+                                    known_partial_cost=latest.known_partial_cost,
+                                    cost_complete=latest.cost_complete,
+                                    cost_unknown_reasons=latest.cost_unknown_reasons,
+                                    currency=latest.currency,
+                                    safe_error_code="comparison-interrupted",
+                                    recorded_at=max(
+                                        self.clock(),
+                                        suite.updated_at + timedelta(microseconds=1),
+                                    ),
+                                )
+                                self.comparison_repository.append(suite)
+                            suite = suite.fail(
+                                "comparison-interrupted",
+                                recorded_at=max(
+                                    self.clock(),
+                                    suite.updated_at + timedelta(microseconds=1),
+                                ),
+                            )
+                            self.comparison_repository.append(suite)
                 self._reconciled = True
             self._accepting = True
 
@@ -408,6 +495,169 @@ class EvaluationApplicationService:
             for item in self.datasets()
         )
 
+    def comparison_plans(self) -> tuple[ComparisonPlanCatalogEntry, ...]:
+        if self.comparison_catalog is None:
+            return ()
+        try:
+            return tuple(self.comparison_catalog.list())
+        except Exception as error:
+            code = _safe_code(
+                getattr(error, "code", None),
+                "comparison_catalog_unavailable",
+            )
+            raise ComparisonUnavailableError(code) from None
+
+    async def start_comparison(self, experiment_plan_id: str) -> ComparisonRunEntry:
+        if (
+            not isinstance(experiment_plan_id, str)
+            or _SAFE_COMPARISON_ID.fullmatch(experiment_plan_id) is None
+        ):
+            raise ComparisonValidationError("comparison_plan_invalid")
+        catalog = self.comparison_catalog
+        repository = self.comparison_repository
+        executor = self.comparison_executor
+        if catalog is None or repository is None or executor is None:
+            raise ComparisonUnavailableError("comparison_unavailable")
+        async with self._lock:
+            if not self._accepting:
+                raise ComparisonUnavailableError("comparison_unavailable")
+            if experiment_plan_id in self._comparison_launches:
+                raise ComparisonConflictError("comparison_duplicate")
+            if len(self._tasks) >= self.maximum_active_jobs:
+                raise ComparisonCapacityError("comparison_capacity")
+            comparison_id = self.comparison_id_factory()
+            if (
+                not isinstance(comparison_id, str)
+                or _SAFE_COMPARISON_ID.fullmatch(comparison_id) is None
+            ):
+                raise ComparisonUnavailableError("comparison_id_invalid")
+            try:
+                launch = catalog.prepare(comparison_id, experiment_plan_id)
+            except ComparisonApplicationError:
+                raise
+            except Exception as error:
+                raise _comparison_start_error(error, phase="catalog") from None
+            if (
+                not isinstance(launch, PreparedComparisonLaunch)
+                or launch.suite.comparison_id != comparison_id
+                or launch.suite.plan.plan_id != experiment_plan_id
+            ):
+                raise ComparisonValidationError("comparison_plan_invalid")
+            try:
+                repository.create(launch.suite, launch.evaluation_runs)
+            except ComparisonApplicationError:
+                raise
+            except Exception as error:
+                raise _comparison_start_error(error, phase="repository") from None
+            task_key = f"comparison:{comparison_id}"
+            task = asyncio.create_task(
+                self._execute_comparison(launch, experiment_plan_id, task_key),
+                name=f"comparison-{comparison_id}",
+            )
+            self._tasks[task_key] = task
+            self._comparison_launches[experiment_plan_id] = comparison_id
+            return ComparisonRunEntry.from_suite(
+                launch.suite,
+                repository.get_shared_setup(comparison_id),
+            )
+
+    def get_comparison(self, comparison_id: str) -> ComparisonRunEntry | None:
+        repository = self.comparison_repository
+        if repository is None:
+            return None
+        suite = repository.get(comparison_id)
+        return (
+            None
+            if suite is None
+            else ComparisonRunEntry.from_suite(
+                suite,
+                repository.get_shared_setup(comparison_id),
+            )
+        )
+
+    def list_comparisons(self) -> tuple[ComparisonRunEntry, ...]:
+        repository = self.comparison_repository
+        if repository is None:
+            return ()
+        return tuple(
+            ComparisonRunEntry.from_suite(
+                item,
+                repository.get_shared_setup(item.comparison_id),
+            )
+            for item in repository.list()
+        )
+
+    def comparison_summary(self, comparison_id: str) -> ComparisonSummary | None:
+        repository = self.comparison_repository
+        if repository is None:
+            return None
+        suite = repository.get(comparison_id)
+        if suite is None:
+            return None
+        result = repository.get_result(comparison_id)
+        shared_setup = repository.get_shared_setup(comparison_id)
+        return ComparisonSummary.from_evidence(suite, result, shared_setup)
+
+    def comparison_manifest(
+        self,
+        comparison_id: str,
+    ) -> ComparisonArtifactManifestView | None:
+        repository = self.comparison_repository
+        store = self.comparison_artifact_store
+        if repository is None or store is None:
+            return None
+        suite = repository.get(comparison_id)
+        if suite is None or suite.status is not ComparisonStatus.COMPLETED:
+            return None
+        result = repository.get_result(comparison_id)
+        if result is None:
+            return None
+        ComparisonSummary.from_evidence(
+            suite,
+            result,
+            repository.get_shared_setup(comparison_id),
+        )
+        manifest = store.manifest(comparison_id)
+        if manifest is None:
+            return None
+        if (
+            manifest.comparison_id != suite.comparison_id
+            or manifest.plan_id != suite.plan.plan_id
+            or manifest.plan_content_hash != suite.plan_content_hash
+            or manifest.candidate_variant_ids
+            != tuple(item.reference.variant_id for item in suite.candidates)
+        ):
+            raise ComparisonApplicationError("comparison_artifact_identity_failed")
+        _validate_comparison_result_artifact(store, manifest, result)
+        return ComparisonArtifactManifestView.from_manifest(manifest)
+
+    def comparison_artifact(
+        self,
+        comparison_id: str,
+        artifact_id: str,
+    ) -> ResolvedComparisonDownload | None:
+        store = self.comparison_artifact_store
+        manifest = self.comparison_manifest(comparison_id)
+        if store is None or manifest is None:
+            return None
+        descriptor = next(
+            (item for item in manifest.artifacts if item.artifact_id == artifact_id),
+            None,
+        )
+        if descriptor is None:
+            return None
+        resolved = store.resolve(comparison_id, artifact_id)
+        if resolved is None or (
+            resolved.descriptor.artifact_id != descriptor.artifact_id
+            or resolved.descriptor.schema_version != descriptor.schema_version
+            or resolved.descriptor.format != descriptor.format
+            or resolved.descriptor.media_type != descriptor.media_type
+            or resolved.descriptor.sha256_digest != descriptor.sha256_digest
+            or resolved.descriptor.byte_size != descriptor.byte_size
+        ):
+            raise ComparisonApplicationError("comparison_artifact_integrity_failed")
+        return ResolvedComparisonDownload.from_resolved(resolved)
+
     async def start(
         self,
         dataset_id: str,
@@ -425,7 +675,7 @@ class EvaluationApplicationService:
             dataset.manifest.dataset_id,
             dataset.manifest.version,
             plan_id,
-            self.settings.configuration_identity,
+            self.settings.evaluation_configuration_identity,
         )
         async with self._lock:
             if not self._accepting:
@@ -675,6 +925,76 @@ class EvaluationApplicationService:
             await asyncio.shield(task)
         return self.get(run_id)
 
+    async def wait_comparison(self, comparison_id: str) -> ComparisonRunEntry | None:
+        """CLI/test coordination for one already admitted comparison."""
+
+        async with self._lock:
+            task = self._tasks.get(f"comparison:{comparison_id}")
+        if task is not None:
+            await asyncio.shield(task)
+        return self.get_comparison(comparison_id)
+
+    async def _execute_comparison(
+        self,
+        launch: PreparedComparisonLaunch,
+        plan_id: str,
+        task_key: str,
+    ) -> None:
+        repository = self.comparison_repository
+        executor = self.comparison_executor
+        comparison_id = launch.suite.comparison_id
+        try:
+            if repository is None or executor is None:
+                raise ComparisonUnavailableError("comparison_unavailable")
+            await executor.execute(launch)
+            suite = repository.get(comparison_id)
+            if suite is None or suite.status not in {
+                ComparisonStatus.COMPLETED,
+                ComparisonStatus.FAILED,
+                ComparisonStatus.INVALID,
+            }:
+                self._fail_comparison(comparison_id, "comparison-execution-incomplete")
+        except asyncio.CancelledError:
+            self._fail_comparison(comparison_id, "comparison-interrupted")
+            raise
+        except Exception as error:
+            self._fail_comparison(
+                comparison_id,
+                _safe_code(
+                    getattr(error, "code", None),
+                    "comparison-execution-failed",
+                ),
+            )
+        finally:
+            async with self._lock:
+                self._tasks.pop(task_key, None)
+                if self._comparison_launches.get(plan_id) == comparison_id:
+                    self._comparison_launches.pop(plan_id, None)
+
+    def _fail_comparison(self, comparison_id: str, code: str) -> None:
+        repository = self.comparison_repository
+        if repository is None:
+            return
+        suite = repository.get(comparison_id)
+        if suite is None or suite.status in {
+            ComparisonStatus.FAILED,
+            ComparisonStatus.INVALID,
+        }:
+            return
+        if suite.status is ComparisonStatus.COMPLETED and not code.startswith(
+            ("aggregation-", "artifact-", "integrity-", "publication-", "result-")
+        ):
+            code = "result-finalization-failed"
+        repository.append(
+            suite.fail(
+                code,
+                recorded_at=max(
+                    self.clock(),
+                    suite.updated_at + timedelta(microseconds=1),
+                ),
+            )
+        )
+
     async def _execute(
         self,
         plan: EvaluationRunPlan,
@@ -734,6 +1054,60 @@ def _updated_run(
 
 def _safe_code(value: object, fallback: str) -> str:
     return value if isinstance(value, str) and _SAFE_ERROR_CODE.fullmatch(value) else fallback
+
+
+def _comparison_start_error(
+    error: Exception,
+    *,
+    phase: Literal["catalog", "repository"],
+) -> ComparisonApplicationError:
+    code = _safe_code(
+        getattr(error, "code", None),
+        "comparison_start_invalid" if phase == "catalog" else "comparison_persistence_failed",
+    )
+    if type(error).__name__ == "RepositoryConflict":
+        return ComparisonConflictError("comparison_duplicate")
+    if code in {"comparison_plan_not_found", "comparison_not_found"}:
+        return ComparisonNotFoundError("comparison_plan_not_found")
+    if code == "comparison_capacity":
+        return ComparisonCapacityError(code)
+    if (
+        code.endswith(("_missing", "_unknown", "_disabled", "_blocked"))
+        or "_prerequisite_" in code
+        or code == "comparison_registered_dataset_identity_mismatch"
+    ):
+        return ComparisonConflictError(code)
+    if (
+        code.endswith("_unavailable")
+        or code in {"comparison_persistence_failed", "comparison_start_unavailable"}
+        or (phase == "catalog" and code == "comparison_start_invalid")
+    ):
+        return ComparisonUnavailableError(code)
+    return ComparisonValidationError(code)
+
+
+def _validate_comparison_result_artifact(
+    store: ComparisonArtifactStore,
+    manifest: ComparisonArtifactManifest,
+    result: ComparisonResult,
+) -> None:
+    descriptor = next(
+        (item for item in manifest.artifacts if item.artifact_id == "comparison-report-json"),
+        None,
+    )
+    if descriptor is None:
+        raise ComparisonApplicationError("comparison_artifact_integrity_failed")
+    try:
+        resolved = store.resolve(manifest.comparison_id, descriptor.artifact_id)
+        if resolved is None or resolved.descriptor != descriptor:
+            raise ValueError("comparison_artifact_descriptor_mismatch")
+        document = decode_json_report(resolved.content.decode("utf-8"))
+        persisted = ComparisonResult.model_validate(document)
+        canonical = (canonical_json_value(persisted.model_dump(mode="json")) + "\n").encode("utf-8")
+        if persisted != result or resolved.content != canonical:
+            raise ValueError("comparison_result_artifact_mismatch")
+    except (UnicodeError, ValueError):
+        raise ComparisonApplicationError("comparison_artifact_integrity_failed") from None
 
 
 def _validated_report_document(
@@ -803,6 +1177,12 @@ class CallableEvaluationJobExecutor:
 __all__ = [
     "STANDARD_EVALUATION_PLAN_ID",
     "CallableEvaluationJobExecutor",
+    "ComparisonApplicationError",
+    "ComparisonCapacityError",
+    "ComparisonConflictError",
+    "ComparisonNotFoundError",
+    "ComparisonUnavailableError",
+    "ComparisonValidationError",
     "EvaluationApplicationError",
     "EvaluationApplicationService",
     "EvaluationArtifactDescriptor",

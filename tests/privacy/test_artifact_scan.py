@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import base64
+import csv
+import hashlib
+import html
 import json
 import shutil
+from io import StringIO
 from pathlib import Path
 
 import pytest
@@ -14,6 +19,29 @@ pytestmark = pytest.mark.privacy
 _REPOSITORY_ROOT = Path(__file__).parents[2]
 _FIXTURE_PATH = _REPOSITORY_ROOT / "evaluations" / "privacy" / "supported-fixtures-v1.json"
 _EXPECTED_REPORT_FIELDS = {"version", "hash", "categories", "files", "counts", "passed"}
+_COMPARISON_CSV_HEADER = (
+    "record_type",
+    "canonical_json_sha256",
+    "canonical_json",
+    "candidate_id",
+    "candidate_status",
+    "evidence_status",
+    "safe_error_code",
+    "axis_value",
+    "known_partial_cost",
+    "total_cost",
+    "cost_complete",
+    "cost_unknown_reasons",
+    "currency",
+    "metric_id",
+    "unit",
+    "value",
+    "numerator",
+    "denominator",
+    "baseline_delta",
+    "status",
+    "gate_status",
+)
 
 
 @pytest.fixture(scope="module")
@@ -34,6 +62,81 @@ def _run_scan(
 
 def _raw_fixture_artifact(fixture_set: FixtureSet) -> str:
     return "\n".join(f"acceptance_fixture={fixture.value}" for fixture in fixture_set.fixtures)
+
+
+def _write_real_float_comparison_reports(
+    root: Path,
+    *,
+    canonical_note: str | None = None,
+) -> None:
+    root.mkdir()
+    metric = {
+        "baseline_delta": -3.45700000123456,
+        "denominator": 500,
+        "gate_status": "passed",
+        "metric_id": "latency-p90-ms",
+        "numerator": 17.07899999746587,
+        "status": "available",
+        "unit": "ms",
+        "value": 17.07899999746587,
+    }
+    candidate: dict[str, object] = {
+        "cost_complete": True,
+        "cost_unknown_reasons": [],
+        "currency": "USD",
+        "evidence_status": "available",
+        "known_partial_cost": "0.02149750",
+        "metrics": [metric],
+        "reference": {"axis_value": "gpt-5.4", "variant_id": "variant-gpt"},
+        "safe_error_code": None,
+        "status": "completed",
+        "total_cost": "0.02149750",
+    }
+    payload: dict[str, object] = {
+        "candidates": [candidate],
+        "comparison_id": "comparison-real-float",
+    }
+    if canonical_note is not None:
+        payload["safe_note"] = canonical_note
+    canonical = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    digest = f"sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
+    (root / "comparison-report.json").write_text(f"{canonical}\n", encoding="utf-8")
+
+    html_row = (
+        "<tr><td>variant-gpt</td><td>completed</td><td>available</td>"
+        "<td>0.02149750</td><td>0.02149750</td><td>true</td><td></td>"
+        "<td>USD</td><td>latency-p90-ms</td><td>ms</td>"
+        "<td>17.07899999746587</td><td>500</td><td>-3.45700000123456</td>"
+        "<td>available</td><td>passed</td></tr>"
+    )
+    encoded = base64.b64encode(canonical.encode("utf-8")).decode("ascii")
+    html_report = (
+        '<!doctype html><html><body><pre id="comparison-result-visible">'
+        f"{html.escape(canonical)}</pre>"
+        '<script id="comparison-result-json" type="application/json" '
+        f'data-encoding="base64">{encoded}</script>'
+        f"<table><tbody>{html_row}</tbody></table></body></html>\n"
+    )
+    (root / "comparison-report.html").write_text(html_report, encoding="utf-8")
+
+    text_row = (
+        "variant-gpt|completed|available||gpt-5.4|0.02149750|0.02149750|"
+        "true||USD|latency-p90-ms|ms|17.07899999746587|17.07899999746587|"
+        "500|-3.45700000123456|available|passed"
+    )
+    text_report = (
+        "comparison-report-text-v1\n"
+        f"canonical-json-sha256={digest}\ncanonical-json={canonical}\n"
+        f"candidate-metrics:\n{text_row}\n"
+    )
+    (root / "comparison-report.txt").write_text(text_report, encoding="utf-8")
+
+    stream = StringIO(newline="")
+    writer = csv.writer(stream, lineterminator="\n")
+    writer.writerow(_COMPARISON_CSV_HEADER)
+    writer.writerow(("comparison-result", digest, canonical, *("",) * 18))
+    writer.writerow(("candidate-metric", "", "", *text_row.split("|")))
+    (root / "comparison-report.csv").write_text(stream.getvalue(), encoding="utf-8")
 
 
 def test_raw_fixture_artifact_fails_without_disclosing_matches(
@@ -247,3 +350,63 @@ def test_prometheus_label_values_remain_fail_safe(
     detector_categories = categories["detector"]
     assert isinstance(detector_categories, dict)
     assert detector_categories["phone"] == 1
+
+
+def test_comparison_projections_ignore_only_real_typed_numeric_evidence(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    reports = tmp_path / "comparison"
+    _write_real_float_comparison_reports(reports)
+
+    exit_code, report, _ = _run_scan(capsys, str(reports))
+
+    assert exit_code == 0
+    assert report["passed"] is True
+    counts = report["counts"]
+    assert isinstance(counts, dict)
+    assert counts == {
+        "targets": 1,
+        "scanned": 4,
+        "matched": 0,
+        "excluded": 0,
+        "fixture_matches": 0,
+        "detector_matches": 0,
+        "errors": 0,
+    }
+
+
+@pytest.mark.parametrize(
+    ("artifact_name", "unsafe_value", "in_canonical"),
+    [
+        ("comparison-report.html", "projection.audit@example.invalid", True),
+        ("comparison-report.html", "sk-projection-unsafe-0123456789abcdef", False),
+        ("comparison-report.txt", r"D:\private\comparison-report.json", False),
+        ("comparison-report.csv", "4242424242424242", False),
+    ],
+)
+def test_comparison_projection_strings_and_noncanonical_text_remain_fail_safe(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    artifact_name: str,
+    unsafe_value: str,
+    in_canonical: bool,
+) -> None:
+    reports = tmp_path / "comparison"
+    _write_real_float_comparison_reports(
+        reports,
+        canonical_note=unsafe_value if in_canonical else None,
+    )
+    if not in_canonical:
+        with (reports / artifact_name).open("a", encoding="utf-8", newline="") as stream:
+            stream.write(f"\n{unsafe_value}\n")
+
+    exit_code, report, output = _run_scan(capsys, str(reports))
+
+    assert exit_code == 1
+    assert report["passed"] is False
+    counts = report["counts"]
+    assert isinstance(counts, dict)
+    assert counts["matched"] >= 1
+    assert counts["fixture_matches"] + counts["detector_matches"] >= 1
+    assert unsafe_value not in output

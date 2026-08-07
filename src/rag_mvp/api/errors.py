@@ -43,7 +43,14 @@ class ApiError(Exception):
 
 def _response(status_code: int, code: str) -> JSONResponse:
     body = ApiErrorResponse(error=ApiErrorDetail(code=code))
-    return JSONResponse(status_code=status_code, content=body.model_dump(mode="json"))
+    return JSONResponse(
+        status_code=status_code,
+        content=body.model_dump(mode="json"),
+        headers={
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 def install_error_handlers(app: FastAPI) -> None:

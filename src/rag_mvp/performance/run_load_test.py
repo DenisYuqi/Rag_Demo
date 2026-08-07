@@ -25,8 +25,11 @@ from rag_mvp.performance.load_test import (
     LoadScenario,
 )
 from rag_mvp.performance.pricing import (
+    OPENAI_COMPARISON_PRICING_VERSION,
     PerformancePricingEvidence,
+    PricingPreflightError,
     calculate_performance_cost,
+    preflight_openai_comparison_pricing,
 )
 
 
@@ -160,8 +163,11 @@ def _load_pricing(pricing_path: Path | None) -> PerformancePricingEvidence:
         raise ValueError("pricing evidence is required before acceptance traffic")
     raw = _load_json(pricing_path)
     try:
-        return PerformancePricingEvidence.model_validate(raw)
-    except ValidationError:
+        pricing = PerformancePricingEvidence.model_validate(raw)
+        if pricing.pricing_version == OPENAI_COMPARISON_PRICING_VERSION:
+            preflight_openai_comparison_pricing(pricing)
+        return pricing
+    except (PricingPreflightError, ValidationError):
         raise ValueError("pricing evidence does not match the safe contract") from None
 
 

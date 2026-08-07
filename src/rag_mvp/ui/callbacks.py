@@ -18,6 +18,14 @@ from rag_mvp.domain.retrieval import RetrievalMode
 from rag_mvp.safety.output import redact_output
 from rag_mvp.safety.redactor import Redactor
 
+from .comparison_dashboard import (
+    ComparisonDashboardError,
+    comparison_id,
+    render_comparison_dashboard,
+    resolve_registered_comparison_plan,
+    supports_comparison_dashboard,
+    with_comparison_status,
+)
 from .evaluation_dashboard import (
     EvaluationDashboardError,
     render_evaluation_dashboard,
@@ -28,6 +36,7 @@ from .evaluation_dashboard import (
 from .models import (
     BrowserSessionState,
     ChatRender,
+    ComparisonRender,
     DiagnosticsRender,
     DocumentsRender,
     EvaluationRender,
@@ -488,6 +497,102 @@ class WorkbenchCallbacks:
             return EvaluationRender((), (), "", "Runs are incompatible. / 运行不兼容。", current)
         except Exception:
             return EvaluationRender((), (), "", SAFE_UI_ERROR, current)
+
+    async def start_registered_comparison(
+        self,
+        selected_plan_id: str | None,
+        state: BrowserSessionState | None,
+    ) -> ComparisonRender:
+        """Launch only a current server-registered plan on an explicit click."""
+
+        current = _state(state)
+        service = self.services.evaluations
+        if service is None or not supports_comparison_dashboard(service):
+            return ComparisonRender(state=current, status_markdown=SAFE_UNAVAILABLE)
+        try:
+            plan_id = resolve_registered_comparison_plan(service, selected_plan_id)
+            started = await service.start_comparison(plan_id)
+            run_id = comparison_id(started)
+            rendered = render_comparison_dashboard(
+                service,
+                redactor=cast(Redactor, self.services.redactor),
+                state=current.with_comparison(run_id),
+                selected_plan_id=plan_id,
+                selected_comparison_id=run_id,
+            )
+            return with_comparison_status(
+                rendered,
+                f"Comparison queued in the background. / 对比已进入后台队列。 "
+                f"Comparison: `{run_id}`",
+            )
+        except ComparisonDashboardError:
+            status = (
+                "Select a valid registered experiment plan. / "
+                "请选择有效的已注册实验计划。"
+            )
+        except Exception as error:
+            code = getattr(error, "code", None)
+            if code == "comparison_duplicate":
+                status = "This comparison plan is already active. / 该对比计划已在运行。"
+            elif code == "comparison_capacity":
+                status = (
+                    "Comparison capacity is full; retry after active work finishes. / "
+                    "对比容量已满, 请在当前任务结束后重试。"
+                )
+            elif code in {"comparison_cost_cap", "comparison_plan_invalid"}:
+                status = (
+                    "The registered plan failed safe launch validation. / "
+                    "已注册计划未通过安全启动验证。"
+                )
+            else:
+                status = SAFE_UI_ERROR
+        try:
+            rendered = render_comparison_dashboard(
+                service,
+                redactor=cast(Redactor, self.services.redactor),
+                state=current,
+                selected_plan_id=selected_plan_id,
+            )
+        except Exception:
+            return ComparisonRender(state=current, status_markdown=status)
+        return with_comparison_status(rendered, status)
+
+    def preview_comparison(
+        self,
+        selected_plan_id: str | None,
+        selected_comparison_id: str | None,
+        state: BrowserSessionState | None,
+    ) -> ComparisonRender:
+        return self.refresh_comparisons(
+            state,
+            selected_plan_id=selected_plan_id,
+            selected_comparison_id=selected_comparison_id,
+        )
+
+    def refresh_comparisons(
+        self,
+        state: BrowserSessionState | None,
+        *,
+        selected_plan_id: str | None = None,
+        selected_comparison_id: str | None = None,
+    ) -> ComparisonRender:
+        current = _state(state)
+        service = self.services.evaluations
+        if service is None or not supports_comparison_dashboard(service):
+            return ComparisonRender(state=current, status_markdown=SAFE_UNAVAILABLE)
+        try:
+            redactor = self.services.redactor
+            if redactor is None:
+                raise ComparisonDashboardError("comparison_redaction_unavailable")
+            return render_comparison_dashboard(
+                service,
+                redactor=redactor,
+                state=current,
+                selected_plan_id=selected_plan_id,
+                selected_comparison_id=selected_comparison_id,
+            )
+        except Exception:
+            return ComparisonRender(state=current, status_markdown=SAFE_UI_ERROR)
 
     def refresh_health(self) -> DiagnosticsRender:
         service = self.services.diagnostics

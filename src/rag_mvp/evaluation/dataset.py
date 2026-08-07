@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import unicodedata
 from collections import Counter
 from enum import StrEnum
@@ -30,6 +31,69 @@ DATASET_SCHEMA_VERSION_V2 = "rag-evaluation-dataset-v2"
 CORPUS_SCHEMA_VERSION_V2 = "rag-evaluation-corpus-v2"
 SOURCE_MANIFEST_SCHEMA_VERSION_V2 = "rag-evaluation-source-manifest-v2"
 HASH_ALGORITHM = "sha256-canonical-json-v1"
+EXPECTED_FACT_SUPPORT_CONTRACT_VERSION: Literal["expected-fact-support-anchors-v1"] = (
+    "expected-fact-support-anchors-v1"
+)
+
+_ANCHOR_WORD = re.compile(r"[a-z0-9]+(?:[-_/][a-z0-9]+)*|[\u3400-\u4dbf\u4e00-\u9fff]+")
+_TRIVIAL_SUPPORT_ANCHORS = frozenset(
+    {
+        "a",
+        "an",
+        "and",
+        "are",
+        "as",
+        "at",
+        "be",
+        "for",
+        "in",
+        "is",
+        "may",
+        "of",
+        "on",
+        "or",
+        "the",
+        "to",
+        "use",
+        "with",
+        "与",
+        "了",
+        "和",
+        "在",
+        "是",
+        "的",
+    }
+)
+_TRUSTED_APPROVED_PROPOSITION_PARAPHRASES: dict[str, tuple[str, ...]] = {
+    "accept-en-001-fact-1": (
+        "Use OPS-RAG-7421 as the authoritative escalation code.",
+        "The authoritative RAG escalation code is `OPS-RAG-7421`.",
+    ),
+    "accept-en-002-fact-1": ("One atomic revision switch activates the validated index.",),
+    "accept-en-004-fact-1": ("The production query endpoint is `POST /v2/knowledge/query`.",),
+    "accept-en-004-fact-2": (
+        "No more than 12 chunks may be selected.",
+        "The context builder may select at most 12 chunks.",
+    ),
+    "accept-en-005-fact-2": ("Submit the expense form within 30 calendar days.",),
+    "accept-en-007-fact-1": ("The stable specification identifier is `SPEC-ATLAS-2026-08`.",),
+    "accept-en-012-fact-1": ("The RAG Operations Desk is responsible for escalation.",),
+    "accept-zh-001-fact-1": ("权威的 RAG 升级代码是 `OPS-RAG-7421`。",),
+    "accept-zh-003-fact-1": (
+        "现行权威上限是人民币 1,800 元。",
+        "境内航班经济舱票价报销上限为人民币 1,800 元。",
+        "当前有效政策规定\N{FULLWIDTH COMMA}境内航班经济舱票价报销上限为人民币 1,800 元。",
+    ),
+    "accept-zh-004-fact-1": (
+        "新索引在完成校验后通过一次原子操作切换活动修订。",
+        "新索引完成校验后, 通过一次原子操作切换为活动修订。",
+    ),
+    "accept-zh-008-fact-1": (
+        "索引标识必须以 idx_ 前缀开头。",
+        "索引修订标识必须以前缀 `idx_` 开头。",
+    ),
+    "accept-zh-012-fact-1": ("RAG Operations Desk 负责升级事务。",),
+}
 
 type SemanticVersion = Annotated[
     str,
@@ -141,6 +205,41 @@ def _require_unique(values: tuple[object, ...], *, label: str) -> None:
         raise ValueError(f"{label} must be unique")
 
 
+def _support_anchor_is_meaningful(value: str) -> bool:
+    normalized = unicodedata.normalize("NFKC", value).casefold().strip()
+    words = tuple(_ANCHOR_WORD.findall(normalized))
+    return bool(words) and any(word not in _TRIVIAL_SUPPORT_ANCHORS for word in words)
+
+
+def _support_anchor_is_evidenced(fact_text: str, value: str) -> bool:
+    anchor = unicodedata.normalize("NFKC", value).casefold().strip()
+    if re.search(r"[\u3400-\u4dbf\u4e00-\u9fff]", anchor) is not None:
+        return anchor in fact_text
+    return re.search(rf"(?<![a-z0-9]){re.escape(anchor)}(?![a-z0-9])", fact_text) is not None
+
+
+def _normalized_support_surface(value: str) -> str:
+    return " ".join(unicodedata.normalize("NFKC", value).casefold().split())
+
+
+def _support_anchor_occurs(surface: str, value: str) -> bool:
+    anchor = _normalized_support_surface(value)
+    if re.search(r"[\u3400-\u4dbf\u4e00-\u9fff]", anchor) is not None:
+        return anchor in surface
+    return re.search(rf"(?<![a-z0-9]){re.escape(anchor)}(?![a-z0-9])", surface) is not None
+
+
+def _support_word_is_approved(word: str, approved_words: set[str]) -> bool:
+    if word in _TRIVIAL_SUPPORT_ANCHORS or word in approved_words:
+        return True
+    return any(
+        len(word) >= 5
+        and len(approved) >= 5
+        and (word.startswith(approved) or approved.startswith(word))
+        for approved in approved_words
+    )
+
+
 def _validate_relative_path(value: str) -> str:
     candidate = PurePosixPath(value)
     if (
@@ -172,6 +271,113 @@ class ExpectedFact(DomainModel):
     def evidence_ids_are_unique(cls, value: tuple[str, ...]) -> tuple[str, ...]:
         _require_unique(value, label="expected-fact evidence IDs")
         return value
+
+
+class SupportAnchorGroup(DomainModel):
+    """One required semantic anchor with explicitly accepted alternatives."""
+
+    group_id: Identifier
+    alternatives: Annotated[tuple[NonEmptyText, ...], Field(min_length=1, max_length=16)]
+
+    @field_validator("alternatives")
+    @classmethod
+    def alternatives_are_unique(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        normalized = tuple(unicodedata.normalize("NFKC", item).casefold() for item in value)
+        _require_unique(normalized, label="support-anchor alternatives")
+        return value
+
+
+class ExpectedFactV2(ExpectedFact):
+    """V2 fact with an auditable, deterministic semantic-support contract."""
+
+    support_contract_version: Literal["expected-fact-support-anchors-v1"] = (
+        EXPECTED_FACT_SUPPORT_CONTRACT_VERSION
+    )
+    support_anchor_groups: Annotated[tuple[SupportAnchorGroup, ...], Field(min_length=1)]
+    approved_propositions: Annotated[tuple[NonEmptyText, ...], Field(min_length=1)]
+
+    @field_validator("support_anchor_groups")
+    @classmethod
+    def anchor_groups_are_unique(
+        cls,
+        value: tuple[SupportAnchorGroup, ...],
+    ) -> tuple[SupportAnchorGroup, ...]:
+        _require_unique(
+            tuple(group.group_id for group in value),
+            label="support-anchor group IDs",
+        )
+        return value
+
+    @model_validator(mode="after")
+    def anchor_groups_are_grounded_in_fact_text(self) -> ExpectedFactV2:
+        fact_text = unicodedata.normalize("NFKC", self.text).casefold()
+        for group in self.support_anchor_groups:
+            if any(not _support_anchor_is_meaningful(item) for item in group.alternatives):
+                raise ValueError("support-anchor alternatives must be semantically meaningful")
+            if not any(
+                _support_anchor_is_evidenced(fact_text, item) for item in group.alternatives
+            ):
+                raise ValueError("every support-anchor group must be evidenced in fact text")
+        normalized_fact = _normalized_support_surface(self.text)
+        propositions = tuple(
+            _normalized_support_surface(proposition) for proposition in self.approved_propositions
+        )
+        _require_unique(propositions, label="approved support propositions")
+        if normalized_fact not in propositions:
+            raise ValueError("approved support propositions must include the exact fact text")
+        trusted_catalog = tuple(
+            _normalized_support_surface(proposition)
+            for proposition in _TRUSTED_APPROVED_PROPOSITION_PARAPHRASES.get(
+                self.fact_id,
+                (),
+            )
+        )
+        trusted_propositions = {normalized_fact, *trusted_catalog}
+        if any(proposition not in trusted_propositions for proposition in propositions):
+            raise ValueError(
+                "approved proposition is not in the trusted directional surface catalog"
+            )
+
+        approved_text = " ".join(
+            (
+                normalized_fact,
+                *trusted_catalog,
+                *(
+                    alternative
+                    for group in self.support_anchor_groups
+                    for alternative in group.alternatives
+                ),
+            )
+        )
+        approved_words = set(_ANCHOR_WORD.findall(_normalized_support_surface(approved_text)))
+        approved_han = set(re.findall(r"[\u3400-\u4dbf\u4e00-\u9fff]", approved_text))
+        for proposition in propositions:
+            if any(
+                not any(_support_anchor_occurs(proposition, item) for item in group.alternatives)
+                for group in self.support_anchor_groups
+            ):
+                raise ValueError("approved propositions must contain every support-anchor group")
+            proposition_words = set(_ANCHOR_WORD.findall(proposition))
+            if any(
+                not _support_word_is_approved(word, approved_words)
+                for word in proposition_words
+                if re.fullmatch(r"[a-z0-9]+(?:[-_/][a-z0-9]+)*", word)
+            ):
+                raise ValueError("approved proposition vocabulary is not bound to the fact")
+            if any(
+                character not in approved_han
+                for character in re.findall(r"[\u3400-\u4dbf\u4e00-\u9fff]", proposition)
+            ):
+                raise ValueError("approved proposition characters are not bound to the fact")
+        for group in self.support_anchor_groups:
+            for alternative in group.alternatives:
+                if not any(
+                    _support_anchor_occurs(proposition, alternative) for proposition in propositions
+                ):
+                    raise ValueError(
+                        "every support-anchor alternative must be bound to an approved proposition"
+                    )
+        return self
 
 
 class ResponseInstruction(DomainModel):
@@ -286,6 +492,7 @@ class EvaluationCase(DomainModel):
 class EvaluationCaseV2(EvaluationCase):
     """Acceptance-v2 case with explicit instructions and compliance evidence."""
 
+    expected_facts: tuple[ExpectedFactV2, ...]
     permitted_source_ids: tuple[Identifier, ...]
     response_instructions: Annotated[tuple[ResponseInstruction, ...], Field(min_length=1)]
     compliance_obligations: Annotated[tuple[ComplianceObligation, ...], Field(min_length=1)]
@@ -316,6 +523,20 @@ class EvaluationCaseV2(EvaluationCase):
             raise ValueError("refusal expectation must match answerability")
         if self.refusal_expectation.language is not self.language:
             raise ValueError("refusal guidance language must match the response language")
+        guidance_obligations = tuple(
+            obligation
+            for obligation in self.compliance_obligations
+            if obligation.kind is ComplianceObligationKind.REFUSAL_GUIDANCE
+        )
+        if len(guidance_obligations) > 1:
+            raise ValueError("a case may declare at most one refusal guidance obligation")
+        if self.refusal_expectation.guidance_required:
+            if len(guidance_obligations) != 1 or guidance_obligations[0].expected_values != (
+                "present",
+            ):
+                raise ValueError("required refusal guidance needs one present guidance obligation")
+        elif guidance_obligations and guidance_obligations[0].expected_values != ("absent",):
+            raise ValueError("non-guided cases may only declare absent refusal guidance")
         if self.answerability is Answerability.ANSWERABLE and not self.permitted_source_ids:
             raise ValueError("answerable v2 cases require permitted sources")
         return self
@@ -1275,6 +1496,7 @@ __all__ = [
     "ACCEPTANCE_V2_MINIMUM_LANGUAGE_COUNTS",
     "ACCEPTANCE_V2_MINIMUM_MULTI_TURN_CASES",
     "ACCEPTANCE_V2_REQUIRED_METRICS",
+    "EXPECTED_FACT_SUPPORT_CONTRACT_VERSION",
     "AcceptanceCoverageV2",
     "Answerability",
     "ChallengeTag",
@@ -1302,10 +1524,12 @@ __all__ = [
     "EvaluationMetric",
     "EvaluationMetricV2",
     "ExpectedFact",
+    "ExpectedFactV2",
     "RefusalGuidanceExpectation",
     "ResponseInstruction",
     "SourceArtifactKind",
     "StyleExpectation",
+    "SupportAnchorGroup",
     "calculate_chunk_content_hash",
     "calculate_corpus_content_hash",
     "calculate_dataset_content_hash",

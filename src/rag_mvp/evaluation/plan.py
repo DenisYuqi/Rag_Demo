@@ -15,21 +15,30 @@ from rag_mvp.domain.qa import ConversationRole
 from rag_mvp.domain.retrieval import RetrievalMode
 from rag_mvp.evaluation.answer_metrics import (
     ANSWER_COMPLETENESS_SCORER_VERSION,
+    ANSWER_COMPLIANCE_SCORER_VERSION,
+    GUIDED_REFUSAL_APPROPRIATENESS_SCORER_VERSION,
     REFUSAL_APPROPRIATENESS_SCORER_VERSION,
     STYLE_CONSISTENCY_SCORER_VERSION,
 )
 from rag_mvp.evaluation.dataset import (
     CorpusDerivation,
     DatasetValidationError,
+    EvaluationCaseV2,
     EvaluationDataset,
     load_dataset,
 )
 from rag_mvp.evaluation.grounding_metrics import (
+    ADJUDICATED_FAITHFULNESS_SCORER_VERSION,
     CONTEXT_PRECISION_SCORER_VERSION,
     FAITHFULNESS_SCORER_VERSION,
+    TEXT_SUPPORT_MATCHER_VERSION,
+    TEXT_SUPPORT_NORMALIZATION_VERSION,
     MetricName,
 )
-from rag_mvp.evaluation.quality_gate import QUALITY_GATE_VERSION
+from rag_mvp.evaluation.quality_gate import (
+    ADVANCED_QUALITY_GATE_VERSION,
+    QUALITY_GATE_VERSION,
+)
 from rag_mvp.evaluation.runner import (
     EvaluationCaseInput,
     EvaluationConversationTurn,
@@ -37,7 +46,10 @@ from rag_mvp.evaluation.runner import (
     EvaluationRunIdentity,
     EvaluationRunPlan,
 )
-from rag_mvp.evaluation.scoring import SCORING_PIPELINE_VERSION
+from rag_mvp.evaluation.scoring import (
+    ADVANCED_SCORING_PIPELINE_VERSION,
+    SCORING_PIPELINE_VERSION,
+)
 from rag_mvp.ingestion.chunking import CHUNKING_VERSION, TOKENIZER_VERSION
 from rag_mvp.ingestion.indexing import INDEX_EXTRACTION_VERSION
 from rag_mvp.ingestion.normalization import NORMALIZATION_VERSION
@@ -232,7 +244,7 @@ def build_evaluation_plan(
         dataset_hash=dataset.manifest.content_hash,
         corpus_version=dataset.corpus.manifest.version,
         corpus_hash=dataset.corpus.manifest.content_hash,
-        configuration_id=settings.configuration_identity,
+        configuration_id=settings.evaluation_configuration_identity,
         code_revision=source_code_revision(),
         prompt_versions={
             "generation": GENERATOR_PROMPT_VERSION,
@@ -300,6 +312,8 @@ def build_evaluation_plan(
             "allow_single_retriever_degradation": (settings.allow_single_retriever_degradation),
             "degradation_policy_version": DEGRADATION_POLICY_VERSION,
             "retrieval_cache_enabled": settings.retrieval_cache_enabled,
+            "retrieval_cache_ttl_seconds": settings.retrieval_cache_ttl_seconds,
+            "retrieval_cache_max_entries": settings.retrieval_cache_max_entries,
             "qa_retrieval_budget_seconds": settings.qa_retrieval_budget_seconds,
             "qa_embedding_budget_seconds": settings.qa_embedding_budget_seconds,
             "qa_dense_retrieval_budget_seconds": settings.qa_dense_retrieval_budget_seconds,
@@ -315,15 +329,7 @@ def build_evaluation_plan(
             "grounding_validator_version": GROUNDING_VALIDATOR_VERSION,
             "refusal_policy_version": REFUSAL_POLICY_VERSION,
         },
-        scorer_versions={
-            MetricName.FAITHFULNESS.value: FAITHFULNESS_SCORER_VERSION,
-            MetricName.CONTEXT_PRECISION.value: CONTEXT_PRECISION_SCORER_VERSION,
-            MetricName.ANSWER_COMPLETENESS.value: ANSWER_COMPLETENESS_SCORER_VERSION,
-            MetricName.STYLE_CONSISTENCY.value: STYLE_CONSISTENCY_SCORER_VERSION,
-            MetricName.REFUSAL_APPROPRIATENESS.value: (REFUSAL_APPROPRIATENESS_SCORER_VERSION),
-            "scoring-pipeline": SCORING_PIPELINE_VERSION,
-            "quality-gate": QUALITY_GATE_VERSION,
-        },
+        scorer_versions=evaluation_scorer_versions(dataset),
         pricing_version=settings.pricing_version,
         random_seeds={
             "case-order": EVALUATION_RANDOM_SEED,
@@ -334,12 +340,48 @@ def build_evaluation_plan(
             platform=f"{platform.system() or 'unknown'}-{platform.machine() or 'unknown'}",
             deployment=settings.environment,
         ),
+        runtime_configuration_id=settings.runtime_configuration_identity,
         cache_policy="bypass",
     )
     try:
         return EvaluationRunPlan(run_id=run_id, identity=identity, cases=cases)
     except ValidationError:
         raise EvaluationPlanError("evaluation_plan_invalid") from None
+
+
+def evaluation_scorer_versions(dataset: EvaluationDataset) -> dict[str, str]:
+    advanced = bool(dataset.cases) and all(
+        isinstance(case, EvaluationCaseV2) for case in dataset.cases
+    )
+    versions = {
+        MetricName.FAITHFULNESS.value: (
+            ADJUDICATED_FAITHFULNESS_SCORER_VERSION
+            if advanced
+            else FAITHFULNESS_SCORER_VERSION
+        ),
+        MetricName.CONTEXT_PRECISION.value: CONTEXT_PRECISION_SCORER_VERSION,
+        MetricName.ANSWER_COMPLETENESS.value: ANSWER_COMPLETENESS_SCORER_VERSION,
+        MetricName.STYLE_CONSISTENCY.value: STYLE_CONSISTENCY_SCORER_VERSION,
+        MetricName.REFUSAL_APPROPRIATENESS.value: (
+            GUIDED_REFUSAL_APPROPRIATENESS_SCORER_VERSION
+            if advanced
+            else REFUSAL_APPROPRIATENESS_SCORER_VERSION
+        ),
+        "answer-compliance": ANSWER_COMPLIANCE_SCORER_VERSION,
+        "scoring-pipeline": (
+            ADVANCED_SCORING_PIPELINE_VERSION if advanced else SCORING_PIPELINE_VERSION
+        ),
+        "quality-gate": QUALITY_GATE_VERSION,
+        "advanced-quality-gate": ADVANCED_QUALITY_GATE_VERSION,
+    }
+    if advanced:
+        versions.update(
+            {
+                "faithfulness-text-matcher": TEXT_SUPPORT_MATCHER_VERSION,
+                "faithfulness-text-normalization": TEXT_SUPPORT_NORMALIZATION_VERSION,
+            }
+        )
+    return versions
 
 
 def _require_matching_derivation(dataset: EvaluationDataset, settings: Settings) -> None:

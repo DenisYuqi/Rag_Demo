@@ -107,6 +107,7 @@ def test_configured_executable_composes_services_and_waits_for_an_index(tmp_path
         readiness = client.get("/readyz")
         documents = client.get("/api/v1/documents")
         evaluation_catalog = client.get("/api/v1/evaluation-datasets")
+        comparison_catalog = client.get("/api/v1/comparison-plans")
         qa = client.post(
             "/api/v1/qa",
             json={"owner_id": "owner-1", "question": "Question"},
@@ -127,6 +128,8 @@ def test_configured_executable_composes_services_and_waits_for_an_index(tmp_path
     assert documents.json() == {"active_index_revision": None, "documents": []}
     assert evaluation_catalog.status_code == 200
     assert evaluation_catalog.json()["datasets"]
+    assert comparison_catalog.status_code == 200
+    assert comparison_catalog.json()["plans"]
     assert qa.status_code == 503
     assert qa.json() == {"error": {"code": "qa_unavailable"}}
 

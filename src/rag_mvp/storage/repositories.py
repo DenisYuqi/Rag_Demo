@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import builtins
+import hashlib
+import json
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import ClassVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self, cast
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from rag_mvp.domain.evaluation import EvaluationRun, ModelAttempt, ReportManifest
 from rag_mvp.domain.ingestion import (
@@ -29,7 +31,18 @@ from rag_mvp.domain.qa import (
     RequestDiagnostic,
     SessionStatus,
 )
+from rag_mvp.evaluation.json_report import canonical_json_value
 from rag_mvp.storage.database import Database
+
+if TYPE_CHECKING:
+    from rag_mvp.evaluation.comparison import (
+        ComparisonCandidateHistory,
+        ComparisonCandidateReference,
+        ComparisonResult,
+        ComparisonSharedSetupEvidence,
+        ComparisonSuite,
+    )
+    from rag_mvp.evaluation.experiment import ExperimentAxis
 
 
 class RepositoryError(RuntimeError):
@@ -1277,6 +1290,870 @@ class ReportManifestRepository:
         return None if row is None else _decode(ReportManifest, row)
 
 
+class ComparisonSelectionIdentity(BaseModel):
+    """One safe fixed identity inherited from an upstream comparison plan."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
+
+    name: str = Field(min_length=1, max_length=255, pattern=r"^[a-z][a-z0-9_.-]*$")
+    value: str = Field(min_length=1, max_length=4096)
+
+
+class ComparisonSelectionRecord(BaseModel):
+    """Append-only upstream selection bound to one verified comparison result."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
+
+    schema_version: Literal["comparison-selection-v1"] = "comparison-selection-v1"
+    selection_sequence: int = Field(ge=1)
+    comparison_id: str = Field(min_length=1, max_length=255)
+    axis: Literal["generation-model", "retrieval-strategy", "cache-behavior"]
+    plan_id: str = Field(min_length=1, max_length=255)
+    plan_content_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    result_content_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    selected_variant_id: str = Field(min_length=1, max_length=255)
+    selected_axis_value: str = Field(min_length=1, max_length=4096)
+    selected_configuration_id: str = Field(min_length=1, max_length=255)
+    selected_evaluation_run_id: str = Field(min_length=1, max_length=255)
+    upstream_identities: tuple[ComparisonSelectionIdentity, ...] = ()
+    created_at: datetime
+
+    @model_validator(mode="after")
+    def validate_timestamp(self) -> Self:
+        if self.created_at.tzinfo is None or self.created_at.utcoffset() is None:
+            raise ValueError("comparison_selection_timestamp_naive")
+        names = tuple(item.name for item in self.upstream_identities)
+        if (
+            len(names) != len(set(names))
+            or tuple(sorted(names)) != names
+            or any(not name.startswith("upstream.") for name in names)
+        ):
+            raise ValueError("comparison_selection_upstream_identity_invalid")
+        return self
+
+
+class ComparisonRepository:
+    """Append-only persisted comparison suites, results, and axis selections."""
+
+    def __init__(self, database: Database) -> None:
+        self._database = database
+
+    def create(
+        self,
+        suite: ComparisonSuite,
+        evaluation_runs: Sequence[EvaluationRun],
+    ) -> None:
+        """Atomically persist all prepared candidate runs and immutable suite revision zero."""
+
+        self._validate_initial_suite(suite)
+        runs = {item.run_id: item for item in evaluation_runs}
+        references = tuple(item.reference for item in suite.candidates)
+        if len(runs) != len(evaluation_runs) or set(runs) != {
+            item.evaluation_run_id for item in references
+        }:
+            raise RepositoryConflict("comparison candidate run set does not match the suite")
+        for reference in references:
+            self._validate_evaluation_run(suite, reference, runs[reference.evaluation_run_id])
+
+        try:
+            with self._database.transaction() as connection:
+                run_repository = EvaluationRunRepository(self._database)
+                for run in evaluation_runs:
+                    run_repository.create(run, connection=connection)
+                connection.execute(
+                    """
+                    INSERT INTO comparison_plans(
+                        comparison_id, plan_id, plan_content_hash, axis, created_at, payload_json
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        suite.comparison_id,
+                        suite.plan.plan_id,
+                        suite.plan_content_hash,
+                        suite.plan.axis.value,
+                        suite.created_at.isoformat(),
+                        suite.plan.model_dump_json(),
+                    ),
+                )
+                for history in suite.candidates:
+                    reference = history.reference
+                    connection.execute(
+                        """
+                        INSERT INTO comparison_candidate_bindings(
+                            comparison_id, variant_id, axis_value, configuration_id,
+                            evaluation_run_id, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            suite.comparison_id,
+                            reference.variant_id,
+                            reference.axis_value,
+                            reference.configuration_id,
+                            reference.evaluation_run_id,
+                            suite.created_at.isoformat(),
+                        ),
+                    )
+                    snapshot = history.snapshots[0]
+                    connection.execute(
+                        """
+                        INSERT INTO comparison_candidates(
+                            comparison_id, variant_id, revision, evaluation_run_id,
+                            status, recorded_at, payload_json
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            suite.comparison_id,
+                            reference.variant_id,
+                            snapshot.sequence,
+                            reference.evaluation_run_id,
+                            snapshot.status.value,
+                            snapshot.recorded_at.isoformat(),
+                            snapshot.model_dump_json(),
+                        ),
+                    )
+                progress = suite.progress_history[0]
+                connection.execute(
+                    """
+                    INSERT INTO comparison_runs(
+                        comparison_id, revision, status, recorded_at, payload_json
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        suite.comparison_id,
+                        progress.sequence,
+                        suite.status.value,
+                        progress.recorded_at.isoformat(),
+                        suite.model_dump_json(),
+                    ),
+                )
+        except sqlite3.IntegrityError as error:
+            _raise_conflict("comparison", error)
+
+    def append(self, suite: ComparisonSuite) -> None:
+        """Append one validated suite revision and any matching candidate snapshot."""
+
+        try:
+            with self._database.transaction() as connection:
+                stored = self._get_verified(suite.comparison_id, connection)
+                if stored is None:
+                    raise RepositoryNotFound("comparison was not found")
+                changed = self._validate_successor(stored, suite)
+                progress = suite.progress_history[-1]
+                for history in changed:
+                    snapshot = history.snapshots[-1]
+                    connection.execute(
+                        """
+                        INSERT INTO comparison_candidates(
+                            comparison_id, variant_id, revision, evaluation_run_id,
+                            status, recorded_at, payload_json
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            suite.comparison_id,
+                            history.reference.variant_id,
+                            snapshot.sequence,
+                            history.reference.evaluation_run_id,
+                            snapshot.status.value,
+                            snapshot.recorded_at.isoformat(),
+                            snapshot.model_dump_json(),
+                        ),
+                    )
+                connection.execute(
+                    """
+                    INSERT INTO comparison_runs(
+                        comparison_id, revision, status, recorded_at, payload_json
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        suite.comparison_id,
+                        progress.sequence,
+                        suite.status.value,
+                        progress.recorded_at.isoformat(),
+                        suite.model_dump_json(),
+                    ),
+                )
+        except sqlite3.IntegrityError as error:
+            _raise_conflict("comparison history", error)
+
+    def get(self, comparison_id: str) -> ComparisonSuite | None:
+        with self._database.connection() as connection:
+            return self._get_verified(comparison_id, connection)
+
+    def list(self) -> builtins.list[ComparisonSuite]:
+        with self._database.connection() as connection:
+            rows = connection.execute(
+                "SELECT comparison_id FROM comparison_plans ORDER BY created_at DESC, comparison_id"
+            ).fetchall()
+            values = [self._get_verified(str(row["comparison_id"]), connection) for row in rows]
+        return [item for item in values if item is not None]
+
+    def save_result(self, result: ComparisonResult) -> None:
+        """Persist one immutable deterministic result after binding it to the stored suite."""
+
+        result_hash = _comparison_result_content_hash(result)
+        try:
+            with self._database.transaction() as connection:
+                suite = self._get_verified(result.comparison_id, connection)
+                if suite is None:
+                    raise RepositoryNotFound("comparison was not found")
+                self._validate_result_binding(suite, result)
+                setup = self._get_shared_setup_verified(result.comparison_id, connection)
+                if setup is None or setup != result.shared_setup:
+                    raise RepositoryConflict(
+                        "comparison result shared setup evidence binding failed"
+                    )
+                connection.execute(
+                    """
+                    INSERT INTO comparison_results(
+                        comparison_id, plan_content_hash, result_content_hash,
+                        completed_at, payload_json
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        result.comparison_id,
+                        result.plan_content_hash,
+                        result_hash,
+                        result.completed_at.isoformat(),
+                        result.model_dump_json(),
+                    ),
+                )
+        except sqlite3.IntegrityError as error:
+            _raise_conflict("comparison result", error)
+
+    def save_shared_setup(self, evidence: ComparisonSharedSetupEvidence) -> None:
+        """Persist one immutable setup ledger, including failure spend without a result."""
+
+        from rag_mvp.evaluation.comparison import validate_comparison_shared_setup
+
+        evidence_hash = _comparison_shared_setup_content_hash(evidence)
+        try:
+            with self._database.transaction() as connection:
+                suite = self._get_verified(evidence.comparison_id, connection)
+                if suite is None:
+                    raise RepositoryNotFound("comparison was not found")
+                validate_comparison_shared_setup(
+                    evidence,
+                    comparison_id=suite.comparison_id,
+                    plan=suite.plan,
+                )
+                if evidence.recorded_at < suite.created_at:
+                    raise RepositoryConflict("comparison setup evidence predates the suite")
+                connection.execute(
+                    """
+                    INSERT INTO comparison_shared_setup_evidence(
+                        comparison_id, plan_content_hash, status,
+                        provider_calls_complete, provider_call_count, known_partial_cost,
+                        total_cost, currency, recorded_at, evidence_content_hash, payload_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        evidence.comparison_id,
+                        evidence.plan_content_hash,
+                        evidence.status.value,
+                        int(evidence.provider_calls_complete),
+                        (
+                            evidence.provider_call_count
+                            if isinstance(evidence.provider_call_count, int)
+                            else None
+                        ),
+                        str(evidence.known_partial_cost),
+                        None if evidence.total_cost is None else str(evidence.total_cost),
+                        evidence.currency,
+                        evidence.recorded_at.isoformat(),
+                        evidence_hash,
+                        evidence.model_dump_json(),
+                    ),
+                )
+        except sqlite3.IntegrityError as error:
+            _raise_conflict("comparison shared setup evidence", error)
+
+    def get_shared_setup(
+        self,
+        comparison_id: str,
+    ) -> ComparisonSharedSetupEvidence | None:
+        with self._database.connection() as connection:
+            return self._get_shared_setup_verified(comparison_id, connection)
+
+    def get_result(self, comparison_id: str) -> ComparisonResult | None:
+        with self._database.connection() as connection:
+            return self._get_result_verified(comparison_id, connection)
+
+    def append_selection(
+        self,
+        result: ComparisonResult,
+        *,
+        created_at: datetime | None = None,
+    ) -> ComparisonSelectionRecord:
+        """Append a recommended result to axis history after exact persisted-result validation."""
+
+        if (
+            result.recommendation.state.value != "recommended"
+            or result.recommendation.selected_variant_id is None
+        ):
+            raise RepositoryConflict("comparison result has no deterministic selection")
+        if result.axis.value == "cache-behavior":
+            raise RepositoryConflict("cache comparison cannot become an upstream selection")
+        selected = next(
+            item
+            for item in result.candidates
+            if item.reference.variant_id == result.recommendation.selected_variant_id
+        )
+        timestamp = created_at or _now()
+        if timestamp < result.completed_at:
+            raise RepositoryConflict("comparison selection predates its result")
+        try:
+            with self._database.transaction() as connection:
+                persisted = self._get_result_verified(result.comparison_id, connection)
+                if persisted is None:
+                    raise RepositoryNotFound("comparison result was not found")
+                if persisted != result:
+                    raise RepositoryConflict("comparison selection result binding failed")
+                result_row = connection.execute(
+                    "SELECT result_content_hash FROM comparison_results WHERE comparison_id = ?",
+                    (result.comparison_id,),
+                ).fetchone()
+                if result_row is None:
+                    raise RepositoryNotFound("comparison result was not found")
+                result_hash = str(result_row["result_content_hash"])
+                latest_suite = self._get_verified(result.comparison_id, connection)
+                if latest_suite is None or latest_suite.status.value != "completed":
+                    raise RepositoryConflict(
+                        "comparison selection requires a completed latest suite"
+                    )
+                sequence_row = connection.execute(
+                    "SELECT COALESCE(MAX(selection_sequence), 0) + 1 AS next_sequence "
+                    "FROM comparison_selections"
+                ).fetchone()
+                sequence = int(sequence_row["next_sequence"])
+                selection = ComparisonSelectionRecord(
+                    selection_sequence=sequence,
+                    comparison_id=result.comparison_id,
+                    axis=result.axis,
+                    plan_id=result.plan_id,
+                    plan_content_hash=result.plan_content_hash,
+                    result_content_hash=result_hash,
+                    selected_variant_id=selected.reference.variant_id,
+                    selected_axis_value=selected.reference.axis_value,
+                    selected_configuration_id=selected.reference.configuration_id,
+                    selected_evaluation_run_id=selected.reference.evaluation_run_id,
+                    upstream_identities=tuple(
+                        ComparisonSelectionIdentity(name=item.name, value=item.value)
+                        for item in result.plan.fixed_identities.controlled
+                        if item.name.startswith("upstream.")
+                    ),
+                    created_at=timestamp,
+                )
+                connection.execute(
+                    """
+                    INSERT INTO comparison_selections(
+                        selection_sequence, comparison_id, axis, plan_id, plan_content_hash,
+                        result_content_hash, selected_variant_id, selected_axis_value,
+                        selected_configuration_id, selected_evaluation_run_id,
+                        created_at, payload_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        selection.selection_sequence,
+                        selection.comparison_id,
+                        selection.axis,
+                        selection.plan_id,
+                        selection.plan_content_hash,
+                        selection.result_content_hash,
+                        selection.selected_variant_id,
+                        selection.selected_axis_value,
+                        selection.selected_configuration_id,
+                        selection.selected_evaluation_run_id,
+                        selection.created_at.isoformat(),
+                        selection.model_dump_json(),
+                    ),
+                )
+        except sqlite3.IntegrityError as error:
+            _raise_conflict("comparison selection", error)
+        return selection
+
+    def save_selection(
+        self,
+        result: ComparisonResult,
+        *,
+        created_at: datetime | None = None,
+    ) -> ComparisonSelectionRecord:
+        """Compatibility name for the append-only selection boundary."""
+
+        return self.append_selection(result, created_at=created_at)
+
+    def get_selection(self, axis: ExperimentAxis) -> ComparisonSelectionRecord | None:
+        with self._database.connection() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM comparison_selections
+                WHERE axis = ? ORDER BY selection_sequence DESC LIMIT 1
+                """,
+                (axis.value,),
+            ).fetchone()
+            return None if row is None else self._decode_selection_verified(row, connection)
+
+    def list_selections(
+        self,
+        axis: ExperimentAxis | None = None,
+    ) -> builtins.list[ComparisonSelectionRecord]:
+        query = "SELECT * FROM comparison_selections"
+        parameters: tuple[str, ...] = ()
+        if axis is not None:
+            query += " WHERE axis = ?"
+            parameters = (axis.value,)
+        query += " ORDER BY selection_sequence"
+        with self._database.connection() as connection:
+            rows = connection.execute(query, parameters).fetchall()
+            return [self._decode_selection_verified(row, connection) for row in rows]
+
+    @staticmethod
+    def _validate_initial_suite(suite: ComparisonSuite) -> None:
+        if (
+            suite.status.value != "queued"
+            or len(suite.progress_history) != 1
+            or suite.progress_history[0].sequence != 0
+            or any(
+                len(item.snapshots) != 1 or item.snapshots[0].sequence != 0
+                for item in suite.candidates
+            )
+        ):
+            raise RepositoryConflict("comparison suite is not an initial revision")
+
+    @staticmethod
+    def _validate_evaluation_run(
+        suite: ComparisonSuite,
+        reference: ComparisonCandidateReference,
+        run: EvaluationRun,
+    ) -> None:
+        fixed = suite.plan.fixed_identities
+        expected_cases = fixed.case_count * suite.plan.repeat_order_policy.repeats_per_case
+        if (
+            run.run_id != reference.evaluation_run_id
+            or run.configuration_id != reference.configuration_id
+            or run.dataset_id != fixed.dataset_id
+            or run.dataset_version != fixed.dataset_version
+            or run.dataset_hash != fixed.dataset_hash
+            or run.corpus_version != fixed.corpus_version
+            or run.cache_policy != suite.plan.cache_policy.value
+            or run.total_cases != expected_cases
+        ):
+            raise RepositoryConflict("comparison candidate run identity does not match the plan")
+
+    @staticmethod
+    def _validate_successor(
+        stored: ComparisonSuite,
+        successor: ComparisonSuite,
+    ) -> tuple[ComparisonCandidateHistory, ...]:
+        if (
+            successor.plan != stored.plan
+            or successor.plan_content_hash != stored.plan_content_hash
+            or successor.created_at != stored.created_at
+            or successor.progress_history[:-1] != stored.progress_history
+            or len(successor.progress_history) != len(stored.progress_history) + 1
+            or tuple(item.reference for item in successor.candidates)
+            != tuple(item.reference for item in stored.candidates)
+        ):
+            raise RepositoryConflict("comparison history is not an append-only successor")
+        changed = []
+        for old, new in zip(stored.candidates, successor.candidates, strict=True):
+            if new.snapshots[: len(old.snapshots)] != old.snapshots or len(new.snapshots) not in {
+                len(old.snapshots),
+                len(old.snapshots) + 1,
+            }:
+                raise RepositoryConflict("comparison candidate history is not append-only")
+            if len(new.snapshots) == len(old.snapshots) + 1:
+                changed.append(new)
+        if len(changed) > 1:
+            raise RepositoryConflict("one comparison revision may change only one candidate")
+        return tuple(changed)
+
+    @staticmethod
+    def _validate_result_binding(suite: ComparisonSuite, result: ComparisonResult) -> None:
+        if (
+            suite.status.value != "completed"
+            or result.plan != suite.plan
+            or result.plan_content_hash != suite.plan_content_hash
+            or tuple(item.reference for item in result.candidates)
+            != tuple(item.reference for item in suite.candidates)
+        ):
+            raise RepositoryConflict("comparison result does not match the persisted suite")
+
+    def _get_verified(
+        self,
+        comparison_id: str,
+        connection: sqlite3.Connection,
+    ) -> ComparisonSuite | None:
+        from rag_mvp.evaluation.comparison import (
+            ComparisonCandidateSnapshot,
+            ComparisonSuite,
+        )
+        from rag_mvp.evaluation.experiment import ExperimentPlan
+
+        run_rows = connection.execute(
+            """
+            SELECT revision, status, recorded_at, payload_json FROM comparison_runs
+            WHERE comparison_id = ? ORDER BY revision
+            """,
+            (comparison_id,),
+        ).fetchall()
+        if not run_rows:
+            return None
+        suite_history = tuple(_decode(ComparisonSuite, row) for row in run_rows)
+        suite = suite_history[-1]
+        if len(run_rows) != len(suite.progress_history):
+            raise RepositoryError("comparison run history integrity check failed")
+        previous: ComparisonSuite | None = None
+        for index, (row, revision) in enumerate(zip(run_rows, suite_history, strict=True)):
+            progress = revision.progress_history[-1]
+            if (
+                int(row["revision"]) != index
+                or progress.sequence != index
+                or str(row["status"]) != revision.status.value
+                or str(row["recorded_at"]) != progress.recorded_at.isoformat()
+                or revision.progress_history != suite.progress_history[: index + 1]
+            ):
+                raise RepositoryError("comparison run history integrity check failed")
+            if previous is not None:
+                try:
+                    self._validate_successor(previous, revision)
+                except RepositoryConflict:
+                    raise RepositoryError("comparison run history integrity check failed") from None
+            previous = revision
+        plan_row = connection.execute(
+            """
+            SELECT plan_id, plan_content_hash, axis, created_at, payload_json
+            FROM comparison_plans WHERE comparison_id = ?
+            """,
+            (comparison_id,),
+        ).fetchone()
+        bindings = connection.execute(
+            """
+            SELECT binding.variant_id, binding.axis_value, binding.configuration_id,
+                   binding.evaluation_run_id, run.payload_json AS evaluation_run_payload
+            FROM comparison_candidate_bindings AS binding
+            JOIN evaluation_runs AS run ON run.run_id = binding.evaluation_run_id
+            WHERE binding.comparison_id = ? ORDER BY binding.rowid
+            """,
+            (comparison_id,),
+        ).fetchall()
+        if plan_row is None:
+            raise RepositoryError("comparison plan integrity check failed")
+        plan = ExperimentPlan.model_validate_json(str(plan_row["payload_json"]))
+        expected_bindings = tuple(
+            (
+                item.reference.variant_id,
+                item.reference.axis_value,
+                item.reference.configuration_id,
+                item.reference.evaluation_run_id,
+            )
+            for item in suite.candidates
+        )
+        actual_bindings = tuple(
+            (
+                str(item["variant_id"]),
+                str(item["axis_value"]),
+                str(item["configuration_id"]),
+                str(item["evaluation_run_id"]),
+            )
+            for item in bindings
+        )
+        if (
+            suite.comparison_id != comparison_id
+            or plan != suite.plan
+            or str(plan_row["plan_id"]) != suite.plan.plan_id
+            or str(plan_row["plan_content_hash"]) != suite.plan_content_hash
+            or str(plan_row["axis"]) != suite.plan.axis.value
+            or str(plan_row["created_at"]) != suite.created_at.isoformat()
+            or actual_bindings != expected_bindings
+        ):
+            raise RepositoryError("comparison persisted identity integrity check failed")
+        for history, binding in zip(suite.candidates, bindings, strict=True):
+            run = EvaluationRun.model_validate_json(str(binding["evaluation_run_payload"]))
+            try:
+                self._validate_evaluation_run(suite, history.reference, run)
+            except RepositoryConflict:
+                raise RepositoryError(
+                    "comparison candidate evaluation identity integrity check failed"
+                ) from None
+        for history in suite.candidates:
+            snapshot_rows = connection.execute(
+                """
+                SELECT revision, evaluation_run_id, status, recorded_at, payload_json
+                FROM comparison_candidates
+                WHERE comparison_id = ? AND variant_id = ? ORDER BY revision
+                """,
+                (comparison_id, history.reference.variant_id),
+            ).fetchall()
+            snapshots = tuple(_decode(ComparisonCandidateSnapshot, item) for item in snapshot_rows)
+            columns_valid = all(
+                int(item["revision"]) == snapshot.sequence
+                and str(item["evaluation_run_id"]) == history.reference.evaluation_run_id
+                and str(item["status"]) == snapshot.status.value
+                and str(item["recorded_at"]) == snapshot.recorded_at.isoformat()
+                for item, snapshot in zip(snapshot_rows, snapshots, strict=True)
+            )
+            if snapshots != history.snapshots or not columns_valid:
+                raise RepositoryError("comparison candidate history integrity check failed")
+        return suite
+
+    def _get_result_verified(
+        self,
+        comparison_id: str,
+        connection: sqlite3.Connection,
+    ) -> ComparisonResult | None:
+        from rag_mvp.evaluation.comparison import ComparisonResult, ComparisonSuite
+
+        row = connection.execute(
+            """
+            SELECT comparison_id, plan_content_hash, result_content_hash,
+                   completed_at, payload_json
+            FROM comparison_results WHERE comparison_id = ?
+            """,
+            (comparison_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        result = _decode(ComparisonResult, row)
+        result_payload = json.loads(str(row["payload_json"]))
+        if not isinstance(result_payload, dict):
+            raise RepositoryError("comparison result payload integrity check failed")
+        raw_setup = result_payload.get("shared_setup")
+        legacy_setup = isinstance(raw_setup, dict) and ("provider_calls_complete" not in raw_setup)
+        legacy_cost_state = "known_partial_cost" not in result_payload
+        suite = self._get_verified(comparison_id, connection)
+        if (
+            suite is None
+            or str(row["comparison_id"]) != result.comparison_id
+            or str(row["plan_content_hash"]) != result.plan_content_hash
+            or str(row["result_content_hash"])
+            != _comparison_result_content_hash(
+                result,
+                legacy_shared_setup=legacy_setup,
+                legacy_cost_state=legacy_cost_state,
+            )
+            or str(row["completed_at"]) != result.completed_at.isoformat()
+        ):
+            raise RepositoryError("comparison result integrity check failed")
+        binding_suite = suite
+        if suite.status.value != "completed":
+            completed_row = connection.execute(
+                """
+                SELECT payload_json FROM comparison_runs
+                WHERE comparison_id = ? AND revision = ?
+                """,
+                (comparison_id, len(suite.progress_history) - 2),
+            ).fetchone()
+            if completed_row is None:
+                raise RepositoryError("comparison result historical binding check failed")
+            binding_suite = _decode(ComparisonSuite, completed_row)
+            if (
+                binding_suite.status.value != "completed"
+                or suite.status.value != "failed"
+                or suite.progress_history[:-1] != binding_suite.progress_history
+                or suite.candidates != binding_suite.candidates
+                or suite.plan != binding_suite.plan
+            ):
+                raise RepositoryError("comparison result historical binding check failed")
+        self._validate_result_binding(binding_suite, result)
+        setup = self._get_shared_setup_verified(comparison_id, connection)
+        if setup is None or setup != result.shared_setup:
+            raise RepositoryError("comparison result shared setup integrity check failed")
+        return result
+
+    def _get_shared_setup_verified(
+        self,
+        comparison_id: str,
+        connection: sqlite3.Connection,
+    ) -> ComparisonSharedSetupEvidence | None:
+        from rag_mvp.evaluation.comparison import (
+            ComparisonSharedSetupEvidence,
+            validate_comparison_shared_setup,
+        )
+
+        row = connection.execute(
+            """
+            SELECT comparison_id, plan_content_hash, status, provider_call_count,
+                   provider_calls_complete, known_partial_cost, total_cost,
+                   currency, recorded_at,
+                   evidence_content_hash, payload_json
+            FROM comparison_shared_setup_evidence WHERE comparison_id = ?
+            """,
+            (comparison_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        evidence = _decode(ComparisonSharedSetupEvidence, row)
+        suite = self._get_verified(comparison_id, connection)
+        if suite is None:
+            raise RepositoryError("comparison shared setup suite binding failed")
+        try:
+            validate_comparison_shared_setup(
+                evidence,
+                comparison_id=suite.comparison_id,
+                plan=suite.plan,
+            )
+        except ValueError:
+            raise RepositoryError("comparison shared setup plan binding failed") from None
+        payload = str(row["payload_json"])
+        decoded_payload = json.loads(payload)
+        if not isinstance(decoded_payload, dict):
+            raise RepositoryError("comparison shared setup payload integrity check failed")
+        legacy_payload = "provider_calls_complete" not in decoded_payload
+        expected_columns = (
+            evidence.comparison_id,
+            evidence.plan_content_hash,
+            evidence.status.value,
+            int(evidence.provider_calls_complete),
+            (
+                evidence.provider_call_count
+                if isinstance(evidence.provider_call_count, int)
+                else None
+            ),
+            str(evidence.known_partial_cost),
+            None if evidence.total_cost is None else str(evidence.total_cost),
+            evidence.currency,
+            evidence.recorded_at.isoformat(),
+            _comparison_shared_setup_content_hash(evidence, legacy=legacy_payload),
+        )
+        actual_columns = (
+            str(row["comparison_id"]),
+            str(row["plan_content_hash"]),
+            str(row["status"]),
+            int(row["provider_calls_complete"]),
+            (None if row["provider_call_count"] is None else int(row["provider_call_count"])),
+            str(row["known_partial_cost"]),
+            None if row["total_cost"] is None else str(row["total_cost"]),
+            str(row["currency"]),
+            str(row["recorded_at"]),
+            str(row["evidence_content_hash"]),
+        )
+        if actual_columns != expected_columns or evidence.recorded_at < suite.created_at:
+            raise RepositoryError("comparison shared setup integrity check failed")
+        return evidence
+
+    def _decode_selection_verified(
+        self,
+        row: sqlite3.Row,
+        connection: sqlite3.Connection,
+    ) -> ComparisonSelectionRecord:
+        selection = _decode(ComparisonSelectionRecord, row)
+        columns = (
+            int(row["selection_sequence"]),
+            str(row["comparison_id"]),
+            str(row["axis"]),
+            str(row["plan_id"]),
+            str(row["plan_content_hash"]),
+            str(row["result_content_hash"]),
+            str(row["selected_variant_id"]),
+            str(row["selected_axis_value"]),
+            str(row["selected_configuration_id"]),
+            str(row["selected_evaluation_run_id"]),
+            str(row["created_at"]),
+        )
+        expected = (
+            selection.selection_sequence,
+            selection.comparison_id,
+            selection.axis,
+            selection.plan_id,
+            selection.plan_content_hash,
+            selection.result_content_hash,
+            selection.selected_variant_id,
+            selection.selected_axis_value,
+            selection.selected_configuration_id,
+            selection.selected_evaluation_run_id,
+            selection.created_at.isoformat(),
+        )
+        result = self._get_result_verified(selection.comparison_id, connection)
+        if result is None:
+            raise RepositoryError("comparison selection result integrity check failed")
+        result_row = connection.execute(
+            "SELECT result_content_hash FROM comparison_results WHERE comparison_id = ?",
+            (selection.comparison_id,),
+        ).fetchone()
+        if result_row is None:
+            raise RepositoryError("comparison selection result integrity check failed")
+        selected = next(
+            (
+                item
+                for item in result.candidates
+                if item.reference.variant_id == selection.selected_variant_id
+            ),
+            None,
+        )
+        latest_suite = self._get_verified(selection.comparison_id, connection)
+        if (
+            columns != expected
+            or selection.axis != result.axis.value
+            or selection.plan_id != result.plan_id
+            or selection.plan_content_hash != result.plan_content_hash
+            or selection.result_content_hash != str(result_row["result_content_hash"])
+            or result.recommendation.state.value != "recommended"
+            or result.recommendation.selected_variant_id != selection.selected_variant_id
+            or selected is None
+            or selected.reference.axis_value != selection.selected_axis_value
+            or selected.reference.configuration_id != selection.selected_configuration_id
+            or selected.reference.evaluation_run_id != selection.selected_evaluation_run_id
+            or selection.upstream_identities
+            != tuple(
+                ComparisonSelectionIdentity(name=item.name, value=item.value)
+                for item in result.plan.fixed_identities.controlled
+                if item.name.startswith("upstream.")
+            )
+            or latest_suite is None
+            or latest_suite.status.value != "completed"
+        ):
+            raise RepositoryError("comparison selection integrity check failed")
+        return selection
+
+
+def _comparison_result_content_hash(
+    result: ComparisonResult,
+    *,
+    legacy_shared_setup: bool = False,
+    legacy_cost_state: bool = False,
+) -> str:
+    exclude: dict[str, object] = {}
+    if legacy_shared_setup:
+        exclude["shared_setup"] = {"provider_calls_complete"}
+    if legacy_cost_state:
+        cost_fields = {
+            "known_partial_cost",
+            "cost_complete",
+            "cost_unknown_reasons",
+        }
+        exclude.update({field: True for field in cost_fields})
+        exclude["candidates"] = {
+            "__all__": {
+                **{field: True for field in cost_fields},
+                "source_evidence": {
+                    **{field: True for field in cost_fields},
+                    "logical_attempts": {"__all__": {field: True for field in cost_fields}},
+                },
+            }
+        }
+    content = canonical_json_value(
+        result.model_dump(
+            mode="json",
+            exclude=cast(Any, exclude) if exclude else None,
+        )
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(content).hexdigest()}"
+
+
+def _comparison_shared_setup_content_hash(
+    evidence: ComparisonSharedSetupEvidence,
+    *,
+    legacy: bool = False,
+) -> str:
+    content = canonical_json_value(
+        evidence.model_dump(
+            mode="json",
+            exclude={"provider_calls_complete"} if legacy else None,
+        )
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(content).hexdigest()}"
+
+
 @dataclass(frozen=True, slots=True)
 class KnowledgeRepositories:
     documents: DocumentRepository
@@ -1299,6 +2176,7 @@ class RuntimeRepositories:
     provider_usage: ProviderUsageRepository
     evaluation_runs: EvaluationRunRepository
     report_manifests: ReportManifestRepository
+    comparisons: ComparisonRepository
 
     @classmethod
     def from_database(cls, database: Database) -> RuntimeRepositories:
@@ -1308,4 +2186,5 @@ class RuntimeRepositories:
             provider_usage=ProviderUsageRepository(database),
             evaluation_runs=EvaluationRunRepository(database),
             report_manifests=ReportManifestRepository(database),
+            comparisons=ComparisonRepository(database),
         )

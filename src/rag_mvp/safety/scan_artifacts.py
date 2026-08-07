@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import csv
 import hashlib
+import html
 import json
 import os
 import re
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from io import StringIO
 from pathlib import Path
 from typing import Final, cast
 
@@ -26,6 +30,48 @@ _PROMETHEUS_SAMPLE: Final[re.Pattern[str]] = re.compile(
 )
 _REDACTED_FIXTURE: Final[str] = "[REDACTED_FIXTURE]"
 _REDACTED_FILE: Final[str] = "[REDACTED_FILE]"
+_RAW_FILESYSTEM_PATH: Final[re.Pattern[str]] = re.compile(
+    r"(?:(?<![A-Za-z])[A-Za-z]:[\\/]|\\\\|"
+    r"/(?:home|Users|tmp|var|etc|opt|root|mnt|workspace)/)"
+)
+_COMPARISON_CSV_FIELD_LIMIT: Final[int] = 64 * 1024 * 1024
+_COMPARISON_PROJECTION_NAMES: Final[frozenset[str]] = frozenset(
+    {
+        "comparison-report.html",
+        "comparison-report.txt",
+        "comparison-report.csv",
+    }
+)
+_COMPARISON_HTML_VISIBLE: Final[re.Pattern[str]] = re.compile(
+    r'(?P<prefix><pre id="comparison-result-visible">)'
+    r"(?P<canonical>.*?)"
+    r"(?P<suffix></pre>)",
+    re.DOTALL,
+)
+_COMPARISON_HTML_EMBEDDED: Final[re.Pattern[str]] = re.compile(
+    r'(?P<prefix><script id="comparison-result-json" type="application/json" '
+    r'data-encoding="base64">)'
+    r"(?P<canonical>[A-Za-z0-9+/=]+)"
+    r"(?P<suffix></script>)"
+)
+_COMPARISON_HTML_BODY: Final[re.Pattern[str]] = re.compile(
+    r"(?P<prefix><tbody>)(?P<rows>.*?)(?P<suffix></tbody>)",
+    re.DOTALL,
+)
+_COMPARISON_HTML_ROW: Final[re.Pattern[str]] = re.compile(r"<tr>(.*?)</tr>", re.DOTALL)
+_COMPARISON_HTML_CELL: Final[re.Pattern[str]] = re.compile(r"<td>(.*?)</td>", re.DOTALL)
+_COMPARISON_HTML_NUMERIC_COLUMNS: Final[frozenset[int]] = frozenset({3, 4, 10, 11, 12})
+_COMPARISON_TEXT_NUMERIC_COLUMNS: Final[frozenset[int]] = frozenset({5, 6, 12, 13, 14, 15})
+_COMPARISON_CSV_NUMERIC_COLUMNS: Final[frozenset[str]] = frozenset(
+    {
+        "known_partial_cost",
+        "total_cost",
+        "value",
+        "numerator",
+        "denominator",
+        "baseline_delta",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -218,6 +264,9 @@ def _scan_text(
     )
     if has_unclosed_private_key(normalized_detector_text):
         detector_counts[SensitiveKind.SECRET.value] += 1
+    detector_counts[SensitiveKind.SECRET.value] += len(
+        tuple(_RAW_FILESYSTEM_PATH.finditer(normalized_detector_text))
+    )
     return exact_counts, detector_counts
 
 
@@ -236,6 +285,280 @@ def _without_json_numbers(value: object) -> object:
             for key, item in cast(dict[str, object], value).items()
         }
     raise TypeError("unsupported JSON value")
+
+
+def _comparison_display(value: object) -> str:
+    if isinstance(value, dict) and value.get("status") == "unavailable":
+        reason = value.get("reason")
+        if isinstance(reason, str):
+            return f"unavailable:{reason}"
+    return str(value)
+
+
+def _json_string_nodes(value: object) -> tuple[str, ...]:
+    strings: list[str] = []
+
+    def collect(node: object) -> None:
+        if isinstance(node, str):
+            strings.append(node)
+            return
+        if isinstance(node, list):
+            for item in node:
+                collect(item)
+            return
+        if isinstance(node, dict):
+            for key, item in cast(dict[str, object], node).items():
+                strings.append(str(key))
+                collect(item)
+
+    collect(value)
+    return tuple(strings)
+
+
+def _comparison_projection_rows(
+    payload: Mapping[str, object],
+    *,
+    html_projection: bool,
+) -> tuple[tuple[str, ...], ...]:
+    raw_candidates = payload.get("candidates")
+    if not isinstance(raw_candidates, list):
+        raise ValueError("comparison candidates are unavailable")
+    rows: list[tuple[str, ...]] = []
+    for candidate_index, raw_candidate in enumerate(raw_candidates):
+        candidate = _mapping(raw_candidate, field=f"candidates[{candidate_index}]")
+        reference = _mapping(
+            candidate.get("reference"),
+            field=f"candidates[{candidate_index}].reference",
+        )
+        raw_metrics = candidate.get("metrics")
+        raw_reasons = candidate.get("cost_unknown_reasons", [])
+        if not isinstance(raw_metrics, list) or not isinstance(raw_reasons, list):
+            raise ValueError("comparison candidate projection is invalid")
+        reasons = tuple(str(item) for item in raw_reasons)
+        common = (
+            str(reference.get("variant_id")),
+            str(candidate.get("status")),
+            str(candidate.get("evidence_status")),
+        )
+        cost = (
+            _comparison_display(candidate.get("known_partial_cost")),
+            _comparison_display(candidate.get("total_cost")),
+            str(candidate.get("cost_complete")).lower(),
+            ",".join(reasons),
+            "" if candidate.get("currency") is None else str(candidate.get("currency")),
+        )
+        for metric_index, raw_metric in enumerate(raw_metrics):
+            metric = _mapping(
+                raw_metric,
+                field=f"candidates[{candidate_index}].metrics[{metric_index}]",
+            )
+            metric_tail = (
+                str(metric.get("metric_id")),
+                str(metric.get("unit")),
+                _comparison_display(metric.get("value")),
+            )
+            if html_projection:
+                rows.append(
+                    (
+                        *common,
+                        *cost,
+                        *metric_tail,
+                        _comparison_display(metric.get("denominator")),
+                        _comparison_display(metric.get("baseline_delta")),
+                        str(metric.get("status")),
+                        str(metric.get("gate_status")),
+                    )
+                )
+                continue
+            rows.append(
+                (
+                    *common,
+                    ""
+                    if candidate.get("safe_error_code") is None
+                    else str(candidate.get("safe_error_code")),
+                    str(reference.get("axis_value")),
+                    *cost,
+                    *metric_tail,
+                    _comparison_display(metric.get("numerator")),
+                    _comparison_display(metric.get("denominator")),
+                    _comparison_display(metric.get("baseline_delta")),
+                    str(metric.get("status")),
+                    str(metric.get("gate_status")),
+                )
+            )
+    return tuple(rows)
+
+
+def _comparison_payload(canonical: str) -> tuple[Mapping[str, object], str]:
+    decoded = json.loads(canonical)
+    payload = _mapping(decoded, field="comparison result")
+    if not isinstance(payload.get("comparison_id"), str):
+        raise ValueError("comparison result identity is unavailable")
+    semantic_json = json.dumps(
+        _without_json_numbers(payload),
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    semantic = "\n".join((semantic_json, *_json_string_nodes(payload)))
+    return payload, semantic
+
+
+def _mask_html_comparison_row(
+    row: str,
+    expected: tuple[str, ...],
+) -> str:
+    cells = tuple(_COMPARISON_HTML_CELL.finditer(row))
+    if len(cells) != len(expected):
+        return row
+    parts: list[str] = []
+    cursor = 0
+    for index, cell in enumerate(cells):
+        parts.append(row[cursor : cell.start(1)])
+        value = cell.group(1)
+        parts.append(
+            "0"
+            if index in _COMPARISON_HTML_NUMERIC_COLUMNS and html.unescape(value) == expected[index]
+            else value
+        )
+        cursor = cell.end(1)
+    parts.append(row[cursor:])
+    return "".join(parts)
+
+
+def _comparison_html_detector_text(content: str) -> str | None:
+    visible = _COMPARISON_HTML_VISIBLE.search(content)
+    embedded = _COMPARISON_HTML_EMBEDDED.search(content)
+    body = _COMPARISON_HTML_BODY.search(content)
+    if visible is None or embedded is None or body is None:
+        return None
+    try:
+        visible_canonical = html.unescape(visible.group("canonical"))
+        embedded_canonical = base64.b64decode(
+            embedded.group("canonical"),
+            validate=True,
+        ).decode("utf-8")
+        if visible_canonical != embedded_canonical:
+            return None
+        payload, semantic = _comparison_payload(visible_canonical)
+        expected_rows = _comparison_projection_rows(payload, html_projection=True)
+    except (UnicodeError, ValueError, TypeError):
+        return None
+
+    normalized = _COMPARISON_HTML_VISIBLE.sub(
+        lambda match: f"{match.group('prefix')}{html.escape(semantic)}{match.group('suffix')}",
+        content,
+        count=1,
+    )
+    normalized = _COMPARISON_HTML_EMBEDDED.sub(
+        lambda match: f"{match.group('prefix')}[CANONICAL_JSON_SCANNED]{match.group('suffix')}",
+        normalized,
+        count=1,
+    )
+
+    def normalize_body(match: re.Match[str]) -> str:
+        rows_text = match.group("rows")
+        parts: list[str] = []
+        cursor = 0
+        for index, row_match in enumerate(_COMPARISON_HTML_ROW.finditer(rows_text)):
+            parts.append(rows_text[cursor : row_match.start()])
+            row = row_match.group(0)
+            parts.append(
+                _mask_html_comparison_row(row, expected_rows[index])
+                if index < len(expected_rows)
+                else row
+            )
+            cursor = row_match.end()
+        parts.append(rows_text[cursor:])
+        return f"{match.group('prefix')}{''.join(parts)}{match.group('suffix')}"
+
+    return _COMPARISON_HTML_BODY.sub(normalize_body, normalized, count=1)
+
+
+def _mask_delimited_comparison_row(
+    actual: list[str],
+    expected: tuple[str, ...],
+    numeric_columns: frozenset[int],
+) -> list[str]:
+    if len(actual) != len(expected):
+        return actual
+    return [
+        "0" if index in numeric_columns and value == expected[index] else value
+        for index, value in enumerate(actual)
+    ]
+
+
+def _comparison_text_detector_text(content: str) -> str | None:
+    lines = content.splitlines()
+    if (
+        len(lines) < 4
+        or lines[0] != "comparison-report-text-v1"
+        or not lines[2].startswith("canonical-json=")
+        or lines[3] != "candidate-metrics:"
+    ):
+        return None
+    canonical = lines[2].removeprefix("canonical-json=")
+    try:
+        payload, semantic = _comparison_payload(canonical)
+        expected_rows = _comparison_projection_rows(payload, html_projection=False)
+    except (ValueError, TypeError):
+        return None
+    normalized = list(lines)
+    normalized[2] = f"canonical-json={semantic}"
+    for index, expected in enumerate(expected_rows, start=4):
+        if index >= len(normalized):
+            break
+        normalized[index] = "|".join(
+            _mask_delimited_comparison_row(
+                normalized[index].split("|"),
+                expected,
+                _COMPARISON_TEXT_NUMERIC_COLUMNS,
+            )
+        )
+    return "\n".join(normalized)
+
+
+def _comparison_csv_detector_text(content: str) -> str | None:
+    csv.field_size_limit(max(csv.field_size_limit(), _COMPARISON_CSV_FIELD_LIMIT))
+    try:
+        rows = [list(row) for row in csv.reader(StringIO(content, newline=""))]
+        if (
+            len(rows) < 2
+            or not rows[0]
+            or rows[0][0] != "record_type"
+            or len(rows[1]) < 3
+            or rows[1][0] != "comparison-result"
+        ):
+            return None
+        payload, semantic = _comparison_payload(rows[1][2])
+        expected_values = _comparison_projection_rows(payload, html_projection=False)
+        header = rows[0]
+        expected_rows = tuple(("candidate-metric", "", "", *item) for item in expected_values)
+        numeric_columns = frozenset(
+            index for index, name in enumerate(header) if name in _COMPARISON_CSV_NUMERIC_COLUMNS
+        )
+        rows[1][2] = semantic
+        for index, expected in enumerate(expected_rows, start=2):
+            if index >= len(rows):
+                break
+            rows[index] = _mask_delimited_comparison_row(
+                rows[index],
+                expected,
+                numeric_columns,
+            )
+    except (csv.Error, ValueError, TypeError):
+        return None
+    return "\n".join("\x1f".join(row) for row in rows)
+
+
+def _comparison_projection_detector_text(artifact: Path, content: str) -> str | None:
+    if artifact.name == "comparison-report.html":
+        return _comparison_html_detector_text(content)
+    if artifact.name == "comparison-report.txt":
+        return _comparison_text_detector_text(content)
+    if artifact.name == "comparison-report.csv":
+        return _comparison_csv_detector_text(content)
+    return None
 
 
 def _mixed_json_lines_without_numbers(content: str) -> str | None:
@@ -341,7 +664,11 @@ def scan_artifacts(
     for artifact in files:
         try:
             content = _decode_artifact(artifact.read_bytes())
-            detector_content = _json_detector_text(artifact, content)
+            detector_content = _comparison_projection_detector_text(artifact, content)
+            if artifact.name in _COMPARISON_PROJECTION_NAMES and detector_content is None:
+                raise ValueError("comparison projection cannot be normalized safely")
+            if detector_content is None:
+                detector_content = _json_detector_text(artifact, content)
             artifact_exact, artifact_detector = _scan_text(
                 f"{artifact.name}\n{content}",
                 fixture_set.fixtures,

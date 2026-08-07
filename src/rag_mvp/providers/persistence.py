@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import re
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from uuid import uuid4
 
 from rag_mvp.domain.evaluation import ModelAttempt as PersistedModelAttempt
@@ -13,6 +16,42 @@ from rag_mvp.domain.evaluation import (
 )
 from rag_mvp.providers.models import ModelAttempt, ProviderErrorCategory
 from rag_mvp.storage.repositories import ProviderUsageRepository
+
+_EVALUATION_RUN_ID: ContextVar[str | None] = ContextVar(
+    "rag_mvp_evaluation_run_id",
+    default=None,
+)
+_SAFE_EVALUATION_RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,254}$")
+
+
+@contextmanager
+def evaluation_run_attempt_context(run_id: str) -> Iterator[None]:
+    """Bind provider attempts to one immutable evaluation run in this async context."""
+
+    if _SAFE_EVALUATION_RUN_ID.fullmatch(run_id) is None:
+        raise ValueError("evaluation_run_context_invalid")
+    token = _EVALUATION_RUN_ID.set(run_id)
+    try:
+        yield
+    finally:
+        _EVALUATION_RUN_ID.reset(token)
+
+
+@contextmanager
+def unbound_evaluation_attempt_context() -> Iterator[None]:
+    """Explicitly mark shared setup work as not belonging to any evaluation run."""
+
+    token = _EVALUATION_RUN_ID.set(None)
+    try:
+        yield
+    finally:
+        _EVALUATION_RUN_ID.reset(token)
+
+
+def current_evaluation_run_id() -> str | None:
+    """Return the current run binding without process-global mutable state."""
+
+    return _EVALUATION_RUN_ID.get()
 
 
 class PersistentAttemptRecorder:
@@ -39,6 +78,7 @@ class PersistentAttemptRecorder:
                 attempt_id=self._attempt_id_factory(),
                 operation_id=attempt.operation_id,
                 request_id=attempt.request_id,
+                run_id=current_evaluation_run_id(),
                 role=ModelRole(attempt.role.value),
                 provider=attempt.provider,
                 model=attempt.model,
@@ -56,3 +96,11 @@ class PersistentAttemptRecorder:
                 ),
             )
         )
+
+
+__all__ = [
+    "PersistentAttemptRecorder",
+    "current_evaluation_run_id",
+    "evaluation_run_attempt_context",
+    "unbound_evaluation_attempt_context",
+]

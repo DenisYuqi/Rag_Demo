@@ -16,6 +16,12 @@ from rag_mvp.evaluation.application import (
     VerifiedEvaluationArtifactStore,
 )
 from rag_mvp.evaluation.artifacts_v2 import ArtifactCatalogV2
+from rag_mvp.evaluation.comparison_artifacts import ComparisonArtifactCatalog
+from rag_mvp.evaluation.comparison_plans import RegisteredComparisonPlanRegistry
+from rag_mvp.evaluation.comparison_production import (
+    ProductionComparisonJobExecutor,
+    RegisteredComparisonLaunchCatalog,
+)
 from rag_mvp.evaluation.plan import EvaluationDatasetRegistry
 from rag_mvp.evaluation.pricing import (
     OPENAI_STANDARD_PRICING_VERSION,
@@ -171,7 +177,14 @@ def compose_openai_services(
             return composition
         run_root = layout.ensure_within_root(layout.directory("evaluations") / "runs")
         published_root = layout.ensure_within_root(layout.directory("evaluations") / "published")
+        comparison_published_root = layout.ensure_within_root(
+            layout.directory("evaluations") / "suites" / "published"
+        )
         artifact_catalog = ArtifactCatalogV2(published_root)
+        comparison_artifact_catalog = ComparisonArtifactCatalog(
+            comparison_published_root,
+            redactor,
+        )
         evaluation_settings = settings.model_copy(
             update={
                 "pricing_version": OPENAI_STANDARD_PRICING_VERSION,
@@ -186,8 +199,26 @@ def compose_openai_services(
             run_artifacts_root=run_root,
             redactor=redactor,
         )
+        dataset_registry = EvaluationDatasetRegistry(settings.evaluation_dataset_root)
+        comparison_registry = RegisteredComparisonPlanRegistry()
+        comparison_catalog = RegisteredComparisonLaunchCatalog(
+            registry=comparison_registry,
+            datasets=dataset_registry,
+            settings=evaluation_settings,
+            evaluation_repository=runtime_repositories.evaluation_runs,
+            comparison_repository=runtime_repositories.comparisons,
+            run_artifacts_root=run_root,
+        )
+        comparison_executor = ProductionComparisonJobExecutor(
+            settings=evaluation_settings,
+            evaluation_repository=runtime_repositories.evaluation_runs,
+            comparison_repository=runtime_repositories.comparisons,
+            run_artifacts_root=run_root,
+            artifact_catalog=comparison_artifact_catalog,
+            redactor=redactor,
+        )
         evaluation = EvaluationApplicationService(
-            registry=EvaluationDatasetRegistry(settings.evaluation_dataset_root),
+            registry=dataset_registry,
             settings=evaluation_settings,
             repository=runtime_repositories.evaluation_runs,
             run_artifacts_root=run_root,
@@ -200,6 +231,10 @@ def compose_openai_services(
                 run_root,
             ),
             plan_settings_factory=evaluation_executor.isolated_settings,
+            comparison_catalog=comparison_catalog,
+            comparison_repository=runtime_repositories.comparisons,
+            comparison_executor=comparison_executor,
+            comparison_artifact_store=comparison_artifact_catalog,
         )
         return replace(composition, evaluation=evaluation)
     except Exception:

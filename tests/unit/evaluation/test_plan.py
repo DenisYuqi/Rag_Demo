@@ -11,6 +11,8 @@ from rag_mvp.domain.qa import ConversationRole
 from rag_mvp.domain.retrieval import RetrievalMode
 from rag_mvp.evaluation.answer_metrics import (
     ANSWER_COMPLETENESS_SCORER_VERSION,
+    ANSWER_COMPLIANCE_SCORER_VERSION,
+    GUIDED_REFUSAL_APPROPRIATENESS_SCORER_VERSION,
     REFUSAL_APPROPRIATENESS_SCORER_VERSION,
     STYLE_CONSISTENCY_SCORER_VERSION,
 )
@@ -20,8 +22,11 @@ from rag_mvp.evaluation.dataset import (
     EvaluationDataset,
 )
 from rag_mvp.evaluation.grounding_metrics import (
+    ADJUDICATED_FAITHFULNESS_SCORER_VERSION,
     CONTEXT_PRECISION_SCORER_VERSION,
     FAITHFULNESS_SCORER_VERSION,
+    TEXT_SUPPORT_MATCHER_VERSION,
+    TEXT_SUPPORT_NORMALIZATION_VERSION,
 )
 from rag_mvp.evaluation.plan import (
     OPENAI_COMPATIBLE_ADAPTER_VERSION,
@@ -31,9 +36,15 @@ from rag_mvp.evaluation.plan import (
     build_evaluation_plan,
     source_code_revision,
 )
-from rag_mvp.evaluation.quality_gate import QUALITY_GATE_VERSION
+from rag_mvp.evaluation.quality_gate import (
+    ADVANCED_QUALITY_GATE_VERSION,
+    QUALITY_GATE_VERSION,
+)
 from rag_mvp.evaluation.runner import EvaluationEnvironment
-from rag_mvp.evaluation.scoring import SCORING_PIPELINE_VERSION
+from rag_mvp.evaluation.scoring import (
+    ADVANCED_SCORING_PIPELINE_VERSION,
+    SCORING_PIPELINE_VERSION,
+)
 from rag_mvp.qa.prompt import GENERATOR_OUTPUT_SCHEMA_VERSION, GENERATOR_PROMPT_VERSION
 from rag_mvp.qa.query_rewrite import QUERY_REWRITE_VERSION
 from rag_mvp.retrieval.rerank import RerankStage
@@ -191,7 +202,8 @@ def test_build_plan_pins_complete_safe_identity_and_maps_case_history(
     assert identity.dataset_hash == dataset.manifest.content_hash
     assert identity.corpus_version == dataset.corpus.manifest.version
     assert identity.corpus_hash == dataset.corpus.manifest.content_hash
-    assert identity.configuration_id == settings.configuration_identity
+    assert identity.configuration_id == settings.evaluation_configuration_identity
+    assert identity.runtime_configuration_id == settings.runtime_configuration_identity
     assert identity.code_revision == _CODE_REVISION
     assert identity.cache_policy == "bypass"
     assert identity.prompt_versions == {
@@ -224,7 +236,7 @@ def test_build_plan_pins_complete_safe_identity_and_maps_case_history(
         "provider_timeout_seconds": 8.0,
         "provider_retry_limit": 1,
         "qa_deadline_seconds": 9.5,
-        "qa_generation_budget_seconds": 4.7,
+        "qa_generation_budget_seconds": 6.0,
         "qa_finalization_budget_seconds": 0.6,
     }
     assert identity.embedding_identity == {
@@ -255,12 +267,14 @@ def test_build_plan_pins_complete_safe_identity_and_maps_case_history(
     assert identity.retrieval_configuration["dense_weight"] == 1.2
     assert identity.retrieval_configuration["lexical_weight"] == 1.4
     assert identity.retrieval_configuration["retrieval_cache_enabled"] is True
-    assert identity.retrieval_configuration["qa_retrieval_budget_seconds"] == 1.8
+    assert identity.retrieval_configuration["retrieval_cache_ttl_seconds"] == 300.0
+    assert identity.retrieval_configuration["retrieval_cache_max_entries"] == 256
+    assert identity.retrieval_configuration["qa_retrieval_budget_seconds"] == 4.0
     assert identity.retrieval_configuration["qa_embedding_budget_seconds"] == 0.8
     assert identity.retrieval_configuration["qa_dense_retrieval_budget_seconds"] == 0.8
     assert identity.retrieval_configuration["qa_bm25_budget_seconds"] == 0.8
     assert identity.retrieval_configuration["qa_fusion_budget_seconds"] == 0.2
-    assert identity.retrieval_configuration["qa_evidence_assessment_budget_seconds"] == 2.0
+    assert identity.retrieval_configuration["qa_evidence_assessment_budget_seconds"] == 4.0
     assert identity.retrieval_configuration["minimum_support_score"] == 0.72
     assert identity.scorer_versions == {
         "faithfulness": FAITHFULNESS_SCORER_VERSION,
@@ -268,8 +282,10 @@ def test_build_plan_pins_complete_safe_identity_and_maps_case_history(
         "answer-completeness": ANSWER_COMPLETENESS_SCORER_VERSION,
         "style-consistency": STYLE_CONSISTENCY_SCORER_VERSION,
         "refusal-appropriateness": REFUSAL_APPROPRIATENESS_SCORER_VERSION,
+        "answer-compliance": ANSWER_COMPLIANCE_SCORER_VERSION,
         "scoring-pipeline": SCORING_PIPELINE_VERSION,
         "quality-gate": QUALITY_GATE_VERSION,
+        "advanced-quality-gate": ADVANCED_QUALITY_GATE_VERSION,
     }
     assert identity.pricing_version == "pricing-2026-08"
     assert identity.random_seeds == {"case-order": 0, "scoring": 0}
@@ -286,6 +302,39 @@ def test_build_plan_pins_complete_safe_identity_and_maps_case_history(
     serialized = plan.model_dump_json()
     assert "acceptance-secret" not in serialized
     assert settings.openai_base_url not in serialized
+
+
+def test_build_v2_plan_pins_the_exact_advanced_scorer_versions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset = EvaluationDatasetRegistry(_DATASETS_ROOT).resolve(
+        "original-pdf-acceptance",
+        "2.0.0",
+    )
+    settings = Settings(
+        _env_file=None,
+        environment="test",
+        provider_backend="openai",
+        openai_api_key="unit-test-key",
+    )
+    monkeypatch.setattr("rag_mvp.evaluation.plan.source_code_revision", lambda: _CODE_REVISION)
+
+    plan = build_evaluation_plan(dataset, settings, "advanced_v2_run")
+
+    assert plan.identity.retrieval_configuration["minimum_support_score"] == 0.45
+    assert plan.identity.scorer_versions == {
+        "faithfulness": ADJUDICATED_FAITHFULNESS_SCORER_VERSION,
+        "faithfulness-text-matcher": TEXT_SUPPORT_MATCHER_VERSION,
+        "faithfulness-text-normalization": TEXT_SUPPORT_NORMALIZATION_VERSION,
+        "context-precision": CONTEXT_PRECISION_SCORER_VERSION,
+        "answer-completeness": ANSWER_COMPLETENESS_SCORER_VERSION,
+        "style-consistency": STYLE_CONSISTENCY_SCORER_VERSION,
+        "refusal-appropriateness": GUIDED_REFUSAL_APPROPRIATENESS_SCORER_VERSION,
+        "answer-compliance": ANSWER_COMPLIANCE_SCORER_VERSION,
+        "scoring-pipeline": ADVANCED_SCORING_PIPELINE_VERSION,
+        "quality-gate": QUALITY_GATE_VERSION,
+        "advanced-quality-gate": ADVANCED_QUALITY_GATE_VERSION,
+    }
 
 
 def test_build_plan_fails_when_dataset_derivation_differs_from_runtime_settings() -> None:

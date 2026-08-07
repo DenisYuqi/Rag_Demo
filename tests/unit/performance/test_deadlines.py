@@ -19,10 +19,20 @@ def test_default_total_and_settings_driven_stage_budgets(tmp_path: object) -> No
     defaults = QALatencyBudgets()
     qa_defaults = QAStageBudgets()
     assert defaults.total_seconds == 9.5
-    assert qa_defaults.retrieval_seconds == 1.8
-    assert defaults.for_stage("reranking") == 1.2
+    assert defaults.validation_seconds == 0.8
+    assert qa_defaults.retrieval_seconds == 4.0
+    assert defaults.for_stage("reranking") == 3.0
     assert defaults.for_stage("dense") == 0.8
-    assert defaults.for_stage("evidence") == 2.0
+    assert defaults.for_stage("evidence") == 4.0
+    assert qa_defaults.generation_seconds == 6.0
+    assert all(
+        getattr(qa_defaults, name) < qa_defaults.total_seconds
+        for name in (
+            "retrieval_seconds",
+            "evidence_assessment_seconds",
+            "generation_seconds",
+        )
+    )
 
     settings = Settings(
         data_root=tmp_path,
@@ -32,8 +42,8 @@ def test_default_total_and_settings_driven_stage_budgets(tmp_path: object) -> No
     )
     configured = QALatencyBudgets.from_settings(settings)
     assert configured.total_seconds == 19
-    assert configured.validation_seconds == pytest.approx(0.4)
-    assert configured.evidence_assessment_seconds == pytest.approx(4.0)
+    assert configured.validation_seconds == pytest.approx(1.6)
+    assert configured.evidence_assessment_seconds == pytest.approx(8.0)
     assert configured.rerank_seconds == 2
 
 
@@ -91,7 +101,17 @@ async def test_optional_reranker_cancels_and_degrades_to_exact_base_ranking() ->
 
 @pytest.mark.asyncio
 async def test_generation_does_not_start_without_full_budget_and_finalization_reserve() -> None:
-    controller = DeadlineController(started_at=time.monotonic() - 4.3)
+    budgets = QALatencyBudgets()
+    elapsed = (
+        budgets.total_seconds
+        - budgets.generation_seconds
+        - budgets.finalization_seconds
+        + 0.01
+    )
+    controller = DeadlineController(
+        budgets,
+        started_at=time.monotonic() - elapsed,
+    )
     called = False
 
     async def generation() -> str:

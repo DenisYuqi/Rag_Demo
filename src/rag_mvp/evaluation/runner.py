@@ -16,14 +16,25 @@ from uuid import uuid4
 from pydantic import Field, field_validator, model_validator
 
 from rag_mvp.api.qa import QARuntimeServices, stream_qa_events
-from rag_mvp.domain._base import DomainModel, Identifier, SafeScalar, utc_now
-from rag_mvp.domain.evaluation import EvaluationRun, EvaluationRunStatus
+from rag_mvp.domain._base import Digest, DomainModel, Identifier, SafeScalar, utc_now
+from rag_mvp.domain.evaluation import (
+    EvaluationRun,
+    EvaluationRunStatus,
+    ModelRole,
+    ProviderAttemptEvidence,
+)
 from rag_mvp.domain.qa import (
     ConversationRole,
     StreamEventKind,
     ValidatedStreamEvent,
 )
 from rag_mvp.domain.retrieval import CachePolicy, RetrievalMode
+from rag_mvp.evaluation.work_budget import (
+    ProviderWorkBudget,
+    ProviderWorkBudgetError,
+    ProviderWorkEstimate,
+)
+from rag_mvp.providers.persistence import evaluation_run_attempt_context
 from rag_mvp.qa.orchestrator import OrchestratedResponse
 from rag_mvp.qa.query_rewrite import select_response_language
 from rag_mvp.safety.redactor import Redactor
@@ -66,6 +77,8 @@ class EvaluationCaseInput(DomainModel):
     """The QA-sized portion of one already validated dataset case."""
 
     case_id: Identifier
+    source_case_id: Identifier | None = None
+    repeat_index: int = Field(default=0, ge=0)
     question: str = Field(min_length=1)
     language: Literal["zh", "en", "mixed"]
     history: tuple[EvaluationConversationTurn, ...] = ()
@@ -106,7 +119,8 @@ class EvaluationRunIdentity(DomainModel):
     pricing_version: Identifier
     random_seeds: dict[str, int]
     environment: EvaluationEnvironment
-    cache_policy: Literal["bypass"] = "bypass"
+    runtime_configuration_id: Identifier | None = None
+    cache_policy: CachePolicy = CachePolicy.BYPASS
 
     @model_validator(mode="after")
     def require_reproducible_identities(self) -> EvaluationRunIdentity:
@@ -200,10 +214,37 @@ class EvaluationCaseExecution(DomainModel):
     session_id: Identifier
     request_id: Identifier
     event: ValidatedStreamEvent
-    cache_policy: Literal["bypass"] = "bypass"
+    cache_policy: CachePolicy = CachePolicy.BYPASS
     retrieved_chunk_ids: tuple[Identifier, ...] = ()
     context_chunk_ids: tuple[Identifier, ...] = ()
+    pre_rerank_chunk_ids: tuple[Identifier, ...] = ()
+    post_rerank_chunk_ids: tuple[Identifier, ...] = ()
+    reranking_attempts: tuple[ProviderAttemptEvidence, ...] = ()
+    retrieval_evidence_digest: Digest | None = None
     latency_ms: float = Field(ge=0, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def validate_ranking_evidence(self) -> EvaluationCaseExecution:
+        for label, chunk_ids in (
+            ("retrieved", self.retrieved_chunk_ids),
+            ("context", self.context_chunk_ids),
+            ("pre-rerank", self.pre_rerank_chunk_ids),
+            ("post-rerank", self.post_rerank_chunk_ids),
+        ):
+            if len(chunk_ids) != len(set(chunk_ids)):
+                raise ValueError(f"{label} chunk identifiers must be unique")
+        if not set(self.context_chunk_ids).issubset(self.retrieved_chunk_ids):
+            raise ValueError("context chunks must come from retrieved evidence")
+        if bool(self.pre_rerank_chunk_ids) != bool(self.post_rerank_chunk_ids):
+            raise ValueError("pre/post-rerank evidence must be present together")
+        if self.pre_rerank_chunk_ids:
+            if set(self.pre_rerank_chunk_ids) != set(self.post_rerank_chunk_ids):
+                raise ValueError("pre/post-rerank evidence must contain the same candidates")
+            if not set(self.retrieved_chunk_ids).issubset(self.post_rerank_chunk_ids):
+                raise ValueError("retrieved evidence must come from post-rerank candidates")
+        if any(attempt.role is not ModelRole.RERANKING for attempt in self.reranking_attempts):
+            raise ValueError("reranking evidence contains a non-reranking attempt")
+        return self
 
 
 class PersistedCaseResult(DomainModel):
@@ -213,6 +254,7 @@ class PersistedCaseResult(DomainModel):
     succeeded: bool
     execution: EvaluationCaseExecution | None = None
     safe_error_code: str | None = None
+    logical_latency_ms: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     completed_at: datetime = Field(default_factory=utc_now)
 
     @model_validator(mode="after")
@@ -266,7 +308,7 @@ class ProductionQAExecutor:
         owner_id: str,
         cache_policy: CachePolicy,
     ) -> EvaluationCaseExecution:
-        if cache_policy is not CachePolicy.BYPASS:
+        if not isinstance(cache_policy, CachePolicy):
             raise EvaluationRunnerError("evaluation_cache_policy_invalid")
         session = self.services.conversations.create_session(owner_id)
         for turn in case.history:
@@ -297,7 +339,7 @@ class ProductionQAExecutor:
                 requested_language=requested_language,
                 response_language=response_language,
                 redactor=self.redactor,
-                cache_policy=CachePolicy.BYPASS,
+                cache_policy=cache_policy,
             )
         ]
         latency_ms = max(0.0, (perf_counter() - started) * 1_000)
@@ -312,14 +354,23 @@ class ProductionQAExecutor:
         outcome = capture.outcome
         retrieved = tuple(getattr(outcome, "retrieved_chunk_ids", ()))
         context = tuple(getattr(outcome, "context_chunk_ids", ()))
+        pre_rerank = tuple(getattr(outcome, "pre_rerank_chunk_ids", ()))
+        post_rerank = tuple(getattr(outcome, "post_rerank_chunk_ids", ()))
+        reranking_attempts = tuple(getattr(outcome, "reranking_attempts", ()))
+        retrieval_digest = getattr(outcome, "retrieval_evidence_digest", None)
         return EvaluationCaseExecution(
             case_id=case.case_id,
             owner_id=owner_id,
             session_id=session.session_id,
             request_id=request_id,
             event=event,
+            cache_policy=cache_policy,
             retrieved_chunk_ids=retrieved,
             context_chunk_ids=context,
+            pre_rerank_chunk_ids=pre_rerank,
+            post_rerank_chunk_ids=post_rerank,
+            reranking_attempts=reranking_attempts,
+            retrieval_evidence_digest=retrieval_digest,
             latency_ms=latency_ms,
         )
 
@@ -329,10 +380,23 @@ class EvaluationRunner:
     repository: EvaluationRunRepository
     artifacts_root: Path
     executor: EvaluationCaseExecutor | None
+    work_budget: ProviderWorkBudget | None = None
+    case_work_estimator: Callable[[EvaluationCaseInput], ProviderWorkEstimate] | None = field(
+        default=None,
+        repr=False,
+    )
+    work_reservations_prepared: bool = False
     clock: Callable[[], datetime] = field(default=utc_now, repr=False)
 
     def queue(self, plan: EvaluationRunPlan) -> EvaluationRun:
         """Persist a queued run and its write-once manifest before any provider call."""
+
+        run = self.prepare(plan)
+        self.repository.create(run)
+        return run
+
+    def prepare(self, plan: EvaluationRunPlan) -> EvaluationRun:
+        """Write immutable run artifacts without inserting a repository row."""
 
         created_at = self.clock()
         manifest = EvaluationRunManifest.create(plan, created_at=created_at)
@@ -341,7 +405,7 @@ class EvaluationRunner:
             self._write_exclusive(run_directory / "manifest.json", manifest)
             self._write_exclusive(run_directory / "plan.json", plan)
             (run_directory / "cases").mkdir(mode=0o700)
-            run = EvaluationRun(
+            return EvaluationRun(
                 run_id=plan.run_id,
                 dataset_id=plan.identity.dataset_id,
                 dataset_version=plan.identity.dataset_version,
@@ -355,15 +419,21 @@ class EvaluationRunner:
                 created_at=created_at,
                 updated_at=created_at,
             )
-            self.repository.create(run)
         except Exception:
             # Artifacts are intentionally retained: silently recycling a run ID would
-            # destroy the audit signal that queueing partially completed.
+            # destroy the audit signal that preparation partially completed.
             raise
-        return run
 
     async def execute(self, plan: EvaluationRunPlan) -> EvaluationRun:
         """Execute every case and persist progress after each terminal result."""
+
+        self.start(plan)
+        for case in plan.cases:
+            await self.execute_case(plan, case)
+        return self.complete(plan)
+
+    def start(self, plan: EvaluationRunPlan) -> EvaluationRun:
+        """Reserve the complete declared budget and mark a queued plan running."""
 
         current = self.repository.get(plan.run_id)
         if current is None:
@@ -372,41 +442,90 @@ class EvaluationRunner:
             raise EvaluationRunnerError("evaluation_run_not_queued")
         if self.executor is None:
             raise EvaluationRunnerError("evaluation_executor_unavailable")
+        try:
+            self._reserve_plan_work(plan)
+        except ProviderWorkBudgetError as error:
+            current = self._updated(
+                current,
+                status=EvaluationRunStatus.FAILED,
+                safe_error_code=error.code,
+            )
+            self.repository.update(current)
+            raise EvaluationRunnerError(error.code) from None
         current = self._updated(current, status=EvaluationRunStatus.RUNNING)
         self.repository.update(current)
-        for case in plan.cases:
-            owner_digest = hashlib.sha256(f"{plan.run_id}\0{case.case_id}".encode()).hexdigest()
-            try:
+        return current
+
+    async def execute_case(
+        self,
+        plan: EvaluationRunPlan,
+        case: EvaluationCaseInput,
+    ) -> PersistedCaseResult:
+        """Execute and persist one declared case for a started normal evaluation run."""
+
+        current = self.repository.get(plan.run_id)
+        if current is None or current.status is not EvaluationRunStatus.RUNNING:
+            raise EvaluationRunnerError("evaluation_run_not_running")
+        declared = {item.case_id: item for item in plan.cases}
+        if declared.get(case.case_id) != case:
+            raise EvaluationRunnerError("evaluation_case_not_declared")
+        if self.executor is None:
+            raise EvaluationRunnerError("evaluation_executor_unavailable")
+        case_path = self._case_path(plan.run_id, case.case_id)
+        if case_path.exists() or case_path.is_symlink():
+            raise ImmutableRunError("evaluation_case_already_recorded")
+        owner_digest = hashlib.sha256(f"{plan.run_id}\0{case.case_id}".encode()).hexdigest()
+        logical_started = perf_counter()
+        try:
+            with evaluation_run_attempt_context(plan.run_id):
                 execution = await self.executor.execute(
                     case,
                     owner_id=f"eval_owner_{owner_digest}",
-                    cache_policy=CachePolicy.BYPASS,
+                    cache_policy=plan.identity.cache_policy,
                 )
-                if execution.case_id != case.case_id:
-                    raise EvaluationRunnerError("evaluation_case_identity_invalid")
-                succeeded = execution.event.kind is not StreamEventKind.ERROR
-                result = PersistedCaseResult(
-                    run_id=plan.run_id,
-                    case_id=case.case_id,
-                    succeeded=succeeded,
-                    execution=execution,
-                    safe_error_code=None if succeeded else "qa_terminal_error",
-                )
-            except Exception:
-                succeeded = False
-                result = PersistedCaseResult(
-                    run_id=plan.run_id,
-                    case_id=case.case_id,
-                    succeeded=False,
-                    safe_error_code="case_execution_failed",
-                )
-            self._write_exclusive(self._case_path(plan.run_id, case.case_id), result)
-            current = self._updated(
-                current,
-                completed_cases=current.completed_cases + int(succeeded),
-                failed_cases=current.failed_cases + int(not succeeded),
+            if execution.case_id != case.case_id:
+                raise EvaluationRunnerError("evaluation_case_identity_invalid")
+            if execution.cache_policy is not plan.identity.cache_policy:
+                raise EvaluationRunnerError("evaluation_cache_policy_mismatch")
+            succeeded = execution.event.kind is not StreamEventKind.ERROR
+            result = PersistedCaseResult(
+                run_id=plan.run_id,
+                case_id=case.case_id,
+                succeeded=succeeded,
+                execution=execution,
+                safe_error_code=None if succeeded else "qa_terminal_error",
+                logical_latency_ms=max(0.0, (perf_counter() - logical_started) * 1_000),
             )
-            self.repository.update(current)
+        except Exception:
+            succeeded = False
+            result = PersistedCaseResult(
+                run_id=plan.run_id,
+                case_id=case.case_id,
+                succeeded=False,
+                safe_error_code="case_execution_failed",
+                logical_latency_ms=max(0.0, (perf_counter() - logical_started) * 1_000),
+            )
+        self._write_exclusive(case_path, result)
+        current = self._updated(
+            current,
+            completed_cases=current.completed_cases + int(succeeded),
+            failed_cases=current.failed_cases + int(not succeeded),
+        )
+        self.repository.update(current)
+        return result
+
+    def complete(self, plan: EvaluationRunPlan) -> EvaluationRun:
+        """Mark a fully persisted normal run complete after scheduled case execution."""
+
+        current = self.repository.get(plan.run_id)
+        if current is None or current.status is not EvaluationRunStatus.RUNNING:
+            raise EvaluationRunnerError("evaluation_run_not_running")
+        if current.completed_cases + current.failed_cases != len(plan.cases):
+            raise EvaluationRunnerError("evaluation_run_cases_incomplete")
+        if {item.case_id for item in self.load_case_results(plan.run_id)} != {
+            item.case_id for item in plan.cases
+        }:
+            raise EvaluationRunnerError("evaluation_run_case_evidence_incomplete")
         current = self._updated(current, status=EvaluationRunStatus.COMPLETED)
         self.repository.update(current)
         return current
@@ -432,6 +551,25 @@ class EvaluationRunner:
 
     def _updated(self, run: EvaluationRun, **changes: object) -> EvaluationRun:
         return run.model_copy(update={**changes, "updated_at": self.clock()})
+
+    def _reserve_plan_work(self, plan: EvaluationRunPlan) -> None:
+        if self.work_budget is None and self.case_work_estimator is None:
+            return
+        if self.work_budget is None or self.case_work_estimator is None:
+            raise ProviderWorkBudgetError("provider_work_budget_configuration_invalid")
+        estimates: list[ProviderWorkEstimate] = []
+        for case in plan.cases:
+            try:
+                estimate = self.case_work_estimator(case)
+            except Exception:
+                raise ProviderWorkBudgetError("provider_work_estimate_unavailable") from None
+            if not isinstance(estimate, ProviderWorkEstimate):
+                raise ProviderWorkBudgetError("provider_work_estimate_invalid")
+            estimates.append(estimate)
+        if self.work_reservations_prepared:
+            self.work_budget.require_reserved(tuple(estimates))
+        else:
+            self.work_budget.reserve_many(tuple(estimates))
 
     def _run_path(self, run_id: str) -> Path:
         if _SAFE_ARTIFACT_ID.fullmatch(run_id) is None:

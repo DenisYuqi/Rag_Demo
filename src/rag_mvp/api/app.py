@@ -14,6 +14,7 @@ from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse, Response
 from prometheus_client import CONTENT_TYPE_LATEST
 
+from rag_mvp.api.comparisons import router as comparisons_router
 from rag_mvp.api.documents import router as documents_router
 from rag_mvp.api.errors import install_error_handlers
 from rag_mvp.api.evaluation_diagnostics import (
@@ -605,6 +606,7 @@ def create_app(
     app.include_router(documents_router)
     app.include_router(qa_router)
     app.include_router(evaluation_diagnostics_router)
+    app.include_router(comparisons_router)
     install_qa_openapi_contract(app)
 
     @app.get("/healthz", tags=["operations"])

@@ -469,8 +469,18 @@ def test_scoring_rejects_missing_results_and_unproven_context_identity() -> None
         case.case_id,
         _answer_event(case_id=case.case_id),
         retrieved=("chunk-other",),
-        context=("chunk-authoritative",),
     )
+    execution = invalid.execution
+    assert execution is not None
+    invalid_execution = EvaluationCaseExecution.model_construct(
+        **{
+            name: getattr(execution, name)
+            for name in type(execution).model_fields
+            if name != "context_chunk_ids"
+        },
+        context_chunk_ids=("chunk-authoritative",),
+    )
+    invalid = invalid.model_copy(update={"execution": invalid_execution})
     with pytest.raises(EvaluationScoringError, match="case_context_not_in_retrieval"):
         score_evaluation(_dataset(case), (invalid,))
 

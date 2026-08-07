@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from decimal import Decimal
 from typing import Annotated
+from urllib.parse import urlsplit
 
 from pydantic import Field, field_validator
 
@@ -20,6 +21,35 @@ from rag_mvp.performance.load_report import LoadReport
 _ONE_MILLION = Decimal(1_000_000)
 _ONE_THOUSAND = Decimal(1_000)
 _SAFE_ROLE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
+
+OPENAI_COMPARISON_PRICING_VERSION = "openai-comparison-standard-2026-08-07-v1"
+OPENAI_COMPARISON_PRICING_PROVIDER = "openai-compatible-d9617135d6fdd0a2"
+OPENAI_COMPARISON_PRICING_SOURCES = (
+    "https://developers.openai.com/api/docs/models/gpt-4.1-mini",
+    "https://developers.openai.com/api/docs/models/gpt-5.4",
+    "https://developers.openai.com/api/docs/models/text-embedding-3-small",
+)
+OPENAI_COMPARISON_PRICING_ASSUMPTIONS = (
+    "standard non-batch and non-priority API pricing",
+    "no cached-input discount is claimed",
+    "the reranking adapter uses gpt-4.1-mini chat text-token rates but remains an "
+    "explicit reranking role; no generation-role alias is permitted",
+)
+
+_OPENAI_COMPARISON_RATES = {
+    (ModelRole.EMBEDDING, "text-embedding-3-small"): (Decimal("0.02"), None),
+    (ModelRole.GENERATION, "gpt-4.1-mini"): (Decimal("0.40"), Decimal("1.60")),
+    (ModelRole.GENERATION, "gpt-5.4"): (Decimal("2.50"), Decimal("15.00")),
+    (ModelRole.RERANKING, "gpt-4.1-mini"): (Decimal("0.40"), Decimal("1.60")),
+}
+
+
+class PricingPreflightError(ValueError):
+    """Safe fail-closed error raised before comparison provider traffic."""
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
 
 
 class PerformanceRolePricing(PerformanceRateEvidence):
@@ -56,6 +86,58 @@ class PerformancePricingEvidence(DomainModel):
         ) or len(normalized) != len(set(normalized)):
             raise ValueError("pricing source references must be unique bounded references")
         return normalized
+
+
+def preflight_openai_comparison_pricing(pricing: PerformancePricingEvidence) -> str:
+    """Validate the immutable official comparison card and return its digest.
+
+    The role is part of every rate identity.  In particular, a generation rate
+    for ``gpt-4.1-mini`` cannot satisfy the required reranking identity.
+    """
+
+    if pricing.pricing_version != OPENAI_COMPARISON_PRICING_VERSION:
+        raise PricingPreflightError("comparison-pricing-version-mismatch")
+    if pricing.currency != "USD":
+        raise PricingPreflightError("comparison-pricing-currency-mismatch")
+    if pricing.source_references != OPENAI_COMPARISON_PRICING_SOURCES:
+        raise PricingPreflightError("comparison-pricing-sources-mismatch")
+    for reference in pricing.source_references:
+        parsed = urlsplit(reference)
+        if (
+            parsed.scheme != "https"
+            or parsed.hostname != "developers.openai.com"
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.port is not None
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise PricingPreflightError("comparison-pricing-source-not-allowlisted")
+    if pricing.assumptions != OPENAI_COMPARISON_PRICING_ASSUMPTIONS:
+        raise PricingPreflightError("comparison-pricing-assumptions-mismatch")
+
+    actual = {
+        (rate.role, rate.provider, rate.model): (
+            rate.input_per_million,
+            rate.output_per_million,
+        )
+        for rate in pricing.rates
+    }
+    expected = {
+        (role, OPENAI_COMPARISON_PRICING_PROVIDER, model): amounts
+        for (role, model), amounts in _OPENAI_COMPARISON_RATES.items()
+    }
+    if actual.keys() != expected.keys():
+        raise PricingPreflightError("comparison-pricing-rate-identity-mismatch")
+    if actual != expected:
+        raise PricingPreflightError("comparison-pricing-rate-value-mismatch")
+
+    return canonical_pricing_evidence_digest(
+        pricing_version=pricing.pricing_version,
+        currency=pricing.currency,
+        rate_card=pricing.rates,
+        source_references=pricing.source_references,
+    )
 
 
 def calculate_performance_cost(
@@ -180,7 +262,13 @@ def _token_role_and_direction(name: str) -> tuple[str | None, str | None]:
 
 
 __all__ = [
+    "OPENAI_COMPARISON_PRICING_ASSUMPTIONS",
+    "OPENAI_COMPARISON_PRICING_PROVIDER",
+    "OPENAI_COMPARISON_PRICING_SOURCES",
+    "OPENAI_COMPARISON_PRICING_VERSION",
     "PerformancePricingEvidence",
     "PerformanceRolePricing",
+    "PricingPreflightError",
     "calculate_performance_cost",
+    "preflight_openai_comparison_pricing",
 ]
