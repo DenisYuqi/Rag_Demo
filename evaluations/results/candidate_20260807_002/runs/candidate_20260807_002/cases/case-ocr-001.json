@@ -1,0 +1,83 @@
+{
+  "schema_version": "1.0.0",
+  "run_id": "candidate_20260807_002",
+  "case_id": "case-ocr-001",
+  "succeeded": false,
+  "execution": {
+    "case_id": "case-ocr-001",
+    "owner_id": "eval_owner_3cf93068e9a39bcd97901acc590c000e0e7cbecdf4a8f1a10814da3d450cd620",
+    "session_id": "session_0ca4205ce48a47e691074fe19c3ed4f9",
+    "request_id": "eval_request_4a1f172dcdb145d6a56acd949120517f",
+    "event": {
+      "request_id": "eval_request_4a1f172dcdb145d6a56acd949120517f",
+      "session_id": "session_0ca4205ce48a47e691074fe19c3ed4f9",
+      "sequence": 0,
+      "kind": "error",
+      "response_language": "en",
+      "content": "A required dependency could not complete the request.",
+      "claims": [],
+      "citations": [],
+      "reason": null,
+      "error_code": "dependency-failure",
+      "retryable": false,
+      "diagnostics": {
+        "trace_id": null,
+        "stage_timings_ms": {
+          "validation": 16.00000000325963,
+          "retrieval": 530.9999999954016,
+          "evidence_assessment": 656.0000000026776,
+          "generation": 1656.9999999992433,
+          "finalization": 0.0,
+          "total": 2860.000000000582,
+          "query_embedding": 468.99999999732245,
+          "dense": 0.0,
+          "bm25": 0.0,
+          "fusion": 0.0,
+          "rerank": 0.0
+        },
+        "cache_status": {
+          "query_embedding": "not-applicable",
+          "retrieval": "not-applicable",
+          "rerank": "not-applicable",
+          "final": "not-applicable"
+        },
+        "model_identities": {
+          "embedding": "{\"adapter\":\"openai-compatible-v1\",\"dimension\":1536,\"model\":\"text-embedding-3-small\",\"normalization\":\"none\",\"provider\":\"openai-compatible-d9617135d6fdd0a2\"}",
+          "dense": "{\"metric\":\"cosine\",\"schema\":\"chroma-revision-v1\"}",
+          "bm25": "{\"algorithm\":\"bm25-okapi-v1\",\"b\":0.75,\"k1\":1.5,\"schema\":\"bm25-snapshot-v3\",\"tokenizer\":\"latin-jieba-cjk-ngram-v2:jieba-0.42.1:dict-sha256-7197c3211ddd98962b036cdf40324d1ea2bfaa12bd028e68faa70111a88e12a8:hmm-false\"}",
+          "rrf": "{\"dense_weight\":1.0,\"k\":60,\"lexical_weight\":1.0,\"tie_policy\":\"rrf-score-best-rank-chunk-id-v1\",\"version\":\"weighted-rrf-v1\"}",
+          "generation": "openai-compatible-d9617135d6fdd0a2/gpt-5.4/openai-compatible-v1"
+        },
+        "token_counts": {
+          "embedding-input": 12,
+          "generation-input": 491,
+          "generation-output": 81
+        },
+        "degradation_reasons": [],
+        "metadata": {
+          "failure_detail_code": "factual_unit_coverage_invalid",
+          "index_revision": "rev_eval_40719423095a14cd0dd5d0c993ba68417135e69a6a00121fdf62f53b5e26d866",
+          "requested_mode": "hybrid",
+          "effective_mode": "hybrid",
+          "dense_candidate_count": 10,
+          "lexical_candidate_count": 4,
+          "fused_candidate_count": 10,
+          "reranked_candidate_count": 0,
+          "candidate_count": 5,
+          "generation_attempts": 1,
+          "generation_fallback": false,
+          "decision_code": "answerable",
+          "refusal_policy_version": "normalized-fact-support-v1",
+          "context_count": 1
+        }
+      },
+      "terminal": true
+    },
+    "cache_policy": "bypass",
+    "retrieved_chunk_ids": [],
+    "context_chunk_ids": [],
+    "latency_ms": 2889.448000001721
+  },
+  "safe_error_code": "qa_terminal_error",
+  "completed_at": "2026-08-06T19:47:10.219753Z"
+}

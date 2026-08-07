@@ -1,0 +1,291 @@
+{
+  "attempts": [
+    {
+      "attempt_id": "attempt_c255d81406be426596bc5f2f285f4ae5",
+      "attempt_number": 1,
+      "created_at": "2026-08-06T19:54:15.594371Z",
+      "currency": null,
+      "estimated_cost": null,
+      "fallback": false,
+      "latency_ms": 1469.0000000045984,
+      "model": "text-embedding-3-small",
+      "operation_id": "qa-retrieval",
+      "provider": "openai-compatible-d9617135d6fdd0a2",
+      "request_id": "eval_request_d6484117f7614358930d939dc25f3c63",
+      "role": "embedding",
+      "run_id": null,
+      "safe_error_category": "cancelled",
+      "status": "cancelled",
+      "usage": {
+        "input_tokens": null,
+        "output_tokens": null,
+        "total_tokens_reported": null
+      }
+    },
+    {
+      "attempt_id": "attempt_bb4753237ae149208602e6cb27c76748",
+      "attempt_number": 1,
+      "created_at": "2026-08-06T19:54:16.744630Z",
+      "currency": null,
+      "estimated_cost": null,
+      "fallback": false,
+      "latency_ms": 921.0000000020955,
+      "model": "text-embedding-3-small",
+      "operation_id": "qa-retrieval",
+      "provider": "openai-compatible-d9617135d6fdd0a2",
+      "request_id": "eval_request_b28703cac9644490984655776e39506f",
+      "role": "embedding",
+      "run_id": null,
+      "safe_error_category": null,
+      "status": "succeeded",
+      "usage": {
+        "input_tokens": 25,
+        "output_tokens": null,
+        "total_tokens_reported": null
+      }
+    },
+    {
+      "attempt_id": "attempt_f59e83a7b37b45dc8820144096c278c0",
+      "attempt_number": 1,
+      "created_at": "2026-08-06T19:54:17.994571Z",
+      "currency": null,
+      "estimated_cost": null,
+      "fallback": false,
+      "latency_ms": 1203.0000000013388,
+      "model": "text-embedding-3-small",
+      "operation_id": "fact-evidence-assessment",
+      "provider": "openai-compatible-d9617135d6fdd0a2",
+      "request_id": "eval_request_b28703cac9644490984655776e39506f",
+      "role": "embedding",
+      "run_id": null,
+      "safe_error_category": "deadline_exceeded",
+      "status": "timed-out",
+      "usage": {
+        "input_tokens": null,
+        "output_tokens": null,
+        "total_tokens_reported": null
+      }
+    },
+    {
+      "attempt_id": "attempt_7fc90946eb274b518bd858e276b28a42",
+      "attempt_number": 1,
+      "created_at": "2026-08-06T19:54:18.763160Z",
+      "currency": null,
+      "estimated_cost": null,
+      "fallback": false,
+      "latency_ms": 610.0000000005821,
+      "model": "text-embedding-3-small",
+      "operation_id": "qa-retrieval",
+      "provider": "openai-compatible-d9617135d6fdd0a2",
+      "request_id": "eval_request_8cf720ff4b364512b2333137d0019aae",
+      "role": "embedding",
+      "run_id": null,
+      "safe_error_category": null,
+      "status": "succeeded",
+      "usage": {
+        "input_tokens": 20,
+        "output_tokens": null,
+        "total_tokens_reported": null
+      }
+    },
+    {
+      "attempt_id": "attempt_305e0a2aaa9b4683ba30663017b40a6e",
+      "attempt_number": 1,
+      "created_at": "2026-08-06T19:54:19.587386Z",
+      "currency": null,
+      "estimated_cost": null,
+      "fallback": false,
+      "latency_ms": 781.0000000026776,
+      "model": "text-embedding-3-small",
+      "operation_id": "fact-evidence-assessment",
+      "provider": "openai-compatible-d9617135d6fdd0a2",
+      "request_id": "eval_request_8cf720ff4b364512b2333137d0019aae",
+      "role": "embedding",
+      "run_id": null,
+      "safe_error_category": null,
+      "status": "succeeded",
+      "usage": {
+        "input_tokens": 169,
+        "output_tokens": null,
+        "total_tokens_reported": null
+      }
+    },
+    {
+      "attempt_id": "attempt_53eb462baaed449e86e93c092e36f221",
+      "attempt_number": 1,
+      "created_at": "2026-08-06T19:54:21.820355Z",
+      "currency": null,
+      "estimated_cost": null,
+      "fallback": false,
+      "latency_ms": 2218.9999999973224,
+      "model": "gpt-5.4",
+      "operation_id": "qa-generation",
+      "provider": "openai-compatible-d9617135d6fdd0a2",
+      "request_id": "eval_request_8cf720ff4b364512b2333137d0019aae",
+      "role": "generation",
+      "run_id": null,
+      "safe_error_category": null,
+      "status": "succeeded",
+      "usage": {
+        "input_tokens": 672,
+        "output_tokens": 82,
+        "total_tokens_reported": 754
+      }
+    },
+    {
+      "attempt_id": "attempt_7b42c99e8f89482da174f760d09bb25c",
+      "attempt_number": 1,
+      "created_at": "2026-08-06T19:54:22.364923Z",
+      "currency": null,
+      "estimated_cost": null,
+      "fallback": false,
+      "latency_ms": 421.0000000020955,
+      "model": "text-embedding-3-small",
+      "operation_id": "qa-retrieval",
+      "provider": "openai-compatible-d9617135d6fdd0a2",
+      "request_id": "eval_request_8af95f75e4524a5fa4dcc38afd5ab3f6",
+      "role": "embedding",
+      "run_id": null,
+      "safe_error_category": null,
+      "status": "succeeded",
+      "usage": {
+        "input_tokens": 12,
+        "output_tokens": null,
+        "total_tokens_reported": null
+      }
+    },
+    {
+      "attempt_id": "attempt_a2d9e5d8d6e6481d9d2675f603ba451b",
+      "attempt_number": 1,
+      "created_at": "2026-08-06T19:54:23.168407Z",
+      "currency": null,
+      "estimated_cost": null,
+      "fallback": false,
+      "latency_ms": 764.9999999994179,
+      "model": "text-embedding-3-small",
+      "operation_id": "fact-evidence-assessment",
+      "provider": "openai-compatible-d9617135d6fdd0a2",
+      "request_id": "eval_request_8af95f75e4524a5fa4dcc38afd5ab3f6",
+      "role": "embedding",
+      "run_id": null,
+      "safe_error_category": null,
+      "status": "succeeded",
+      "usage": {
+        "input_tokens": 215,
+        "output_tokens": null,
+        "total_tokens_reported": null
+      }
+    },
+    {
+      "attempt_id": "attempt_087da721799047429ad3cb3f5dd537a4",
+      "attempt_number": 1,
+      "created_at": "2026-08-06T19:54:24.748155Z",
+      "currency": null,
+      "estimated_cost": null,
+      "fallback": false,
+      "latency_ms": 1578.0000000013388,
+      "model": "gpt-5.4",
+      "operation_id": "qa-generation",
+      "provider": "openai-compatible-d9617135d6fdd0a2",
+      "request_id": "eval_request_8af95f75e4524a5fa4dcc38afd5ab3f6",
+      "role": "generation",
+      "run_id": null,
+      "safe_error_category": null,
+      "status": "succeeded",
+      "usage": {
+        "input_tokens": 516,
+        "output_tokens": 60,
+        "total_tokens_reported": 576
+      }
+    },
+    {
+      "attempt_id": "attempt_80bcadd6f5ca48758f8d44cf0800b061",
+      "attempt_number": 1,
+      "created_at": "2026-08-06T19:54:26.541541Z",
+      "currency": null,
+      "estimated_cost": null,
+      "fallback": false,
+      "latency_ms": 375.0,
+      "model": "text-embedding-3-small",
+      "operation_id": "qa-retrieval",
+      "provider": "openai-compatible-d9617135d6fdd0a2",
+      "request_id": "eval_request_482c4e391af04fe8b8eaba63d9758792",
+      "role": "embedding",
+      "run_id": null,
+      "safe_error_category": null,
+      "status": "succeeded",
+      "usage": {
+        "input_tokens": 21,
+        "output_tokens": null,
+        "total_tokens_reported": null
+      }
+    },
+    {
+      "attempt_id": "attempt_c3a5c3679dd7477891c5013f151ba12f",
+      "attempt_number": 1,
+      "created_at": "2026-08-06T19:54:27.140610Z",
+      "currency": null,
+      "estimated_cost": null,
+      "fallback": false,
+      "latency_ms": 578.0000000013388,
+      "model": "text-embedding-3-small",
+      "operation_id": "fact-evidence-assessment",
+      "provider": "openai-compatible-d9617135d6fdd0a2",
+      "request_id": "eval_request_482c4e391af04fe8b8eaba63d9758792",
+      "role": "embedding",
+      "run_id": null,
+      "safe_error_category": null,
+      "status": "succeeded",
+      "usage": {
+        "input_tokens": 173,
+        "output_tokens": null,
+        "total_tokens_reported": null
+      }
+    },
+    {
+      "attempt_id": "attempt_627a7056a8874d999de5f7b6a6767017",
+      "attempt_number": 1,
+      "created_at": "2026-08-06T19:54:25.320372Z",
+      "currency": null,
+      "estimated_cost": null,
+      "fallback": false,
+      "latency_ms": 391.00000000325963,
+      "model": "text-embedding-3-small",
+      "operation_id": "qa-retrieval",
+      "provider": "openai-compatible-d9617135d6fdd0a2",
+      "request_id": "eval_request_b9216cf76c0747afa4a060ca22ce8f03",
+      "role": "embedding",
+      "run_id": null,
+      "safe_error_category": null,
+      "status": "succeeded",
+      "usage": {
+        "input_tokens": 8,
+        "output_tokens": null,
+        "total_tokens_reported": null
+      }
+    },
+    {
+      "attempt_id": "attempt_e6ef1c1638e84779ba22c5168e6b03a8",
+      "attempt_number": 1,
+      "created_at": "2026-08-06T19:54:25.991006Z",
+      "currency": null,
+      "estimated_cost": null,
+      "fallback": false,
+      "latency_ms": 639.9999999994179,
+      "model": "text-embedding-3-small",
+      "operation_id": "fact-evidence-assessment",
+      "provider": "openai-compatible-d9617135d6fdd0a2",
+      "request_id": "eval_request_b9216cf76c0747afa4a060ca22ce8f03",
+      "role": "embedding",
+      "run_id": null,
+      "safe_error_category": null,
+      "status": "succeeded",
+      "usage": {
+        "input_tokens": 162,
+        "output_tokens": null,
+        "total_tokens_reported": null
+      }
+    }
+  ],
+  "run_id": "candidate_20260807_003"
+}

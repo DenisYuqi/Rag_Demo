@@ -20,6 +20,7 @@ class BrowserSessionState:
     owner_id: str
     session_id: str | None = None
     evaluation_run_id: str | None = None
+    comparison_run_id: str | None = None
     active_request_id: str | None = None
 
     @classmethod
@@ -31,6 +32,9 @@ class BrowserSessionState:
 
     def with_evaluation(self, run_id: str | None) -> BrowserSessionState:
         return replace(self, evaluation_run_id=run_id)
+
+    def with_comparison(self, run_id: str | None) -> BrowserSessionState:
+        return replace(self, comparison_run_id=run_id)
 
     def with_active_request(self, request_id: str | None) -> BrowserSessionState:
         return replace(self, active_request_id=request_id)
@@ -97,6 +101,29 @@ class EvaluationRender:
     operations_preview: str = ""
     operations_links_markdown: str = ""
     artifact_links_markdown: str = ""
+    poll_active: bool = False
+    start_enabled: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ComparisonRender:
+    state: BrowserSessionState
+    plan_choices: tuple[tuple[str, str], ...] = ()
+    comparison_choices: tuple[tuple[str, str], ...] = ()
+    selected_plan_id: str | None = None
+    selected_comparison_id: str | None = None
+    plan_rows: tuple[tuple[Any, ...], ...] = ()
+    history_rows: tuple[tuple[Any, ...], ...] = ()
+    controlled_rows: tuple[tuple[Any, ...], ...] = ()
+    candidate_rows: tuple[tuple[Any, ...], ...] = ()
+    category_rows: tuple[tuple[Any, ...], ...] = ()
+    plot_rows: tuple[tuple[str, str, float], ...] = ()
+    artifact_rows: tuple[tuple[Any, ...], ...] = ()
+    progress_markdown: str = ""
+    gate_markdown: str = ""
+    recommendation_markdown: str = ""
+    artifact_links_markdown: str = ""
+    status_markdown: str = ""
     poll_active: bool = False
     start_enabled: bool = False
 

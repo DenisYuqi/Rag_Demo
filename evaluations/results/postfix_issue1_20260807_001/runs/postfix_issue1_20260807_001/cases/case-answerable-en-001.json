@@ -1,0 +1,72 @@
+{
+  "schema_version": "1.0.0",
+  "run_id": "postfix_issue1_20260807_001",
+  "case_id": "case-answerable-en-001",
+  "succeeded": false,
+  "execution": {
+    "case_id": "case-answerable-en-001",
+    "owner_id": "eval_owner_8caae1527343091d3431423f0a4c8f0147edfd45737d62e20219730ecdd3ee57",
+    "session_id": "session_74642394c47f44feaae583d83f260215",
+    "request_id": "eval_request_1c6b381a2a3b4f4ab4d62f5778bc2370",
+    "event": {
+      "request_id": "eval_request_1c6b381a2a3b4f4ab4d62f5778bc2370",
+      "session_id": "session_74642394c47f44feaae583d83f260215",
+      "sequence": 0,
+      "kind": "error",
+      "response_language": "en",
+      "content": "A required dependency could not complete the request.",
+      "claims": [],
+      "citations": [],
+      "reason": null,
+      "error_code": "dependency-failure",
+      "retryable": false,
+      "diagnostics": {
+        "trace_id": null,
+        "stage_timings_ms": {
+          "validation": 15.999999995983671,
+          "retrieval": 500.0,
+          "evidence_assessment": 328.0000000013388,
+          "total": 843.9999999973224,
+          "query_embedding": 421.9999999986612,
+          "dense": 15.999999995983671,
+          "bm25": 15.999999995983671,
+          "fusion": 0.0,
+          "rerank": 0.0
+        },
+        "cache_status": {
+          "query_embedding": "not-applicable",
+          "retrieval": "not-applicable",
+          "rerank": "not-applicable",
+          "final": "not-applicable"
+        },
+        "model_identities": {
+          "embedding": "{\"adapter\":\"openai-compatible-v1\",\"dimension\":1536,\"model\":\"text-embedding-3-small\",\"normalization\":\"none\",\"provider\":\"openai-compatible-d9617135d6fdd0a2\"}",
+          "dense": "{\"metric\":\"cosine\",\"schema\":\"chroma-revision-v1\"}",
+          "bm25": "{\"algorithm\":\"bm25-okapi-v1\",\"b\":0.75,\"k1\":1.5,\"schema\":\"bm25-snapshot-v3\",\"tokenizer\":\"latin-jieba-cjk-ngram-v2:jieba-0.42.1:dict-sha256-7197c3211ddd98962b036cdf40324d1ea2bfaa12bd028e68faa70111a88e12a8:hmm-false\"}",
+          "rrf": "{\"dense_weight\":1.0,\"k\":60,\"lexical_weight\":1.0,\"tie_policy\":\"rrf-score-best-rank-chunk-id-v1\",\"version\":\"weighted-rrf-v1\"}"
+        },
+        "token_counts": {
+          "embedding-input": 16
+        },
+        "degradation_reasons": [],
+        "metadata": {
+          "index_revision": "rev_eval_40719423095a14cd0dd5d0c993ba68417135e69a6a00121fdf62f53b5e26d866",
+          "requested_mode": "hybrid",
+          "effective_mode": "hybrid",
+          "dense_candidate_count": 10,
+          "lexical_candidate_count": 4,
+          "fused_candidate_count": 10,
+          "reranked_candidate_count": 0,
+          "candidate_count": 5
+        }
+      },
+      "terminal": true
+    },
+    "cache_policy": "bypass",
+    "retrieved_chunk_ids": [],
+    "context_chunk_ids": [],
+    "latency_ms": 874.7154000011506
+  },
+  "safe_error_code": "qa_terminal_error",
+  "completed_at": "2026-08-06T19:37:30.778909Z"
+}

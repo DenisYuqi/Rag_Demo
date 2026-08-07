@@ -13,3 +13,6 @@ dist/
 .env
 .env.local
 .DS_Store
+.codex/
+.claude/
+openspec/

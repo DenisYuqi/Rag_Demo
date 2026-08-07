@@ -1,0 +1,222 @@
+{
+  "requests": [
+    {
+      "cache_status": {
+        "final": "not-applicable",
+        "query_embedding": "not-applicable",
+        "rerank": "not-applicable",
+        "retrieval": "not-applicable"
+      },
+      "case_id": "case-answerable-en-001",
+      "model_identities": {
+        "bm25": "{\"algorithm\":\"bm25-okapi-v1\",\"b\":0.75,\"k1\":1.5,\"schema\":\"bm25-snapshot-v3\",\"tokenizer\":\"latin-jieba-cjk-ngram-v2:jieba-0.42.1:dict-sha256-7197c3211ddd98962b036cdf40324d1ea2bfaa12bd028e68faa70111a88e12a8:hmm-false\"}",
+        "dense": "{\"metric\":\"cosine\",\"schema\":\"chroma-revision-v1\"}",
+        "embedding": "{\"adapter\":\"openai-compatible-v1\",\"dimension\":1536,\"model\":\"text-embedding-3-small\",\"normalization\":\"none\",\"provider\":\"openai-compatible-d9617135d6fdd0a2\"}",
+        "generation": "openai-compatible-d9617135d6fdd0a2/gpt-5.4/openai-compatible-v1",
+        "rrf": "{\"dense_weight\":1.0,\"k\":60,\"lexical_weight\":1.0,\"tie_policy\":\"rrf-score-best-rank-chunk-id-v1\",\"version\":\"weighted-rrf-v1\"}"
+      },
+      "request_id": "eval_request_24cd354cc9cd4316acf5a63b45f32d43",
+      "safe_error_code": null,
+      "stage_timings_ms": {
+        "bm25": 0.0,
+        "dense": 16.00000000325963,
+        "evidence_assessment": 608.9999999967404,
+        "finalization": 16.00000000325963,
+        "fusion": 0.0,
+        "generation": 1547.0000000059372,
+        "query_embedding": 686.9999999908032,
+        "rerank": 0.0,
+        "retrieval": 733.9999999967404,
+        "total": 2922.000000005937,
+        "validation": 16.00000000325963
+      },
+      "token_counts": {
+        "embedding-input": 16,
+        "generation-input": 677,
+        "generation-output": 82
+      },
+      "trace_id": null
+    },
+    {
+      "cache_status": {
+        "final": "not-applicable",
+        "query_embedding": "not-applicable",
+        "rerank": "not-applicable",
+        "retrieval": "not-applicable"
+      },
+      "case_id": "case-answerable-zh-001",
+      "model_identities": {
+        "bm25": "{\"algorithm\":\"bm25-okapi-v1\",\"b\":0.75,\"k1\":1.5,\"schema\":\"bm25-snapshot-v3\",\"tokenizer\":\"latin-jieba-cjk-ngram-v2:jieba-0.42.1:dict-sha256-7197c3211ddd98962b036cdf40324d1ea2bfaa12bd028e68faa70111a88e12a8:hmm-false\"}",
+        "dense": "{\"metric\":\"cosine\",\"schema\":\"chroma-revision-v1\"}",
+        "embedding": "{\"adapter\":\"openai-compatible-v1\",\"dimension\":1536,\"model\":\"text-embedding-3-small\",\"normalization\":\"none\",\"provider\":\"openai-compatible-d9617135d6fdd0a2\"}",
+        "generation": "openai-compatible-d9617135d6fdd0a2/gpt-5.4/openai-compatible-v1",
+        "rrf": "{\"dense_weight\":1.0,\"k\":60,\"lexical_weight\":1.0,\"tie_policy\":\"rrf-score-best-rank-chunk-id-v1\",\"version\":\"weighted-rrf-v1\"}"
+      },
+      "request_id": "eval_request_c217781ee7d94c09a80b04b01e5d5eaf",
+      "safe_error_code": null,
+      "stage_timings_ms": {
+        "bm25": 0.0,
+        "dense": 14.999999999417923,
+        "evidence_assessment": 593.9999999973224,
+        "finalization": 0.0,
+        "fusion": 0.0,
+        "generation": 1858.9999999967404,
+        "query_embedding": 891.0000000032596,
+        "queue": 15.999999988707714,
+        "rerank": 0.0,
+        "retrieval": 953.0000000086147,
+        "total": 3406.0000000026776,
+        "validation": 0.0
+      },
+      "token_counts": {
+        "embedding-input": 25,
+        "generation-input": 572,
+        "generation-output": 85
+      },
+      "trace_id": null
+    },
+    {
+      "cache_status": {},
+      "case_id": "case-injection-001",
+      "model_identities": {},
+      "request_id": "eval_request_142a155589f74a83a5ff841347291270",
+      "safe_error_code": null,
+      "stage_timings_ms": {
+        "total": 0.0,
+        "validation": 0.0
+      },
+      "token_counts": {},
+      "trace_id": null
+    },
+    {
+      "cache_status": {
+        "final": "not-applicable",
+        "query_embedding": "not-applicable",
+        "rerank": "not-applicable",
+        "retrieval": "not-applicable"
+      },
+      "case_id": "case-multi-turn-001",
+      "model_identities": {
+        "bm25": "{\"algorithm\":\"bm25-okapi-v1\",\"b\":0.75,\"k1\":1.5,\"schema\":\"bm25-snapshot-v3\",\"tokenizer\":\"latin-jieba-cjk-ngram-v2:jieba-0.42.1:dict-sha256-7197c3211ddd98962b036cdf40324d1ea2bfaa12bd028e68faa70111a88e12a8:hmm-false\"}",
+        "dense": "{\"metric\":\"cosine\",\"schema\":\"chroma-revision-v1\"}",
+        "embedding": "{\"adapter\":\"openai-compatible-v1\",\"dimension\":1536,\"model\":\"text-embedding-3-small\",\"normalization\":\"none\",\"provider\":\"openai-compatible-d9617135d6fdd0a2\"}",
+        "generation": "openai-compatible-d9617135d6fdd0a2/gpt-5.4/openai-compatible-v1",
+        "rrf": "{\"dense_weight\":1.0,\"k\":60,\"lexical_weight\":1.0,\"tie_policy\":\"rrf-score-best-rank-chunk-id-v1\",\"version\":\"weighted-rrf-v1\"}"
+      },
+      "request_id": "eval_request_3ea35230b78d4d16925f0e8924b09f5f",
+      "safe_error_code": null,
+      "stage_timings_ms": {
+        "bm25": 0.0,
+        "dense": 16.00000000325963,
+        "evidence_assessment": 546.9999999913853,
+        "finalization": 0.0,
+        "fusion": 0.0,
+        "generation": 1406.0000000026776,
+        "query_embedding": 421.0000000020955,
+        "rerank": 0.0,
+        "retrieval": 484.0000000112923,
+        "total": 2452.999999994063,
+        "validation": 15.999999988707714
+      },
+      "token_counts": {
+        "embedding-input": 20,
+        "generation-input": 672,
+        "generation-output": 82
+      },
+      "trace_id": null
+    },
+    {
+      "cache_status": {
+        "final": "not-applicable",
+        "query_embedding": "not-applicable",
+        "rerank": "not-applicable",
+        "retrieval": "not-applicable"
+      },
+      "case_id": "case-ocr-001",
+      "model_identities": {
+        "bm25": "{\"algorithm\":\"bm25-okapi-v1\",\"b\":0.75,\"k1\":1.5,\"schema\":\"bm25-snapshot-v3\",\"tokenizer\":\"latin-jieba-cjk-ngram-v2:jieba-0.42.1:dict-sha256-7197c3211ddd98962b036cdf40324d1ea2bfaa12bd028e68faa70111a88e12a8:hmm-false\"}",
+        "dense": "{\"metric\":\"cosine\",\"schema\":\"chroma-revision-v1\"}",
+        "embedding": "{\"adapter\":\"openai-compatible-v1\",\"dimension\":1536,\"model\":\"text-embedding-3-small\",\"normalization\":\"none\",\"provider\":\"openai-compatible-d9617135d6fdd0a2\"}",
+        "generation": "openai-compatible-d9617135d6fdd0a2/gpt-5.4/openai-compatible-v1",
+        "rrf": "{\"dense_weight\":1.0,\"k\":60,\"lexical_weight\":1.0,\"tie_policy\":\"rrf-score-best-rank-chunk-id-v1\",\"version\":\"weighted-rrf-v1\"}"
+      },
+      "request_id": "eval_request_801a9a7048594878b6b429662156e119",
+      "safe_error_code": null,
+      "stage_timings_ms": {
+        "bm25": 0.0,
+        "dense": 0.0,
+        "evidence_assessment": 516.0000000032596,
+        "finalization": 0.0,
+        "fusion": 0.0,
+        "generation": 1375.0,
+        "query_embedding": 452.9999999940628,
+        "rerank": 0.0,
+        "retrieval": 514.9999999994179,
+        "total": 2438.000000009197,
+        "validation": 32.00000000651926
+      },
+      "token_counts": {
+        "embedding-input": 12,
+        "generation-input": 516,
+        "generation-output": 60
+      },
+      "trace_id": null
+    },
+    {
+      "cache_status": {},
+      "case_id": "case-pii-001",
+      "model_identities": {},
+      "request_id": "eval_request_04406524619249ef9fbe8623acd5f4a8",
+      "safe_error_code": "qa_terminal_error",
+      "stage_timings_ms": {},
+      "token_counts": {},
+      "trace_id": null
+    },
+    {
+      "cache_status": {},
+      "case_id": "case-required-refusal-001",
+      "model_identities": {},
+      "request_id": "eval_request_4488377d239d484ca7264e334939dc2d",
+      "safe_error_code": null,
+      "stage_timings_ms": {
+        "total": 0.0,
+        "validation": 0.0
+      },
+      "token_counts": {},
+      "trace_id": null
+    },
+    {
+      "cache_status": {
+        "final": "not-applicable",
+        "query_embedding": "not-applicable",
+        "rerank": "not-applicable",
+        "retrieval": "not-applicable"
+      },
+      "case_id": "case-unanswerable-001",
+      "model_identities": {
+        "bm25": "{\"algorithm\":\"bm25-okapi-v1\",\"b\":0.75,\"k1\":1.5,\"schema\":\"bm25-snapshot-v3\",\"tokenizer\":\"latin-jieba-cjk-ngram-v2:jieba-0.42.1:dict-sha256-7197c3211ddd98962b036cdf40324d1ea2bfaa12bd028e68faa70111a88e12a8:hmm-false\"}",
+        "dense": "{\"metric\":\"cosine\",\"schema\":\"chroma-revision-v1\"}",
+        "embedding": "{\"adapter\":\"openai-compatible-v1\",\"dimension\":1536,\"model\":\"text-embedding-3-small\",\"normalization\":\"none\",\"provider\":\"openai-compatible-d9617135d6fdd0a2\"}",
+        "rrf": "{\"dense_weight\":1.0,\"k\":60,\"lexical_weight\":1.0,\"tie_policy\":\"rrf-score-best-rank-chunk-id-v1\",\"version\":\"weighted-rrf-v1\"}"
+      },
+      "request_id": "eval_request_73875ecc56bf496d81d42a169c789497",
+      "safe_error_code": null,
+      "stage_timings_ms": {
+        "bm25": 0.0,
+        "dense": 14.999999999417923,
+        "evidence_assessment": 625.0,
+        "fusion": 0.0,
+        "query_embedding": 453.9999999979045,
+        "rerank": 0.0,
+        "retrieval": 514.9999999994179,
+        "total": 1172.0000000059372,
+        "validation": 32.00000000651926
+      },
+      "token_counts": {
+        "embedding-input": 8
+      },
+      "trace_id": null
+    }
+  ],
+  "run_id": "accepted_20260807_002"
+}

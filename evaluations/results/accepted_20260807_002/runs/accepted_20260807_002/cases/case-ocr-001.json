@@ -1,0 +1,111 @@
+{
+  "schema_version": "1.0.0",
+  "run_id": "accepted_20260807_002",
+  "case_id": "case-ocr-001",
+  "succeeded": true,
+  "execution": {
+    "case_id": "case-ocr-001",
+    "owner_id": "eval_owner_2e01dece1588610c612702b9641bbe506906b2b7bcc7a481bb67a3a8770818f5",
+    "session_id": "session_f22c7a4694e54bc39c69f6ebaa0a4bb7",
+    "request_id": "eval_request_801a9a7048594878b6b429662156e119",
+    "event": {
+      "request_id": "eval_request_801a9a7048594878b6b429662156e119",
+      "session_id": "session_f22c7a4694e54bc39c69f6ebaa0a4bb7",
+      "sequence": 0,
+      "kind": "answer",
+      "response_language": "en",
+      "content": "OCR-7421",
+      "claims": [
+        {
+          "text": "OCR-7421",
+          "citation_chunk_ids": [
+            "chk_138dcc1075a26e29cf099cb2efc69e9e"
+          ]
+        }
+      ],
+      "citations": [
+        {
+          "source_title": "Synthetic Scanned Expense Notice",
+          "document_version": 1,
+          "chunk_id": "chk_138dcc1075a26e29cf099cb2efc69e9e",
+          "locator": {
+            "pages": [
+              1
+            ],
+            "section_path": [],
+            "char_start": null,
+            "char_end": null
+          }
+        }
+      ],
+      "reason": null,
+      "error_code": null,
+      "retryable": null,
+      "diagnostics": {
+        "trace_id": null,
+        "stage_timings_ms": {
+          "validation": 32.00000000651926,
+          "retrieval": 514.9999999994179,
+          "evidence_assessment": 516.0000000032596,
+          "generation": 1375.0,
+          "finalization": 0.0,
+          "total": 2438.000000009197,
+          "query_embedding": 452.9999999940628,
+          "dense": 0.0,
+          "bm25": 0.0,
+          "fusion": 0.0,
+          "rerank": 0.0
+        },
+        "cache_status": {
+          "query_embedding": "not-applicable",
+          "retrieval": "not-applicable",
+          "rerank": "not-applicable",
+          "final": "not-applicable"
+        },
+        "model_identities": {
+          "embedding": "{\"adapter\":\"openai-compatible-v1\",\"dimension\":1536,\"model\":\"text-embedding-3-small\",\"normalization\":\"none\",\"provider\":\"openai-compatible-d9617135d6fdd0a2\"}",
+          "dense": "{\"metric\":\"cosine\",\"schema\":\"chroma-revision-v1\"}",
+          "bm25": "{\"algorithm\":\"bm25-okapi-v1\",\"b\":0.75,\"k1\":1.5,\"schema\":\"bm25-snapshot-v3\",\"tokenizer\":\"latin-jieba-cjk-ngram-v2:jieba-0.42.1:dict-sha256-7197c3211ddd98962b036cdf40324d1ea2bfaa12bd028e68faa70111a88e12a8:hmm-false\"}",
+          "rrf": "{\"dense_weight\":1.0,\"k\":60,\"lexical_weight\":1.0,\"tie_policy\":\"rrf-score-best-rank-chunk-id-v1\",\"version\":\"weighted-rrf-v1\"}",
+          "generation": "openai-compatible-d9617135d6fdd0a2/gpt-5.4/openai-compatible-v1"
+        },
+        "token_counts": {
+          "embedding-input": 12,
+          "generation-input": 516,
+          "generation-output": 60
+        },
+        "degradation_reasons": [],
+        "metadata": {
+          "index_revision": "rev_eval_40719423095a14cd0dd5d0c993ba68417135e69a6a00121fdf62f53b5e26d866",
+          "requested_mode": "hybrid",
+          "effective_mode": "hybrid",
+          "dense_candidate_count": 10,
+          "lexical_candidate_count": 4,
+          "fused_candidate_count": 10,
+          "reranked_candidate_count": 0,
+          "candidate_count": 5,
+          "generation_attempts": 1,
+          "generation_fallback": false,
+          "decision_code": "answerable",
+          "refusal_policy_version": "normalized-fact-support-v1",
+          "context_count": 1
+        }
+      },
+      "terminal": true
+    },
+    "cache_policy": "bypass",
+    "retrieved_chunk_ids": [
+      "chk_138dcc1075a26e29cf099cb2efc69e9e",
+      "chk_0c4a8d51b69ad763e39fb336deed244b",
+      "chk_9f0b3f681a73323e217ba3f98dd6365a",
+      "chk_7194fb5dc18883e733cd16af2b3a010c",
+      "chk_071908b9c04e8e4af44ea463ce51ed0f"
+    ],
+    "context_chunk_ids": [
+      "chk_138dcc1075a26e29cf099cb2efc69e9e"
+    ],
+    "latency_ms": 2485.1609999896027
+  },
+  "safe_error_code": null,
+  "completed_at": "2026-08-06T20:04:58.773929Z"
+}

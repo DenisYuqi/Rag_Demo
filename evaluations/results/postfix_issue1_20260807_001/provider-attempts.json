@@ -1,0 +1,247 @@
+{
+  "attempts": [
+    {
+      "attempt_id": "attempt_bf311bb9b62041a2b2ec7f67f26e19c3",
+      "attempt_number": 1,
+      "created_at": "2026-08-06T19:37:30.391926Z",
+      "currency": null,
+      "estimated_cost": null,
+      "fallback": false,
+      "latency_ms": 406.9999999992433,
+      "model": "text-embedding-3-small",
+      "operation_id": "qa-retrieval",
+      "provider": "openai-compatible-d9617135d6fdd0a2",
+      "request_id": "eval_request_1c6b381a2a3b4f4ab4d62f5778bc2370",
+      "role": "embedding",
+      "run_id": null,
+      "safe_error_category": null,
+      "status": "succeeded",
+      "usage": {
+        "input_tokens": 16,
+        "output_tokens": null,
+        "total_tokens_reported": null
+      }
+    },
+    {
+      "attempt_id": "attempt_6a2b36b0047d49be8b92d490fce725c4",
+      "attempt_number": 1,
+      "created_at": "2026-08-06T19:37:30.730756Z",
+      "currency": null,
+      "estimated_cost": null,
+      "fallback": false,
+      "latency_ms": 297.0000000059372,
+      "model": "text-embedding-3-small",
+      "operation_id": "fact-evidence-assessment",
+      "provider": "openai-compatible-d9617135d6fdd0a2",
+      "request_id": "eval_request_1c6b381a2a3b4f4ab4d62f5778bc2370",
+      "role": "embedding",
+      "run_id": null,
+      "safe_error_category": "deadline_exceeded",
+      "status": "timed-out",
+      "usage": {
+        "input_tokens": null,
+        "output_tokens": null,
+        "total_tokens_reported": null
+      }
+    },
+    {
+      "attempt_id": "attempt_f7cc6793b6884659af26631e9be003c8",
+      "attempt_number": 1,
+      "created_at": "2026-08-06T19:37:31.607935Z",
+      "currency": null,
+      "estimated_cost": null,
+      "fallback": false,
+      "latency_ms": 703.0000000013388,
+      "model": "text-embedding-3-small",
+      "operation_id": "qa-retrieval",
+      "provider": "openai-compatible-d9617135d6fdd0a2",
+      "request_id": "eval_request_cfd488a72e8248aab713eae60772c05d",
+      "role": "embedding",
+      "run_id": null,
+      "safe_error_category": null,
+      "status": "succeeded",
+      "usage": {
+        "input_tokens": 25,
+        "output_tokens": null,
+        "total_tokens_reported": null
+      }
+    },
+    {
+      "attempt_id": "attempt_40400b10a9de45c591b28a60e9eeaec5",
+      "attempt_number": 1,
+      "created_at": "2026-08-06T19:37:31.957653Z",
+      "currency": null,
+      "estimated_cost": null,
+      "fallback": false,
+      "latency_ms": 311.99999999807915,
+      "model": "text-embedding-3-small",
+      "operation_id": "fact-evidence-assessment",
+      "provider": "openai-compatible-d9617135d6fdd0a2",
+      "request_id": "eval_request_cfd488a72e8248aab713eae60772c05d",
+      "role": "embedding",
+      "run_id": null,
+      "safe_error_category": "deadline_exceeded",
+      "status": "timed-out",
+      "usage": {
+        "input_tokens": null,
+        "output_tokens": null,
+        "total_tokens_reported": null
+      }
+    },
+    {
+      "attempt_id": "attempt_1d29d47dddd743c79cd11271dbf0a77f",
+      "attempt_number": 1,
+      "created_at": "2026-08-06T19:37:32.902349Z",
+      "currency": null,
+      "estimated_cost": null,
+      "fallback": false,
+      "latency_ms": 735.0000000005821,
+      "model": "text-embedding-3-small",
+      "operation_id": "qa-retrieval",
+      "provider": "openai-compatible-d9617135d6fdd0a2",
+      "request_id": "eval_request_2a97a055305c439ab6958a09592e6f07",
+      "role": "embedding",
+      "run_id": null,
+      "safe_error_category": "cancelled",
+      "status": "cancelled",
+      "usage": {
+        "input_tokens": null,
+        "output_tokens": null,
+        "total_tokens_reported": null
+      }
+    },
+    {
+      "attempt_id": "attempt_89480960aea0403499df8d1fe8b094b9",
+      "attempt_number": 1,
+      "created_at": "2026-08-06T19:37:33.681521Z",
+      "currency": null,
+      "estimated_cost": null,
+      "fallback": false,
+      "latency_ms": 608.9999999967404,
+      "model": "text-embedding-3-small",
+      "operation_id": "qa-retrieval",
+      "provider": "openai-compatible-d9617135d6fdd0a2",
+      "request_id": "eval_request_2d211bee590c410d947d9a43128cb1ee",
+      "role": "embedding",
+      "run_id": null,
+      "safe_error_category": null,
+      "status": "succeeded",
+      "usage": {
+        "input_tokens": 12,
+        "output_tokens": null,
+        "total_tokens_reported": null
+      }
+    },
+    {
+      "attempt_id": "attempt_68164080d8f3469cbb78d4ac658e7820",
+      "attempt_number": 1,
+      "created_at": "2026-08-06T19:37:34.013935Z",
+      "currency": null,
+      "estimated_cost": null,
+      "fallback": false,
+      "latency_ms": 313.00000000192085,
+      "model": "text-embedding-3-small",
+      "operation_id": "fact-evidence-assessment",
+      "provider": "openai-compatible-d9617135d6fdd0a2",
+      "request_id": "eval_request_2d211bee590c410d947d9a43128cb1ee",
+      "role": "embedding",
+      "run_id": null,
+      "safe_error_category": "deadline_exceeded",
+      "status": "timed-out",
+      "usage": {
+        "input_tokens": null,
+        "output_tokens": null,
+        "total_tokens_reported": null
+      }
+    },
+    {
+      "attempt_id": "attempt_aa7f78a304564379927ed2b80b74aaa6",
+      "attempt_number": 1,
+      "created_at": "2026-08-06T19:37:36.028134Z",
+      "currency": null,
+      "estimated_cost": null,
+      "fallback": false,
+      "latency_ms": 656.9999999992433,
+      "model": "text-embedding-3-small",
+      "operation_id": "qa-retrieval",
+      "provider": "openai-compatible-d9617135d6fdd0a2",
+      "request_id": "eval_request_0bed8dca82144e659a44d0571773a904",
+      "role": "embedding",
+      "run_id": null,
+      "safe_error_category": null,
+      "status": "succeeded",
+      "usage": {
+        "input_tokens": 21,
+        "output_tokens": null,
+        "total_tokens_reported": null
+      }
+    },
+    {
+      "attempt_id": "attempt_3641626cfa4a4f1e927c84571074d1bf",
+      "attempt_number": 1,
+      "created_at": "2026-08-06T19:37:36.359543Z",
+      "currency": null,
+      "estimated_cost": null,
+      "fallback": false,
+      "latency_ms": 312.0000000053551,
+      "model": "text-embedding-3-small",
+      "operation_id": "fact-evidence-assessment",
+      "provider": "openai-compatible-d9617135d6fdd0a2",
+      "request_id": "eval_request_0bed8dca82144e659a44d0571773a904",
+      "role": "embedding",
+      "run_id": null,
+      "safe_error_category": "deadline_exceeded",
+      "status": "timed-out",
+      "usage": {
+        "input_tokens": null,
+        "output_tokens": null,
+        "total_tokens_reported": null
+      }
+    },
+    {
+      "attempt_id": "attempt_ed00fd9f75f7497998c665c57bb25871",
+      "attempt_number": 1,
+      "created_at": "2026-08-06T19:37:34.832062Z",
+      "currency": null,
+      "estimated_cost": null,
+      "fallback": false,
+      "latency_ms": 671.9999999986612,
+      "model": "text-embedding-3-small",
+      "operation_id": "qa-retrieval",
+      "provider": "openai-compatible-d9617135d6fdd0a2",
+      "request_id": "eval_request_00b905422d2141f0ac2183e2ea5d9f84",
+      "role": "embedding",
+      "run_id": null,
+      "safe_error_category": null,
+      "status": "succeeded",
+      "usage": {
+        "input_tokens": 8,
+        "output_tokens": null,
+        "total_tokens_reported": null
+      }
+    },
+    {
+      "attempt_id": "attempt_3c592a6ba5fd4e5aafbbb9920d0e1d55",
+      "attempt_number": 1,
+      "created_at": "2026-08-06T19:37:35.148935Z",
+      "currency": null,
+      "estimated_cost": null,
+      "fallback": false,
+      "latency_ms": 281.9999999992433,
+      "model": "text-embedding-3-small",
+      "operation_id": "fact-evidence-assessment",
+      "provider": "openai-compatible-d9617135d6fdd0a2",
+      "request_id": "eval_request_00b905422d2141f0ac2183e2ea5d9f84",
+      "role": "embedding",
+      "run_id": null,
+      "safe_error_category": "deadline_exceeded",
+      "status": "timed-out",
+      "usage": {
+        "input_tokens": null,
+        "output_tokens": null,
+        "total_tokens_reported": null
+      }
+    }
+  ],
+  "run_id": "postfix_issue1_20260807_001"
+}

@@ -1,0 +1,125 @@
+{
+  "schema_version": "1.0.0",
+  "runner_version": "production-qa-runner-v1",
+  "run_id": "candidate_20260807_001",
+  "created_at": "2026-08-06T19:42:23.999816Z",
+  "case_ids": [
+    "case-answerable-en-001",
+    "case-answerable-zh-001",
+    "case-multi-turn-001",
+    "case-ocr-001",
+    "case-unanswerable-001",
+    "case-required-refusal-001",
+    "case-injection-001",
+    "case-pii-001"
+  ],
+  "identity": {
+    "dataset_id": "mvp-bilingual-rag",
+    "dataset_version": "1.0.0",
+    "dataset_hash": "sha256:330df745c7df79e106fbb80b6137d1b55fb39ec63215f479aed858f7eb7f05f2",
+    "corpus_version": "1.0.0",
+    "corpus_hash": "sha256:40719423095a14cd0dd5d0c993ba68417135e69a6a00121fdf62f53b5e26d866",
+    "configuration_id": "f72d724341cfd5e8",
+    "code_revision": "sha256:5232b69cf630df0c226d877e7025d0f2a1d8c9979c82152b243b20b9858fe9f1",
+    "prompt_versions": {
+      "generation": "grounded-claims-json-v1",
+      "generation-output-schema": "grounded-answer-v1",
+      "query-rewrite": "user-history-expansion-v1",
+      "reranking": "listwise-rerank-v1",
+      "reranking-parser": "exact-id-permutation-v1"
+    },
+    "provider_identities": {
+      "backend": "openai",
+      "embedding": "openai-compatible-d9617135d6fdd0a2",
+      "generation": "openai-compatible-d9617135d6fdd0a2",
+      "reranking": "disabled",
+      "adapter": "openai-compatible-v1"
+    },
+    "model_identities": {
+      "embedding": "text-embedding-3-small",
+      "generation": "gpt-5.4",
+      "reranking": "disabled"
+    },
+    "generation_settings": {
+      "temperature": 0.0,
+      "maximum_question_characters": 4096,
+      "maximum_output_tokens": 512,
+      "response_format": "json_object",
+      "max_tokens_parameter": "max_completion_tokens",
+      "provider_timeout_seconds": 30.0,
+      "provider_retry_limit": 1,
+      "qa_deadline_seconds": 9.5,
+      "qa_generation_budget_seconds": 5.3,
+      "qa_finalization_budget_seconds": 0.6
+    },
+    "embedding_identity": {
+      "provider": "openai-compatible-d9617135d6fdd0a2",
+      "model": "text-embedding-3-small",
+      "dimension": 1536,
+      "normalization": "none",
+      "adapter_version": "openai-compatible-v1",
+      "send_dimensions": true
+    },
+    "chunking_identity": {
+      "extraction_version": "extraction-v1",
+      "normalization_version": "unicode-nfc-lines-v1",
+      "chunking_version": "structure-page-token-v1",
+      "tokenizer_version": "unicode-word-cjk-v1",
+      "target_tokens": 500,
+      "overlap_tokens": 80,
+      "ocr_enabled": true,
+      "ocr_languages": "chi_sim+eng"
+    },
+    "retrieval_configuration": {
+      "identity_version": "evaluation-plan-identity-v1",
+      "mode": "hybrid",
+      "dense_candidate_limit": 20,
+      "lexical_candidate_limit": 20,
+      "rerank_candidate_limit": 10,
+      "context_chunk_limit": 5,
+      "rrf_k": 60,
+      "dense_weight": 1.0,
+      "lexical_weight": 1.0,
+      "rrf_version": "weighted-rrf-v1",
+      "rrf_tie_policy_version": "rrf-score-best-rank-chunk-id-v1",
+      "reranking_enabled": false,
+      "rerank_deadline_seconds": 1.2,
+      "allow_single_retriever_degradation": false,
+      "degradation_policy_version": "single-normalized-retriever-v1",
+      "retrieval_cache_enabled": false,
+      "qa_retrieval_budget_seconds": 1.2,
+      "qa_embedding_budget_seconds": 0.8,
+      "qa_dense_retrieval_budget_seconds": 0.8,
+      "qa_bm25_budget_seconds": 0.8,
+      "qa_fusion_budget_seconds": 0.2,
+      "qa_evidence_assessment_budget_seconds": 0.8,
+      "context_selection_version": "ranked-token-prefix-v1",
+      "context_tokenizer_version": "unicode-word-cjk-v1",
+      "fact_evidence_assessor_version": "semantic-cosine-assertion-conflict-v1",
+      "minimum_support_score": 0.65,
+      "grounding_validator_version": "exact-claim-coverage-request-registry-v1",
+      "refusal_policy_version": "normalized-fact-support-v1"
+    },
+    "scorer_versions": {
+      "faithfulness": "faithfulness-factual-unit-support-v1",
+      "context-precision": "context-precision-average-precision-v1",
+      "answer-completeness": "answer-completeness-expected-facts-v1",
+      "style-consistency": "style-consistency-applicable-checks-v1",
+      "refusal-appropriateness": "refusal-appropriateness-outcome-v1",
+      "scoring-pipeline": "deterministic-evaluation-scoring-v1",
+      "quality-gate": "rag-quality-thresholds-v1"
+    },
+    "pricing_version": "openai-standard-2026-08-07",
+    "random_seeds": {
+      "case-order": 0,
+      "scoring": 0
+    },
+    "environment": {
+      "python_version": "3.12.13",
+      "platform": "Windows-AMD64",
+      "deployment": "development"
+    },
+    "cache_policy": "bypass"
+  },
+  "manifest_hash": "65c23528b978acc54c6e475a8570bc61c08fa3ca444a555deb89f4993a617e52"
+}

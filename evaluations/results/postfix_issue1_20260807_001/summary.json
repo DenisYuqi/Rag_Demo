@@ -1,0 +1,10 @@
+{
+  "configuration_id": "1ae2d4e14ff7e417",
+  "corpus_hash": "sha256:40719423095a14cd0dd5d0c993ba68417135e69a6a00121fdf62f53b5e26d866",
+  "dataset_hash": "sha256:330df745c7df79e106fbb80b6137d1b55fb39ec63215f479aed858f7eb7f05f2",
+  "final_passed": false,
+  "quality_passed": false,
+  "report": "D:\\pythonWorkspace\\Rag_Demo\\evaluations\\results\\postfix_issue1_20260807_001\\report.json",
+  "run_id": "postfix_issue1_20260807_001",
+  "status": "completed"
+}
