@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import json
 import math
+import threading
 from collections.abc import Mapping, Sequence
 from numbers import Real
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Self, cast
+from typing import Any, Final, Self, cast
 
 import chromadb
 from chromadb.api.collection_configuration import CreateCollectionConfiguration
@@ -23,6 +24,23 @@ from rag_mvp.retrieval.snapshot import (
     chunk_record_digest,
     chunk_set_digest,
 )
+
+# Chroma shares one process-level System for every persistent path, but its
+# create/increment and decrement/remove lifecycle transitions are not one
+# atomic operation. Serializing client construction and close prevents a cold
+# concurrent bind from observing a stopped or replaced shared System. Queries
+# deliberately remain outside this lock.
+_CHROMA_CLIENT_LIFECYCLE_LOCK: Final = threading.RLock()
+
+
+def _create_persistent_client(path: Path) -> Any:
+    with _CHROMA_CLIENT_LIFECYCLE_LOCK:
+        return chromadb.PersistentClient(path=str(path))
+
+
+def _close_persistent_client(client: Any) -> None:
+    with _CHROMA_CLIENT_LIFECYCLE_LOCK:
+        client.close()
 
 
 class DenseIndexError(ValueError):
@@ -167,7 +185,7 @@ class PersistentChromaIndex:
         self._collection: Any | None = None
         self._sealed = False
         try:
-            self._client = chromadb.PersistentClient(path=str(path))
+            self._client = _create_persistent_client(path)
             existing_names = {collection.name for collection in self._client.list_collections()}
             if collection_name in existing_names:
                 raise DenseIndexError("dense_collection_exists")
@@ -207,7 +225,7 @@ class PersistentChromaIndex:
         self._collection = None
         self._sealed = False
         try:
-            self._client = chromadb.PersistentClient(path=str(path))
+            self._client = _create_persistent_client(path)
             existing_names = {collection.name for collection in self._client.list_collections()}
             if collection_name not in existing_names:
                 raise DenseIndexError("dense_collection_missing")
@@ -437,7 +455,7 @@ class PersistentChromaIndex:
         self._collection = None
         self._client = None
         if client is not None:
-            client.close()
+            _close_persistent_client(client)
 
     def __enter__(self) -> Self:
         self._open_client()

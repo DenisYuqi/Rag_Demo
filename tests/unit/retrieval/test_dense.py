@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -31,6 +33,7 @@ from rag_mvp.providers.models import (
 )
 from rag_mvp.providers.resilience import RetryPolicy
 from rag_mvp.providers.routing import ModelProviderRouter, ProviderRoute
+from rag_mvp.retrieval import dense as dense_module
 from rag_mvp.retrieval.binding import BoundRetrievalSnapshot, BoundRetrievalSnapshotFactory
 from rag_mvp.retrieval.dense import DenseIndexError, PersistentChromaIndex
 from rag_mvp.retrieval.identity import provider_embedding_identity
@@ -79,6 +82,45 @@ def _context() -> ProviderCallContext:
         operation_id="dense-query",
         deadline=Deadline.after(30),
     )
+
+
+def test_chroma_client_construction_and_close_cannot_interleave(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    constructor_started = threading.Event()
+    close_task_started = threading.Event()
+    close_entered = threading.Event()
+    overlap_observed = threading.Event()
+    constructed_client = object()
+
+    def fake_persistent_client(*, path: str) -> object:
+        assert path == str(tmp_path)
+        constructor_started.set()
+        assert close_task_started.wait(timeout=1)
+        if close_entered.wait(timeout=0.5):
+            overlap_observed.set()
+        return constructed_client
+
+    class ExistingClient:
+        def close(self) -> None:
+            close_entered.set()
+
+    def close_existing() -> None:
+        close_task_started.set()
+        dense_module._close_persistent_client(ExistingClient())
+
+    monkeypatch.setattr(dense_module.chromadb, "PersistentClient", fake_persistent_client)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        opening = pool.submit(dense_module._create_persistent_client, tmp_path)
+        assert constructor_started.wait(timeout=1)
+        closing = pool.submit(close_existing)
+
+        assert opening.result(timeout=2) is constructed_client
+        closing.result(timeout=2)
+
+    assert close_entered.is_set()
+    assert not overlap_observed.is_set()
 
 
 async def _bound_snapshot(tmp_path: Path) -> BoundRetrievalSnapshot:
