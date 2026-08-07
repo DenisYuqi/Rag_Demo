@@ -127,7 +127,7 @@ def test_compose_has_one_hardened_loopback_application_service() -> None:
         ("RAG_MVP_QA_RETRIEVAL_BUDGET_SECONDS", "5.0"),
         ("RAG_MVP_QA_EMBEDDING_BUDGET_SECONDS", "4.5"),
         ("RAG_MVP_QA_EVIDENCE_ASSESSMENT_BUDGET_SECONDS", "5.0"),
-        ("RAG_MVP_QA_GENERATION_BUDGET_SECONDS", "4.0"),
+        ("RAG_MVP_QA_GENERATION_BUDGET_SECONDS", "5.0"),
         ("RAG_MVP_QA_FINALIZATION_BUDGET_SECONDS", "0.1"),
     ):
         assert f"{setting}: ${{{setting}:-{default}}}" in compose

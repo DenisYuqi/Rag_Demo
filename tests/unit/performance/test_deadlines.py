@@ -108,24 +108,24 @@ async def test_generation_does_not_start_without_full_budget_and_finalization_re
 async def test_acceptance_generation_budget_preserves_the_measured_frontend_window() -> None:
     budgets = QALatencyBudgets(
         total_seconds=9.5,
-        generation_seconds=4.0,
+        generation_seconds=5.0,
         finalization_seconds=0.1,
     )
-    now = [5.2]
+    now = [4.2]
     controller = DeadlineController(budgets, clock=lambda: now[0], started_at=0.0)
     calls = 0
 
     async def measured_generation() -> str:
         nonlocal calls
         calls += 1
-        now[0] += 3.44
+        now[0] += 4.0
         return "complete"
 
     assert await controller.run_generation(measured_generation) == "complete"
     assert calls == 1
-    assert controller.remaining_seconds == pytest.approx(0.86)
+    assert controller.remaining_seconds == pytest.approx(1.3)
 
-    now[0] = 5.401
+    now[0] = 4.401
     rejected = DeadlineController(budgets, clock=lambda: now[0], started_at=0.0)
     with pytest.raises(DeadlineExceededError):
         await rejected.run_generation(measured_generation)
