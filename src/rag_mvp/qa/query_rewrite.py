@@ -69,16 +69,10 @@ def select_response_language(
             raise QueryRewriteError("unsupported_response_language") from None
 
     text = _canonicalize(latest_user_text, maximum_characters=max(1, len(latest_user_text)))
-    han_characters = 0
-    latin_characters = 0
     for character in text:
         name = unicodedata.name(character, "")
         if "CJK UNIFIED IDEOGRAPH" in name or "CJK COMPATIBILITY IDEOGRAPH" in name:
-            han_characters += 1
-        elif "LATIN" in name and unicodedata.category(character).startswith("L"):
-            latin_characters += 1
-    if han_characters > latin_characters:
-        return CHINESE_RESPONSE_LANGUAGE
+            return CHINESE_RESPONSE_LANGUAGE
     return ENGLISH_RESPONSE_LANGUAGE
 
 

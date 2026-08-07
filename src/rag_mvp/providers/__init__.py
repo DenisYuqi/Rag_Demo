@@ -1,5 +1,9 @@
 """Replaceable, provider-neutral model contracts and adapters."""
 
+from rag_mvp.providers.bge_adapters import (
+    LocalBgeEmbeddingProvider,
+    LocalBgeRerankingProvider,
+)
 from rag_mvp.providers.errors import (
     ProviderConfigurationError,
     ProviderError,
@@ -38,6 +42,8 @@ __all__ = [
     "GenerationProvider",
     "GenerationRequest",
     "GenerationResult",
+    "LocalBgeEmbeddingProvider",
+    "LocalBgeRerankingProvider",
     "ModelIdentity",
     "ProviderCallContext",
     "ProviderConfigurationError",

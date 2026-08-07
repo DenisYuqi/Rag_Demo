@@ -24,11 +24,47 @@ def test_defaults_are_safe_and_offline_ready(tmp_path: object) -> None:
     assert settings.evaluation_max_active_jobs == 1
     assert settings.evaluation_shutdown_grace_seconds == 2
     assert settings.reranking_model is None
+    assert settings.default_retrieval_profile == "openai-api"
+    assert settings.bge_profile_enabled
+    assert settings.bge_embedding_model == "BAAI/bge-m3"
+    assert settings.bge_embedding_dimension == 1024
+    assert settings.bge_reranking_model == "BAAI/bge-reranker-v2-m3"
     assert settings.qa_minimum_support_score == 0.45
     assert settings.server_shutdown_grace_seconds == 4
     assert settings.app_shutdown_grace_seconds == 15
     assert settings.total_shutdown_budget_seconds == 19
     assert settings.total_shutdown_budget_seconds < settings.CONTAINER_STOP_GRACE_SECONDS
+
+
+def test_bge_profile_settings_are_isolated_and_truthful(tmp_path: Path) -> None:
+    settings = Settings(data_root=tmp_path / "openai", _env_file=None)
+
+    local = settings.bge_profile_settings()
+
+    assert local.data_root == (tmp_path / "openai" / "profiles" / "bge-local").resolve()
+    assert local.data_root != settings.data_root
+    assert local.embedding_model == "BAAI/bge-m3"
+    assert local.embedding_dimension == 1024
+    assert local.reranking_model == "BAAI/bge-reranker-v2-m3"
+    assert local.default_retrieval_mode == "hybrid-rerank"
+    assert settings.embedding_model == "text-embedding-3-small"
+    assert settings.reranking_model is None
+
+
+def test_bge_profile_configuration_invariants_are_enforced(tmp_path: Path) -> None:
+    with pytest.raises(ValidationError, match="default BGE retrieval profile"):
+        Settings(
+            data_root=tmp_path,
+            default_retrieval_profile="bge-local",
+            bge_profile_enabled=False,
+            _env_file=None,
+        )
+
+    with pytest.raises(ValidationError, match="1024-dimensional"):
+        Settings(data_root=tmp_path, bge_embedding_dimension=768, _env_file=None)
+
+    with pytest.raises(ValidationError, match="different data roots"):
+        Settings(data_root=tmp_path, bge_data_root=tmp_path, _env_file=None)
 
 
 @pytest.mark.parametrize(

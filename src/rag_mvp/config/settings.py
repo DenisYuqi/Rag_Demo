@@ -79,6 +79,20 @@ class Settings(BaseSettings):
     provider_timeout_seconds: float = Field(default=8.0, gt=0, le=60)
     provider_retry_limit: int = Field(default=1, ge=0, le=5)
 
+    default_retrieval_profile: Literal["openai-api", "bge-local"] = "openai-api"
+    bge_profile_enabled: bool = True
+    bge_data_root: Path | None = None
+    bge_embedding_model: str = "BAAI/bge-m3"
+    bge_embedding_dimension: int = Field(default=1024, ge=1, le=65536)
+    bge_reranking_model: str = "BAAI/bge-reranker-v2-m3"
+    bge_device: str = "auto"
+    bge_use_fp16: bool = False
+    bge_embedding_batch_size: int = Field(default=8, ge=1, le=256)
+    bge_reranking_batch_size: int = Field(default=8, ge=1, le=256)
+    bge_embedding_max_length: int = Field(default=8192, ge=64, le=8192)
+    bge_reranking_max_length: int = Field(default=1024, ge=64, le=8192)
+    bge_model_cache_dir: Path | None = None
+
     default_retrieval_mode: Literal["dense", "hybrid", "hybrid-rerank"] = "hybrid"
     dense_candidate_limit: int = Field(default=20, ge=1, le=100)
     lexical_candidate_limit: int = Field(default=20, ge=1, le=100)
@@ -169,6 +183,18 @@ class Settings(BaseSettings):
             return None
         return value
 
+    @field_validator(
+        "bge_embedding_model",
+        "bge_reranking_model",
+        "bge_device",
+        mode="before",
+    )
+    @classmethod
+    def normalize_required_bge_text(cls, value: object) -> object:
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("BGE model and device settings must not be empty")
+        return value.strip()
+
     @field_validator("openai_proxy_url", mode="before")
     @classmethod
     def validate_openai_proxy_url(cls, value: object) -> object:
@@ -211,6 +237,12 @@ class Settings(BaseSettings):
             raise ValueError("generation and finalization budgets exceed the total QA deadline")
         if self.default_retrieval_mode == "hybrid-rerank" and self.reranking_model is None:
             raise ValueError("hybrid-rerank default requires a configured reranking model")
+        if self.default_retrieval_profile == "bge-local" and not self.bge_profile_enabled:
+            raise ValueError("default BGE retrieval profile must be enabled")
+        if self.bge_embedding_model == "BAAI/bge-m3" and self.bge_embedding_dimension != 1024:
+            raise ValueError("BAAI/bge-m3 requires a 1024-dimensional embedding space")
+        if self.resolved_bge_data_root == self.data_root.resolve(strict=False):
+            raise ValueError("BGE and OpenAI profiles must use different data roots")
         if self.total_shutdown_budget_seconds >= self.CONTAINER_STOP_GRACE_SECONDS:
             raise ValueError("server and application shutdown budgets must fit container grace")
         if self.openai_api_key is None and self.openai_api_key_file is not None:
@@ -227,6 +259,28 @@ class Settings(BaseSettings):
         """Budget reserved for ASGI lifespan cleanup after server-side draining."""
 
         return self.shutdown_grace_seconds
+
+    @property
+    def resolved_bge_data_root(self) -> Path:
+        configured = self.bge_data_root
+        if configured is None:
+            configured = self.data_root / "profiles" / "bge-local"
+        return configured.resolve(strict=False)
+
+    def bge_profile_settings(self) -> Settings:
+        """Return a truthful generic settings view for the isolated local profile."""
+
+        return self.model_copy(
+            update={
+                "data_root": self.resolved_bge_data_root,
+                "embedding_model": self.bge_embedding_model,
+                "embedding_dimension": self.bge_embedding_dimension,
+                "reranking_model": self.bge_reranking_model,
+                "default_retrieval_mode": "hybrid-rerank",
+                "pricing_version": "unconfigured",
+                "workbench_enabled": False,
+            }
+        )
 
     @property
     def total_shutdown_budget_seconds(self) -> float:

@@ -58,6 +58,11 @@ def test_explicit_supported_language_overrides_latest_turn() -> None:
         select_response_language("Question", requested_language="fr")
 
 
+def test_any_han_character_selects_chinese_for_mixed_language_questions() -> None:
+    assert select_response_language("What does 保 mean in this policy?") == "zh-CN"
+    assert select_response_language("What does this policy cover?") == "en"
+
+
 def test_standalone_question_does_not_include_conversation_history() -> None:
     turns = (
         _turn("user-1", 0, ConversationRole.USER, "Tell me about annual leave."),
