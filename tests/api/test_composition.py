@@ -2,8 +2,23 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from rag_mvp.api.composition import _compose_retrieval_cache, _provider_alias
+import pytest
+from pydantic import SecretStr
+
+from rag_mvp.api.composition import (
+    _compose_bge_isolated_services,
+    _compose_evaluation_service,
+    _compose_retrieval_cache,
+    _provider_alias,
+    compose_bge_services,
+)
 from rag_mvp.config.settings import Settings
+from rag_mvp.evaluation.comparison_production import ProductionComparisonJobExecutor
+from rag_mvp.evaluation.production import ProductionEvaluationJobExecutor
+from rag_mvp.safety.redactor import DEFAULT_REDACTOR
+from rag_mvp.storage.database import Database
+from rag_mvp.storage.layout import DataLayout
+from rag_mvp.storage.repositories import RuntimeRepositories
 
 
 def test_provider_alias_binds_embedding_identity_to_the_endpoint() -> None:
@@ -31,3 +46,54 @@ def test_production_cache_composition_is_disabled_by_default_and_shared_when_ena
     assert cache is not None
     assert cache.configuration_id == enabled.configuration_identity
     assert cache.metrics.snapshot().hit_rate is None
+
+
+def test_bge_evaluation_composition_keeps_local_models_and_profile_storage(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        data_root=tmp_path / "openai",
+        bge_data_root=tmp_path / "bge",
+        evaluation_dataset_root=Path("evaluations/datasets"),
+        _env_file=None,
+    ).bge_profile_settings()
+    layout = DataLayout.from_root(settings.data_root)
+    layout.initialize()
+    database = Database(layout.metadata_db)
+    database.initialize()
+
+    service = _compose_evaluation_service(
+        settings,
+        DEFAULT_REDACTOR,
+        layout,
+        RuntimeRepositories.from_database(database),
+        include_release_evidence=False,
+        isolated_composition_factory=_compose_bge_isolated_services,
+    )
+
+    assert service.settings.data_root == (tmp_path / "bge").resolve()
+    assert service.settings.embedding_model == "BAAI/bge-m3"
+    assert service.settings.reranking_model == "BAAI/bge-reranker-v2-m3"
+    assert service.release_store is None
+    assert isinstance(service.executor, ProductionEvaluationJobExecutor)
+    assert service.executor.composition_factory is _compose_bge_isolated_services
+    isolated = service.executor.isolated_settings("run-bge")
+    assert isolated.data_root.is_relative_to((tmp_path / "bge").resolve())
+    assert isolated.embedding_model == "BAAI/bge-m3"
+    assert isinstance(service.comparison_executor, ProductionComparisonJobExecutor)
+    assert service.comparison_executor.composition_factory is _compose_bge_isolated_services
+
+
+def test_bge_composition_rejects_a_disabled_profile_before_loading_models(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        data_root=tmp_path,
+        provider_backend="openai",
+        openai_api_key=SecretStr("test-key"),
+        bge_profile_enabled=False,
+        _env_file=None,
+    )
+
+    with pytest.raises(ValueError, match="bge_profile_disabled"):
+        compose_bge_services(settings, DEFAULT_REDACTOR)

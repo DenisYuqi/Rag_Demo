@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Annotated, Any, Literal, Protocol, cast
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Request, Response, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 
 from rag_mvp.api.errors import ApiError
 from rag_mvp.api.schemas import (
@@ -105,6 +106,7 @@ class DiagnosticOperations(Protocol):
 class EvaluationApiRuntime(Protocol):
     accepting_traffic: bool
     evaluation_service: EvaluationOperations | None
+    evaluation_profile_services: Mapping[str, EvaluationOperations]
     diagnostics_service: DiagnosticOperations | None
     redactor: Redactor | None
 
@@ -137,11 +139,19 @@ def _runtime(request: Request) -> EvaluationApiRuntime:
     return cast(EvaluationApiRuntime, request.app.state.runtime)
 
 
-def _require_evaluation(request: Request) -> EvaluationOperations:
+def _require_evaluation(
+    request: Request,
+    retrieval_profile: Annotated[str | None, Query()] = None,
+) -> EvaluationOperations:
     runtime = _runtime(request)
-    if not runtime.accepting_traffic or runtime.evaluation_service is None:
+    service = (
+        runtime.evaluation_service
+        if retrieval_profile is None
+        else runtime.evaluation_profile_services.get(retrieval_profile)
+    )
+    if not runtime.accepting_traffic or service is None:
         raise ApiError(status.HTTP_503_SERVICE_UNAVAILABLE, "evaluation_unavailable")
-    return runtime.evaluation_service
+    return service
 
 
 def _require_diagnostics(request: Request) -> DiagnosticOperations:
@@ -224,6 +234,7 @@ async def list_evaluations(
 )
 async def start_evaluation(
     payload: EvaluationStartRequest,
+    request: Request,
     response: Response,
     service: Annotated[EvaluationOperations, Depends(_require_evaluation)],
 ) -> EvaluationRunResponse:
@@ -254,7 +265,11 @@ async def start_evaluation(
         raise ApiError(status.HTTP_422_UNPROCESSABLE_CONTENT, code) from None
     except ValueError:
         raise ApiError(status.HTTP_422_UNPROCESSABLE_CONTENT, "dataset_invalid") from None
-    response.headers["Location"] = f"/api/v1/evaluations/{run.run_id}"
+    qualifier = request.query_params.get("retrieval_profile")
+    suffix = (
+        "" if qualifier is None else f"?retrieval_profile={quote(qualifier, safe='')}"
+    )
+    response.headers["Location"] = f"/api/v1/evaluations/{run.run_id}{suffix}"
     _no_store(response)
     return EvaluationRunResponse.from_domain(run)
 

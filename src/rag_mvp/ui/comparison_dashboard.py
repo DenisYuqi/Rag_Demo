@@ -234,6 +234,7 @@ def render_comparison_dashboard(
     state: BrowserSessionState,
     selected_plan_id: str | None = None,
     selected_comparison_id: str | None = None,
+    retrieval_profile: str | None = None,
 ) -> ComparisonRender:
     """Render catalogs and persisted evidence without launching provider work."""
 
@@ -299,7 +300,7 @@ def render_comparison_dashboard(
     category_rows = _category_rows(summary, redactor)
     plot_rows = _plot_rows(summary, redactor)
     artifact_rows = _artifact_rows(manifest)
-    artifact_links = _artifact_links(manifest)
+    artifact_links = _artifact_links(manifest, retrieval_profile)
     gate = _gate_markdown(run, summary)
     cache_conclusion = _cache_conclusion_markdown(run_plan, summary, redactor)
     recommendation = _recommendation_markdown(summary, redactor)
@@ -1190,21 +1191,32 @@ def _artifact_rows(manifest: _Manifest | None) -> tuple[tuple[object, ...], ...]
     )
 
 
-def _artifact_links(manifest: _Manifest | None) -> str:
+def _artifact_links(
+    manifest: _Manifest | None,
+    retrieval_profile: str | None = None,
+) -> str:
     if manifest is None:
         return "Comparison artifacts unavailable. / 对比制品不可用。"
     run = quote(manifest.comparison_id, safe="")
+    suffix = _profile_suffix(retrieval_profile)
     lines = [
         "Validated same-origin comparison downloads / 已验证的同源对比下载:",
-        f"- [Integrity manifest / 完整性清单]({_API_PREFIX}/comparisons/{run}/artifacts)",
+        f"- [Integrity manifest / 完整性清单]"
+        f"({_API_PREFIX}/comparisons/{run}/artifacts{suffix})",
     ]
     lines.extend(
         f"- [{item.artifact_id}]({_API_PREFIX}/comparisons/{run}/artifacts/"
-        f"{quote(item.artifact_id, safe='')}) - `{item.artifact_format}`, "
+        f"{quote(item.artifact_id, safe='')}{suffix}) - `{item.artifact_format}`, "
         f"`{item.byte_size}` bytes"
         for item in manifest.artifacts
     )
     return "\n".join(lines)
+
+
+def _profile_suffix(retrieval_profile: str | None) -> str:
+    if retrieval_profile is None or retrieval_profile == "openai-api":
+        return ""
+    return f"?retrieval_profile={quote(retrieval_profile, safe='')}"
 
 
 def _progress_markdown(run: _Run | None) -> str:

@@ -215,6 +215,44 @@ async def test_owned_evaluation_drains_before_qa_and_ingestion_close(tmp_path: P
 
 
 @pytest.mark.asyncio
+async def test_profile_evaluations_start_and_close_once_by_identity(tmp_path: Path) -> None:
+    events: list[str] = []
+
+    class TrackedEvaluation:
+        def __init__(self, profile_id: str) -> None:
+            self.profile_id = profile_id
+
+        async def startup(self) -> None:
+            events.append(f"startup:{self.profile_id}")
+
+        async def close(self) -> None:
+            events.append(f"close:{self.profile_id}")
+
+    openai = TrackedEvaluation("openai-api")
+    bge = TrackedEvaluation("bge-local")
+    app = create_app(
+        _settings(tmp_path),
+        evaluation_service=cast(EvaluationOperations, openai),
+        owns_evaluation_service=True,
+        evaluation_profile_services={
+            "openai-api": cast(EvaluationOperations, openai),
+            "bge-local": cast(EvaluationOperations, bge),
+        },
+        owns_evaluation_profile_services=True,
+    )
+
+    async with app.router.lifespan_context(app):
+        assert sorted(events) == ["startup:bge-local", "startup:openai-api"]
+
+    assert sorted(events) == [
+        "close:bge-local",
+        "close:openai-api",
+        "startup:bge-local",
+        "startup:openai-api",
+    ]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("last_blocker", ["request", "qa", "ingestion"])
 async def test_shutdown_hard_deadline_retains_lock_until_stubborn_work_really_finishes(
     tmp_path: Path,

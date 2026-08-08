@@ -144,6 +144,80 @@ def compose_openai_services(
     if not redactor.fully_configured:
         raise ValueError("safety_configuration_incomplete")
 
+    return _compose_profile_services(
+        settings,
+        redactor,
+        retrieval_backend="openai",
+        include_evaluation=include_evaluation,
+        include_release_evidence=True,
+        isolated_composition_factory=_compose_openai_isolated_services,
+    )
+
+
+def compose_bge_services(
+    settings: Settings,
+    redactor: Redactor,
+    *,
+    include_evaluation: bool = True,
+) -> ExecutableComposition:
+    """Build the isolated local-retrieval profile with shared API generation."""
+
+    if settings.provider_backend != "openai" or settings.provider_readiness_errors():
+        raise ValueError("openai_provider_configuration_incomplete")
+    if not settings.bge_profile_enabled:
+        raise ValueError("bge_profile_disabled")
+    if not redactor.fully_configured:
+        raise ValueError("safety_configuration_incomplete")
+
+    return _compose_profile_services(
+        settings.bge_profile_settings(),
+        redactor,
+        retrieval_backend="bge",
+        include_evaluation=include_evaluation,
+        include_release_evidence=False,
+        isolated_composition_factory=_compose_bge_isolated_services,
+    )
+
+
+def _compose_openai_isolated_services(
+    settings: Settings,
+    redactor: Redactor,
+) -> ExecutableComposition:
+    return _compose_profile_services(
+        settings,
+        redactor,
+        retrieval_backend="openai",
+        include_evaluation=False,
+        include_release_evidence=False,
+        isolated_composition_factory=_compose_openai_isolated_services,
+    )
+
+
+def _compose_bge_isolated_services(
+    settings: Settings,
+    redactor: Redactor,
+) -> ExecutableComposition:
+    return _compose_profile_services(
+        settings,
+        redactor,
+        retrieval_backend="bge",
+        include_evaluation=False,
+        include_release_evidence=False,
+        isolated_composition_factory=_compose_bge_isolated_services,
+    )
+
+
+def _compose_profile_services(
+    settings: Settings,
+    redactor: Redactor,
+    *,
+    retrieval_backend: Literal["openai", "bge"],
+    include_evaluation: bool,
+    include_release_evidence: bool,
+    isolated_composition_factory: Callable[[Settings, Redactor], ExecutableComposition],
+) -> ExecutableComposition:
+    """Build one truthful profile and its optional evaluation supervisor."""
+
     layout = DataLayout.from_root(settings.data_root)
     layout.initialize()
     database = Database(layout.metadata_db)
@@ -164,117 +238,105 @@ def compose_openai_services(
             diagnostics,
             client,
             worker_pools,
+            retrieval_backend=retrieval_backend,
         )
         if not include_evaluation:
             return composition
-        run_root = layout.ensure_within_root(layout.directory("evaluations") / "runs")
-        published_root = layout.ensure_within_root(layout.directory("evaluations") / "published")
-        comparison_published_root = layout.ensure_within_root(
-            layout.directory("evaluations") / "suites" / "published"
-        )
-        artifact_catalog = ArtifactCatalogV2(published_root)
-        comparison_artifact_catalog = ComparisonArtifactCatalog(
-            comparison_published_root,
-            redactor,
-        )
-        evaluation_settings = settings.model_copy(
-            update={
-                "pricing_version": OPENAI_STANDARD_PRICING_VERSION,
-                "workbench_enabled": False,
-                "retrieval_cache_enabled": False,
-            }
-        )
-        evaluation_executor = ProductionEvaluationJobExecutor(
-            settings=evaluation_settings,
-            repository=runtime_repositories.evaluation_runs,
-            report_repository=runtime_repositories.report_manifests,
-            run_artifacts_root=run_root,
-            redactor=redactor,
-        )
-        dataset_registry = EvaluationDatasetRegistry(settings.evaluation_dataset_root)
-        comparison_registry = RegisteredComparisonPlanRegistry()
-        comparison_catalog = RegisteredComparisonLaunchCatalog(
-            registry=comparison_registry,
-            datasets=dataset_registry,
-            settings=evaluation_settings,
-            evaluation_repository=runtime_repositories.evaluation_runs,
-            comparison_repository=runtime_repositories.comparisons,
-            run_artifacts_root=run_root,
-        )
-        comparison_executor = ProductionComparisonJobExecutor(
-            settings=evaluation_settings,
-            evaluation_repository=runtime_repositories.evaluation_runs,
-            comparison_repository=runtime_repositories.comparisons,
-            run_artifacts_root=run_root,
-            artifact_catalog=comparison_artifact_catalog,
-            redactor=redactor,
-        )
-        evaluation = EvaluationApplicationService(
-            registry=dataset_registry,
-            settings=evaluation_settings,
-            repository=runtime_repositories.evaluation_runs,
-            run_artifacts_root=run_root,
-            executor=evaluation_executor,
-            maximum_active_jobs=settings.evaluation_max_active_jobs,
-            shutdown_grace_seconds=settings.evaluation_shutdown_grace_seconds,
-            artifact_store=VerifiedEvaluationArtifactStore(artifact_catalog),
-            legacy_report_store=VerifiedLegacyReportStore(
-                runtime_repositories.report_manifests,
-                run_root,
-            ),
-            release_store=VerifiedReleaseEvidenceStore(
-                settings.evaluation_release_root,
+        return replace(
+            composition,
+            evaluation=_compose_evaluation_service(
+                settings,
                 redactor,
+                layout,
+                runtime_repositories,
+                include_release_evidence=include_release_evidence,
+                isolated_composition_factory=isolated_composition_factory,
             ),
-            plan_settings_factory=evaluation_executor.isolated_settings,
-            comparison_catalog=comparison_catalog,
-            comparison_repository=runtime_repositories.comparisons,
-            comparison_executor=comparison_executor,
-            comparison_artifact_store=comparison_artifact_catalog,
-        )
-        return replace(composition, evaluation=evaluation)
-    except Exception:
-        _close_failed_client(client)
-        _close_failed_worker_pools(worker_pools)
-        raise
-
-
-def compose_bge_services(settings: Settings, redactor: Redactor) -> ExecutableComposition:
-    """Build the isolated local-retrieval profile with shared API generation."""
-
-    if settings.provider_backend != "openai" or settings.provider_readiness_errors():
-        raise ValueError("openai_provider_configuration_incomplete")
-    if not settings.bge_profile_enabled:
-        raise ValueError("bge_profile_disabled")
-    if not redactor.fully_configured:
-        raise ValueError("safety_configuration_incomplete")
-
-    local_settings = settings.bge_profile_settings()
-    layout = DataLayout.from_root(local_settings.data_root)
-    layout.initialize()
-    database = Database(layout.metadata_db)
-    database.initialize()
-    runtime_repositories = RuntimeRepositories.from_database(database)
-    recorder = PersistentAttemptRecorder(runtime_repositories.provider_usage)
-    diagnostics = SafeRequestDiagnosticStore(database, redactor=redactor)
-    client = _create_openai_client(local_settings)
-    worker_pools = RagWorkerPools()
-    try:
-        return _compose_with_client(
-            local_settings,
-            redactor,
-            layout,
-            runtime_repositories,
-            recorder,
-            diagnostics,
-            client,
-            worker_pools,
-            retrieval_backend="bge",
         )
     except Exception:
         _close_failed_client(client)
         _close_failed_worker_pools(worker_pools)
         raise
+
+
+def _compose_evaluation_service(
+    settings: Settings,
+    redactor: Redactor,
+    layout: DataLayout,
+    runtime_repositories: RuntimeRepositories,
+    *,
+    include_release_evidence: bool,
+    isolated_composition_factory: Callable[[Settings, Redactor], ExecutableComposition],
+) -> EvaluationApplicationService:
+    run_root = layout.ensure_within_root(layout.directory("evaluations") / "runs")
+    published_root = layout.ensure_within_root(layout.directory("evaluations") / "published")
+    comparison_published_root = layout.ensure_within_root(
+        layout.directory("evaluations") / "suites" / "published"
+    )
+    artifact_catalog = ArtifactCatalogV2(published_root)
+    comparison_artifact_catalog = ComparisonArtifactCatalog(
+        comparison_published_root,
+        redactor,
+    )
+    evaluation_settings = settings.model_copy(
+        update={
+            "pricing_version": OPENAI_STANDARD_PRICING_VERSION,
+            "workbench_enabled": False,
+            "retrieval_cache_enabled": False,
+        }
+    )
+    evaluation_executor = ProductionEvaluationJobExecutor(
+        settings=evaluation_settings,
+        repository=runtime_repositories.evaluation_runs,
+        report_repository=runtime_repositories.report_manifests,
+        run_artifacts_root=run_root,
+        redactor=redactor,
+        composition_factory=isolated_composition_factory,
+    )
+    dataset_registry = EvaluationDatasetRegistry(settings.evaluation_dataset_root)
+    comparison_registry = RegisteredComparisonPlanRegistry()
+    comparison_catalog = RegisteredComparisonLaunchCatalog(
+        registry=comparison_registry,
+        datasets=dataset_registry,
+        settings=evaluation_settings,
+        evaluation_repository=runtime_repositories.evaluation_runs,
+        comparison_repository=runtime_repositories.comparisons,
+        run_artifacts_root=run_root,
+    )
+    comparison_executor = ProductionComparisonJobExecutor(
+        settings=evaluation_settings,
+        evaluation_repository=runtime_repositories.evaluation_runs,
+        comparison_repository=runtime_repositories.comparisons,
+        run_artifacts_root=run_root,
+        artifact_catalog=comparison_artifact_catalog,
+        redactor=redactor,
+        composition_factory=isolated_composition_factory,
+    )
+    release_store = (
+        VerifiedReleaseEvidenceStore(settings.evaluation_release_root, redactor)
+        if include_release_evidence
+        else None
+    )
+    return EvaluationApplicationService(
+        registry=dataset_registry,
+        settings=evaluation_settings,
+        repository=runtime_repositories.evaluation_runs,
+        run_artifacts_root=run_root,
+        executor=evaluation_executor,
+        maximum_active_jobs=settings.evaluation_max_active_jobs,
+        shutdown_grace_seconds=settings.evaluation_shutdown_grace_seconds,
+        artifact_store=VerifiedEvaluationArtifactStore(artifact_catalog),
+        legacy_report_store=VerifiedLegacyReportStore(
+            runtime_repositories.report_manifests,
+            run_root,
+        ),
+        release_store=release_store,
+        plan_settings_factory=evaluation_executor.isolated_settings,
+        comparison_catalog=comparison_catalog,
+        comparison_repository=runtime_repositories.comparisons,
+        comparison_executor=comparison_executor,
+        comparison_artifact_store=comparison_artifact_catalog,
+    )
 
 
 def _create_openai_client(settings: Settings) -> AsyncOpenAI:

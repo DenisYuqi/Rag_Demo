@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from hashlib import sha256
 from typing import Annotated, Any, Protocol, cast
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Request, Response, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 
 from rag_mvp.api.errors import ApiError
 from rag_mvp.api.schemas import ApiErrorResponse, ApiSchema, OpaqueApiId
@@ -63,6 +64,7 @@ class ComparisonOperations(Protocol):
 class ComparisonApiRuntime(Protocol):
     accepting_traffic: bool
     evaluation_service: object | None
+    evaluation_profile_services: Mapping[str, object]
 
 
 router = APIRouter(prefix="/api/v1", tags=["comparisons"])
@@ -89,9 +91,16 @@ def _runtime(request: Request) -> ComparisonApiRuntime:
     return cast(ComparisonApiRuntime, request.app.state.runtime)
 
 
-def _require_comparison(request: Request) -> ComparisonOperations:
+def _require_comparison(
+    request: Request,
+    retrieval_profile: Annotated[str | None, Query()] = None,
+) -> ComparisonOperations:
     runtime = _runtime(request)
-    service = runtime.evaluation_service
+    service = (
+        runtime.evaluation_service
+        if retrieval_profile is None
+        else runtime.evaluation_profile_services.get(retrieval_profile)
+    )
     if (
         not runtime.accepting_traffic
         or service is None
@@ -178,6 +187,7 @@ async def list_comparisons(
 )
 async def start_comparison(
     payload: ComparisonStartRequest,
+    request: Request,
     response: Response,
     service: Annotated[ComparisonOperations, Depends(_require_comparison)],
 ) -> ComparisonRunEntry:
@@ -187,7 +197,11 @@ async def start_comparison(
         raise _start_error(error) from None
     except Exception:
         raise ApiError(status.HTTP_503_SERVICE_UNAVAILABLE, "comparison_unavailable") from None
-    response.headers["Location"] = f"/api/v1/comparisons/{run.comparison_id}"
+    qualifier = request.query_params.get("retrieval_profile")
+    suffix = (
+        "" if qualifier is None else f"?retrieval_profile={quote(qualifier, safe='')}"
+    )
+    response.headers["Location"] = f"/api/v1/comparisons/{run.comparison_id}{suffix}"
     _no_store(response)
     return run
 

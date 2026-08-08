@@ -166,7 +166,12 @@ def _service() -> FakeComparisonService:
     )
 
 
-def _client(tmp_path: object, service: FakeComparisonService | None) -> TestClient:
+def _client(
+    tmp_path: object,
+    service: FakeComparisonService | None,
+    *,
+    profile_services: dict[str, FakeComparisonService] | None = None,
+) -> TestClient:
     return TestClient(
         create_app(
             Settings(
@@ -175,6 +180,10 @@ def _client(tmp_path: object, service: FakeComparisonService | None) -> TestClie
                 workbench_enabled=False,
             ),
             evaluation_service=(None if service is None else cast(EvaluationOperations, service)),
+            evaluation_profile_services=cast(
+                dict[str, EvaluationOperations] | None,
+                profile_services,
+            ),
         )
     )
 
@@ -241,6 +250,36 @@ def test_comparison_catalog_start_list_get_and_summary_contract(tmp_path: object
     assert invalid.status_code == 422
     assert invalid.json() == {"error": {"code": "request_invalid"}}
     assert invalid.headers["cache-control"] == "no-store"
+
+
+def test_comparison_routes_select_an_isolated_retrieval_profile(tmp_path: object) -> None:
+    openai = _service()
+    bge = _service()
+    assert openai.run is not None and bge.run is not None
+    bge.run = bge.run.model_copy(update={"comparison_id": "comparison-bge"})
+    with _client(
+        tmp_path,
+        openai,
+        profile_services={"openai-api": openai, "bge-local": bge},
+    ) as client:
+        default_runs = client.get("/api/v1/comparisons")
+        bge_runs = client.get("/api/v1/comparisons?retrieval_profile=bge-local")
+        started = client.post(
+            "/api/v1/comparisons?retrieval_profile=bge-local",
+            json={"experiment_plan_id": bge.plan.experiment_plan_id},
+        )
+        unknown = client.get("/api/v1/comparisons?retrieval_profile=unknown")
+
+    assert default_runs.json()["comparisons"][0]["comparison_id"] == "comparison-1"
+    assert bge_runs.json()["comparisons"][0]["comparison_id"] == "comparison-bge"
+    assert started.status_code == 202
+    assert started.headers["location"] == (
+        "/api/v1/comparisons/comparison-bge?retrieval_profile=bge-local"
+    )
+    assert bge.starts == [bge.plan.experiment_plan_id]
+    assert openai.starts == []
+    assert unknown.status_code == 503
+    assert unknown.json() == {"error": {"code": "comparison_unavailable"}}
 
 
 def test_failed_setup_unknown_aggregate_is_explicit_at_http_boundary(

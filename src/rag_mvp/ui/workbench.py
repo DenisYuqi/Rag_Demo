@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from typing import Any, cast
 
 import gradio as gr
@@ -44,7 +45,6 @@ _WORKBENCH_CSS = """
 .rag-kpi-failed { border-color: #dc2626; }
 .rag-kpi-unavailable { border-style: dashed; }
 """
-
 
 def _chat_outputs(
     render: ChatRender,
@@ -226,8 +226,14 @@ def create_workbench(
 
     controller = callbacks or WorkbenchCallbacks(services)
     initial_documents = controller.refresh_documents(services.default_retrieval_profile)
-    initial_evaluation = controller.refresh_evaluations(None)
-    initial_comparison = controller.refresh_comparisons(None)
+    initial_evaluation = controller.refresh_evaluations(
+        None,
+        profile_id=services.default_retrieval_profile,
+    )
+    initial_comparison = controller.refresh_comparisons(
+        None,
+        profile_id=services.default_retrieval_profile,
+    )
     with gr.Blocks(title="RAG Assistant Workbench") as demo:
         # Gradio deep-copies the state factory.  A controller-bound method would
         # recursively copy the production service graph, including non-copyable
@@ -1011,12 +1017,14 @@ def create_workbench(
             selected_dataset: str | None,
             selected_plan: str | None,
             raw_state: BrowserSessionState | None,
+            raw_profile: str | None,
         ) -> tuple[Any, ...]:
             return _evaluation_outputs(
                 await controller.start_registered_evaluation(
                     selected_dataset,
                     selected_plan,
                     raw_state,
+                    raw_profile,
                 )
             )
 
@@ -1025,6 +1033,7 @@ def create_workbench(
             selected_plan: str | None,
             selected_run: str | None,
             raw_state: BrowserSessionState | None,
+            raw_profile: str | None,
         ) -> tuple[Any, ...]:
             return _evaluation_outputs(
                 controller.preview_evaluation_plan(
@@ -1032,27 +1041,35 @@ def create_workbench(
                     selected_plan,
                     selected_run,
                     raw_state,
+                    raw_profile,
                 )
             )
 
         async def on_start_comparison(
             selected_plan: str | None,
             raw_state: BrowserSessionState | None,
+            raw_profile: str | None,
         ) -> tuple[Any, ...]:
             return _comparison_outputs(
-                await controller.start_registered_comparison(selected_plan, raw_state)
+                await controller.start_registered_comparison(
+                    selected_plan,
+                    raw_state,
+                    raw_profile,
+                )
             )
 
         def on_refresh_comparison(
             selected_plan: str | None,
             selected_comparison: str | None,
             raw_state: BrowserSessionState | None,
+            raw_profile: str | None,
         ) -> tuple[Any, ...]:
             return _comparison_outputs(
                 controller.preview_comparison(
                     selected_plan,
                     selected_comparison,
                     raw_state,
+                    raw_profile,
                 )
             )
 
@@ -1127,16 +1144,6 @@ def create_workbench(
             api_name=None,
             show_progress="hidden",
         )
-        retrieval_profile.change(
-            lambda selected, state: (
-                *_chat_outputs(controller.switch_profile(selected, state)),
-                *_document_outputs(controller.refresh_documents(selected)),
-            ),
-            inputs=[retrieval_profile, session_state],
-            outputs=[*chat_outputs, *document_outputs],
-            api_name="retrieval_profile_select",
-        )
-
         evaluation_outputs = [
             dataset_select,
             plan_select,
@@ -1173,10 +1180,11 @@ def create_workbench(
             plan_select,
             run_select,
             session_state,
+            retrieval_profile,
         ]
         start_evaluation.click(
             on_start_evaluation,
-            inputs=[dataset_select, plan_select, session_state],
+            inputs=[dataset_select, plan_select, session_state, retrieval_profile],
             outputs=evaluation_outputs,
             api_name="evaluation_start",
         )
@@ -1247,10 +1255,15 @@ def create_workbench(
             comparison_timer,
             session_state,
         ]
-        comparison_inputs = [comparison_plan_select, comparison_select, session_state]
+        comparison_inputs = [
+            comparison_plan_select,
+            comparison_select,
+            session_state,
+            retrieval_profile,
+        ]
         start_comparison.click(
             on_start_comparison,
-            inputs=[comparison_plan_select, session_state],
+            inputs=[comparison_plan_select, session_state, retrieval_profile],
             outputs=comparison_outputs,
             api_name="comparison_start",
         )
@@ -1285,6 +1298,40 @@ def create_workbench(
             outputs=comparison_outputs,
             api_name=None,
             show_progress="hidden",
+        )
+
+        def on_switch_profile(
+            selected: str | None,
+            raw_state: BrowserSessionState | None,
+        ) -> tuple[Any, ...]:
+            chat_render = controller.switch_profile(selected, raw_state)
+            reset_state = chat_render.state.with_evaluation(None).with_comparison(None)
+            evaluation_render = controller.refresh_evaluations(
+                reset_state,
+                profile_id=selected,
+            )
+            comparison_render = controller.refresh_comparisons(
+                evaluation_render.state.with_comparison(None),
+                profile_id=selected,
+            )
+            final_state = comparison_render.state
+            return (
+                *_chat_outputs(replace(chat_render, state=final_state)),
+                *_document_outputs(controller.refresh_documents(selected)),
+                *_evaluation_outputs(evaluation_render)[:-1],
+                *_comparison_outputs(comparison_render)[:-1],
+            )
+
+        retrieval_profile.change(
+            on_switch_profile,
+            inputs=[retrieval_profile, session_state],
+            outputs=[
+                *chat_outputs,
+                *document_outputs,
+                *evaluation_outputs[:-1],
+                *comparison_outputs[:-1],
+            ],
+            api_name="retrieval_profile_select",
         )
 
         diagnostic_outputs = [health_table, request_table, diagnostics_status]

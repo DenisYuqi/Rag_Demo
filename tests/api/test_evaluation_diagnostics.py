@@ -145,6 +145,7 @@ def _client(
     tmp_path: object,
     *,
     evaluations: FakeEvaluationService | None = None,
+    evaluation_profiles: dict[str, FakeEvaluationService] | None = None,
     diagnostics: FakeDiagnosticService | None = None,
 ) -> TestClient:
     settings = Settings(
@@ -156,6 +157,7 @@ def _client(
         create_app(
             settings,
             evaluation_service=evaluations,
+            evaluation_profile_services=evaluation_profiles,
             diagnostics_service=diagnostics,
         )
     )
@@ -177,6 +179,34 @@ def test_start_and_get_evaluation(tmp_path: object) -> None:
     assert service.starts == [("mvp-v1", "1.0.0")]
     assert fetched.status_code == 200
     assert fetched.json()["total_cases"] == 7
+
+
+def test_evaluation_routes_select_an_isolated_retrieval_profile(tmp_path: object) -> None:
+    openai = FakeEvaluationService(runs={"run_openai": _run("run_openai")})
+    bge = FakeEvaluationService(runs={"run_bge": _run("run_bge")})
+    with _client(
+        tmp_path,
+        evaluations=openai,
+        evaluation_profiles={"openai-api": openai, "bge-local": bge},
+    ) as client:
+        default_runs = client.get("/api/v1/evaluations")
+        bge_runs = client.get("/api/v1/evaluations?retrieval_profile=bge-local")
+        started = client.post(
+            "/api/v1/evaluations?retrieval_profile=bge-local",
+            json={"dataset_id": "mvp-v1", "dataset_version": "1.0.0"},
+        )
+        unknown = client.get("/api/v1/evaluations?retrieval_profile=unknown")
+
+    assert default_runs.json()["runs"][0]["run_id"] == "run_openai"
+    assert bge_runs.json()["runs"][0]["run_id"] == "run_bge"
+    assert started.status_code == 202
+    assert started.headers["location"] == (
+        "/api/v1/evaluations/run_test?retrieval_profile=bge-local"
+    )
+    assert bge.starts == [("mvp-v1", "1.0.0")]
+    assert openai.starts == []
+    assert unknown.status_code == 503
+    assert unknown.json() == {"error": {"code": "evaluation_unavailable"}}
 
 
 def test_evaluation_routes_fail_safely_when_unavailable_or_missing(tmp_path: object) -> None:

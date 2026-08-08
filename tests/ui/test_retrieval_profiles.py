@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 import pytest
 
 from rag_mvp.config.settings import Settings
+from rag_mvp.domain.evaluation import EvaluationRun
 from rag_mvp.domain.qa import RefusalReason, StreamEventKind, ValidatedStreamEvent
 from rag_mvp.domain.retrieval import RetrievalMode
 from rag_mvp.ui.callbacks import SAFE_UNAVAILABLE, WorkbenchCallbacks
@@ -82,6 +83,40 @@ class ProfileDocumentGateway:
         return ()
 
 
+@dataclass
+class ProfileEvaluationGateway:
+    profile_id: str
+    starts: list[tuple[str, str | None]] = field(default_factory=list)
+
+    async def start(
+        self,
+        dataset_id: str,
+        dataset_version: str | None = None,
+    ) -> EvaluationRun:
+        self.starts.append((dataset_id, dataset_version))
+        return self.list_runs()[0]
+
+    def list_runs(self) -> tuple[EvaluationRun, ...]:
+        return (
+            EvaluationRun(
+                run_id=f"run-{self.profile_id}",
+                dataset_id="mvp-v1",
+                dataset_version="1.0.0",
+                dataset_hash="dataset-hash",
+                corpus_version="corpus-v1",
+                configuration_id=f"config-{self.profile_id}",
+                code_revision="revision-test",
+                scorer_versions={"faithfulness": "v1"},
+                cache_policy="bypass-final",
+                total_cases=1,
+            ),
+        )
+
+    def failed_cases(self, run_id: str) -> tuple[()]:
+        del run_id
+        return ()
+
+
 def profile_services() -> tuple[WorkbenchServices, ProfileChatGateway, ProfileChatGateway]:
     openai = ProfileChatGateway("openai-api")
     bge = ProfileChatGateway("bge-local")
@@ -95,6 +130,10 @@ def profile_services() -> tuple[WorkbenchServices, ProfileChatGateway, ProfileCh
                 chat=bge,
                 documents=ProfileDocumentGateway("bge-local"),  # type: ignore[arg-type]
             ),
+        },
+        evaluation_profiles={
+            "openai-api": ProfileEvaluationGateway("openai-api"),  # type: ignore[dict-item]
+            "bge-local": ProfileEvaluationGateway("bge-local"),  # type: ignore[dict-item]
         },
         default_retrieval_profile="openai-api",
     )
@@ -135,6 +174,40 @@ def test_switching_profile_starts_a_fresh_profile_session_and_refreshes_document
     assert "revision-bge-local" in documents.status_markdown
 
 
+def test_evaluation_data_is_isolated_by_selected_retrieval_profile() -> None:
+    services, _, _ = profile_services()
+    callbacks = WorkbenchCallbacks(services)
+
+    openai = callbacks.refresh_evaluations(None, profile_id="openai-api")
+    bge = callbacks.refresh_evaluations(None, profile_id="bge-local")
+    unknown = callbacks.refresh_evaluations(None, profile_id="unknown-profile")
+
+    assert openai.run_rows[0][0] == "run-openai-api"
+    assert bge.run_rows[0][0] == "run-bge-local"
+    assert unknown.status_markdown == SAFE_UNAVAILABLE
+
+
+@pytest.mark.asyncio
+async def test_evaluation_start_is_routed_to_the_selected_retrieval_profile() -> None:
+    services, _, _ = profile_services()
+    callbacks = WorkbenchCallbacks(services)
+    openai = services.evaluations_for("openai-api")
+    bge = services.evaluations_for("bge-local")
+    assert isinstance(openai, ProfileEvaluationGateway)
+    assert isinstance(bge, ProfileEvaluationGateway)
+
+    rendered = await callbacks.start_evaluation(
+        "mvp-v1",
+        "1.0.0",
+        BrowserSessionState.create(),
+        "bge-local",
+    )
+
+    assert bge.starts == [("mvp-v1", "1.0.0")]
+    assert openai.starts == []
+    assert rendered.run_rows[0][0] == "run-bge-local"
+
+
 def test_workbench_profile_selector_is_wired_to_chat_and_documents() -> None:
     services, _, _ = profile_services()
     blocks = create_workbench(Settings(_env_file=None), services)
@@ -157,6 +230,13 @@ def test_workbench_profile_selector_is_wired_to_chat_and_documents() -> None:
         "documents_upload",
         "documents_reindex",
         "documents_delete",
+        "evaluation_start",
+        "evaluation_refresh",
+        "comparison_start",
+        "comparison_refresh",
     ):
         assert profile["id"] in by_api_name[api_name]["inputs"]
     assert by_api_name["retrieval_profile_select"]["inputs"][0] == profile["id"]
+    assert len(by_api_name["retrieval_profile_select"]["outputs"]) > len(
+        by_api_name["chat_submit"]["outputs"]
+    )

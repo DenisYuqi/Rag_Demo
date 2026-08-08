@@ -362,6 +362,26 @@ def test_typed_views_render_validated_evidence_without_paths_or_private_fields()
     assert "C:\\" not in repr(rendered)
 
 
+def test_bge_evaluation_download_links_preserve_the_selected_profile() -> None:
+    gateway = TypedEvaluationGateway()
+    callbacks = WorkbenchCallbacks(
+        WorkbenchServices(
+            evaluation_profiles={
+                "openai-api": gateway,
+                "bge-local": gateway,
+            }
+        )
+    )
+
+    rendered = callbacks.refresh_evaluations(
+        BrowserSessionState.create(),
+        profile_id="bge-local",
+    )
+
+    assert "?retrieval_profile=bge-local" in rendered.artifact_links_markdown
+    assert "?retrieval_profile=bge-local" in rendered.operations_links_markdown
+
+
 @pytest.mark.asyncio
 async def test_refresh_is_read_only_and_explicit_start_is_non_blocking_and_polled() -> None:
     gateway = TypedEvaluationGateway()

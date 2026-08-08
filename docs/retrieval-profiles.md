@@ -2,10 +2,18 @@
 
 The workbench exposes a **Retrieval profile / 检索模型** selector with two independent choices:
 
-- `openai-api` keeps the existing OpenAI-compatible embedding and optional listwise reranking path. The HTTP API remains permanently bound to this profile.
+- `openai-api` keeps the existing OpenAI-compatible embedding and optional listwise reranking path. Evaluation HTTP calls without an explicit profile remain bound to this profile for backward compatibility.
 - `bge-local` uses `BAAI/bge-m3` for 1024-dimensional L2-normalized embeddings and `BAAI/bge-reranker-v2-m3` for local cross-encoder reranking. Answer generation still uses the configured OpenAI-compatible generation model.
 
 Each profile has its own data root, document catalog, ingestion jobs, sessions, Chroma index, and BM25 snapshot. Upload, reindex, delete, and Chat operations apply only to the profile selected in the workbench. Switching profiles never queries an index created by the other embedding model.
+
+## Profile-specific Evaluation
+
+The Evaluation and Comparison tabs follow the same workbench selector. Switching from `openai-api` to `bge-local` refreshes the dataset, plan, run, comparison, progress, and report views from the BGE profile's isolated database and artifact directories. Existing run selections are discarded during a switch, so a run identifier from one profile is never resolved against the other profile.
+
+BGE evaluation installs each registered corpus into a per-run workspace beneath the BGE data root, then executes retrieval with `BAAI/bge-m3` and reranking with `BAAI/bge-reranker-v2-m3`. Generation remains on the configured OpenAI-compatible model. BGE runs can therefore have longer cold-start latency and still incur generation API cost even though embedding and reranking are local. Static OpenAI release evidence is not presented as BGE evidence.
+
+Evaluation and Comparison API routes accept `?retrieval_profile=bge-local`; omitting the parameter preserves the existing `openai-api` behavior. Same-origin report and artifact links rendered in the BGE view include that qualifier, including polling and downloads. Unknown profile identifiers fail closed with `evaluation_unavailable` or `comparison_unavailable` rather than falling back to another profile.
 
 ## First local use
 

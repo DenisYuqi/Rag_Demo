@@ -158,6 +158,7 @@ class WorkbenchServices:
     diagnostics: DiagnosticsGateway | None = None
     redactor: Redactor | None = DEFAULT_REDACTOR
     retrieval_profiles: Mapping[str, RetrievalProfileGateways] = field(default_factory=dict)
+    evaluation_profiles: Mapping[str, EvaluationGateway] = field(default_factory=dict)
     default_retrieval_profile: str = "openai-api"
 
     def __post_init__(self) -> None:
@@ -168,7 +169,13 @@ class WorkbenchServices:
             raise TypeError("retrieval_profile_gateways_invalid")
         if profiles and self.default_retrieval_profile not in profiles:
             raise ValueError("default_retrieval_profile_missing")
+        evaluations = dict(self.evaluation_profiles)
+        if any(not isinstance(key, str) or not key.strip() for key in evaluations):
+            raise ValueError("evaluation_profile_id_invalid")
+        if evaluations and self.default_retrieval_profile not in evaluations:
+            raise ValueError("default_evaluation_profile_missing")
         object.__setattr__(self, "retrieval_profiles", MappingProxyType(profiles))
+        object.__setattr__(self, "evaluation_profiles", MappingProxyType(evaluations))
 
     @property
     def retrieval_profile_ids(self) -> tuple[str, ...]:
@@ -187,6 +194,13 @@ class WorkbenchServices:
             return self.documents if profile_id in {None, self.default_retrieval_profile} else None
         profile = self.retrieval_profiles.get(profile_id or self.default_retrieval_profile)
         return None if profile is None else profile.documents
+
+    def evaluations_for(self, profile_id: str | None) -> EvaluationGateway | None:
+        if not self.evaluation_profiles:
+            if profile_id in {None, self.default_retrieval_profile}:
+                return self.evaluations
+            return None
+        return self.evaluation_profiles.get(profile_id or self.default_retrieval_profile)
 
 
 @dataclass(frozen=True, slots=True)
@@ -317,6 +331,7 @@ def configured_workbench_services(
     ingestion: IngestionService | None,
     diagnostics: DiagnosticsGateway | None = None,
     evaluations: EvaluationGateway | None = None,
+    profile_evaluations: Mapping[str, EvaluationGateway] | None = None,
     redactor: Redactor | None = DEFAULT_REDACTOR,
     profile_services: Mapping[str, tuple[QARuntimeServices, IngestionService]] | None = None,
 ) -> WorkbenchServices:
@@ -340,5 +355,6 @@ def configured_workbench_services(
         diagnostics=diagnostics,
         redactor=redactor,
         retrieval_profiles=profiles,
+        evaluation_profiles=dict(profile_evaluations or {}),
         default_retrieval_profile=settings.default_retrieval_profile,
     )

@@ -141,6 +141,7 @@ def render_evaluation_dashboard(
     selected_dataset_key: str | None = None,
     selected_plan_key: str | None = None,
     selected_run_id: str | None = None,
+    retrieval_profile: str | None = None,
 ) -> EvaluationRender:
     """Build all four standard-evaluation views from typed persisted evidence."""
 
@@ -224,14 +225,17 @@ def render_evaluation_dashboard(
         if manifest is not None:
             _validate_manifest_identity(selected_run, manifest)
             artifact_rows = tuple(_artifact_row(item) for item in manifest.artifacts)
-            artifact_links = _artifact_links(manifest)
-            operations_links = _operations_links(manifest)
+            artifact_links = _artifact_links(manifest, retrieval_profile)
+            operations_links = _operations_links(manifest, retrieval_profile)
         elif (
             selected_summary is not None
             and selected_run.status is EvaluationRunStatus.COMPLETED
             and selected_summary.evidence_status == "available"
         ):
-            artifact_links = _compatibility_report_links(selected_run.run_id)
+            artifact_links = _compatibility_report_links(
+                selected_run.run_id,
+                retrieval_profile,
+            )
         report = _report(service, selected_run, manifest)
         if report is not None:
             overview_rows = _overview_rows(report)
@@ -606,23 +610,33 @@ def _artifact_row(item: object) -> tuple[object, ...]:
     )
 
 
-def _artifact_links(manifest: EvaluationArtifactManifest) -> str:
+def _artifact_links(
+    manifest: EvaluationArtifactManifest,
+    retrieval_profile: str | None = None,
+) -> str:
     run = quote(manifest.run_id, safe="")
+    suffix = _profile_suffix(retrieval_profile)
     lines = [
         "Validated same-origin downloads / 已验证的同源下载:",
-        f"- [Integrity manifest / 完整性清单]({_API_PREFIX}/evaluations/{run}/artifacts)",
+        f"- [Integrity manifest / 完整性清单]"
+        f"({_API_PREFIX}/evaluations/{run}/artifacts{suffix})",
     ]
     for item in manifest.artifacts:
         artifact = quote(item.artifact_id, safe="")
         lines.append(
-            f"- [{item.artifact_id}]({_API_PREFIX}/evaluations/{run}/artifacts/{artifact}) "
+            f"- [{item.artifact_id}]"
+            f"({_API_PREFIX}/evaluations/{run}/artifacts/{artifact}{suffix}) "
             f"— `{item.format}`, `{item.byte_size}` bytes"
         )
     return "\n".join(lines)
 
 
-def _operations_links(manifest: EvaluationArtifactManifest) -> str:
+def _operations_links(
+    manifest: EvaluationArtifactManifest,
+    retrieval_profile: str | None = None,
+) -> str:
     run = quote(manifest.run_id, safe="")
+    suffix = _profile_suffix(retrieval_profile)
     by_id = {item.artifact_id: item for item in manifest.artifacts}
     lines = ["Operations downloads / 运维下载:"]
     for artifact_id, label in (
@@ -635,21 +649,31 @@ def _operations_links(manifest: EvaluationArtifactManifest) -> str:
             continue
         artifact = quote(artifact_id, safe="")
         lines.append(
-            f"- [{label}]({_API_PREFIX}/evaluations/{run}/artifacts/{artifact}) "
+            f"- [{label}]({_API_PREFIX}/evaluations/{run}/artifacts/{artifact}{suffix}) "
             f"- `{descriptor.byte_size}` bytes"
         )
     return "\n".join(lines)
 
 
-def _compatibility_report_links(run_id: str) -> str:
+def _compatibility_report_links(
+    run_id: str,
+    retrieval_profile: str | None = None,
+) -> str:
     run = quote(run_id, safe="")
+    suffix = _profile_suffix(retrieval_profile)
     return "\n".join(
         (
             "Validated compatibility downloads / 已验证的兼容下载:",
-            f"- [evaluation-report.json]({_API_PREFIX}/reports/{run}.json)",
-            f"- [evaluation-report.html]({_API_PREFIX}/reports/{run}.html)",
+            f"- [evaluation-report.json]({_API_PREFIX}/reports/{run}.json{suffix})",
+            f"- [evaluation-report.html]({_API_PREFIX}/reports/{run}.html{suffix})",
         )
     )
+
+
+def _profile_suffix(retrieval_profile: str | None) -> str:
+    if retrieval_profile is None or retrieval_profile == "openai-api":
+        return ""
+    return f"?retrieval_profile={quote(retrieval_profile, safe='')}"
 
 
 def _report(

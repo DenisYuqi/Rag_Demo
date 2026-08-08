@@ -329,14 +329,18 @@ class WorkbenchCallbacks:
         dataset_id: str,
         dataset_version: str | None,
         state: BrowserSessionState | None,
+        profile_id: str | None = None,
     ) -> EvaluationRender:
         current = _state(state)
-        service = self.services.evaluations
+        service = self.services.evaluations_for(profile_id)
         if service is None:
             return EvaluationRender((), (), "", SAFE_UNAVAILABLE, current)
         try:
             run = await service.start(dataset_id, dataset_version or None)
-            return self.refresh_evaluations(current.with_evaluation(run.run_id))
+            return self.refresh_evaluations(
+                current.with_evaluation(run.run_id),
+                profile_id=profile_id,
+            )
         except Exception as error:
             code = getattr(error, "code", None)
             if code == "evaluation_duplicate":
@@ -363,11 +367,12 @@ class WorkbenchCallbacks:
         selected_dataset_key: str | None,
         selected_plan_key: str | None,
         state: BrowserSessionState | None,
+        profile_id: str | None = None,
     ) -> EvaluationRender:
         """Launch only a current registry-backed selection on an explicit click."""
 
         current = _state(state)
-        service = self.services.evaluations
+        service = self.services.evaluations_for(profile_id)
         if service is None:
             return EvaluationRender((), (), "", SAFE_UNAVAILABLE, current)
         try:
@@ -384,6 +389,7 @@ class WorkbenchCallbacks:
                 selected_dataset_key=selected_dataset_key,
                 selected_plan_key=selected_plan_key,
                 selected_run_id=run.run_id,
+                retrieval_profile=profile_id,
             )
             return with_status(
                 rendered,
@@ -401,6 +407,7 @@ class WorkbenchCallbacks:
                     state=current,
                     selected_dataset_key=selected_dataset_key,
                     selected_plan_key=selected_plan_key,
+                    retrieval_profile=profile_id,
                 )
             except Exception:
                 return EvaluationRender((), (), "", status, current)
@@ -423,6 +430,7 @@ class WorkbenchCallbacks:
                     state=current,
                     selected_dataset_key=selected_dataset_key,
                     selected_plan_key=selected_plan_key,
+                    retrieval_profile=profile_id,
                 )
             except Exception:
                 return EvaluationRender((), (), "", status, current)
@@ -434,12 +442,14 @@ class WorkbenchCallbacks:
         selected_plan_key: str | None,
         selected_run_id: str | None,
         state: BrowserSessionState | None,
+        profile_id: str | None = None,
     ) -> EvaluationRender:
         return self.refresh_evaluations(
             state,
             selected_dataset_key=selected_dataset_key,
             selected_plan_key=selected_plan_key,
             selected_run_id=selected_run_id,
+            profile_id=profile_id,
         )
 
     def refresh_evaluations(
@@ -449,9 +459,10 @@ class WorkbenchCallbacks:
         selected_dataset_key: str | None = None,
         selected_plan_key: str | None = None,
         selected_run_id: str | None = None,
+        profile_id: str | None = None,
     ) -> EvaluationRender:
         current = _state(state)
-        service = self.services.evaluations
+        service = self.services.evaluations_for(profile_id)
         if service is None:
             return EvaluationRender((), (), "", SAFE_UNAVAILABLE, current)
         try:
@@ -466,6 +477,7 @@ class WorkbenchCallbacks:
                     selected_dataset_key=selected_dataset_key,
                     selected_plan_key=selected_plan_key,
                     selected_run_id=selected_run_id,
+                    retrieval_profile=profile_id,
                 )
             runs = tuple(service.list_runs())
             selected = current.evaluation_run_id
@@ -494,9 +506,10 @@ class WorkbenchCallbacks:
         baseline_run_id: str,
         candidate_run_id: str,
         state: BrowserSessionState | None,
+        profile_id: str | None = None,
     ) -> EvaluationRender:
         current = _state(state)
-        service = self.services.evaluations
+        service = self.services.evaluations_for(profile_id)
         if service is None:
             return EvaluationRender((), (), "", SAFE_UNAVAILABLE, current)
         try:
@@ -505,7 +518,7 @@ class WorkbenchCallbacks:
             metrics = (
                 "```json\n" + json.dumps(safe_comparison, ensure_ascii=False, indent=2) + "\n```"
             )
-            refreshed = self.refresh_evaluations(current)
+            refreshed = self.refresh_evaluations(current, profile_id=profile_id)
             return EvaluationRender(
                 refreshed.run_rows,
                 refreshed.failure_rows,
@@ -522,11 +535,12 @@ class WorkbenchCallbacks:
         self,
         selected_plan_id: str | None,
         state: BrowserSessionState | None,
+        profile_id: str | None = None,
     ) -> ComparisonRender:
         """Launch only a current server-registered plan on an explicit click."""
 
         current = _state(state)
-        service = self.services.evaluations
+        service = self.services.evaluations_for(profile_id)
         if service is None or not supports_comparison_dashboard(service):
             return ComparisonRender(state=current, status_markdown=SAFE_UNAVAILABLE)
         try:
@@ -539,6 +553,7 @@ class WorkbenchCallbacks:
                 state=current.with_comparison(run_id),
                 selected_plan_id=plan_id,
                 selected_comparison_id=run_id,
+                retrieval_profile=profile_id,
             )
             return with_comparison_status(
                 rendered,
@@ -569,6 +584,7 @@ class WorkbenchCallbacks:
                 redactor=cast(Redactor, self.services.redactor),
                 state=current,
                 selected_plan_id=selected_plan_id,
+                retrieval_profile=profile_id,
             )
         except Exception:
             return ComparisonRender(state=current, status_markdown=status)
@@ -579,11 +595,13 @@ class WorkbenchCallbacks:
         selected_plan_id: str | None,
         selected_comparison_id: str | None,
         state: BrowserSessionState | None,
+        profile_id: str | None = None,
     ) -> ComparisonRender:
         return self.refresh_comparisons(
             state,
             selected_plan_id=selected_plan_id,
             selected_comparison_id=selected_comparison_id,
+            profile_id=profile_id,
         )
 
     def refresh_comparisons(
@@ -592,9 +610,10 @@ class WorkbenchCallbacks:
         *,
         selected_plan_id: str | None = None,
         selected_comparison_id: str | None = None,
+        profile_id: str | None = None,
     ) -> ComparisonRender:
         current = _state(state)
-        service = self.services.evaluations
+        service = self.services.evaluations_for(profile_id)
         if service is None or not supports_comparison_dashboard(service):
             return ComparisonRender(state=current, status_markdown=SAFE_UNAVAILABLE)
         try:
@@ -607,6 +626,7 @@ class WorkbenchCallbacks:
                 state=current,
                 selected_plan_id=selected_plan_id,
                 selected_comparison_id=selected_comparison_id,
+                retrieval_profile=profile_id,
             )
         except Exception:
             return ComparisonRender(state=current, status_markdown=SAFE_UI_ERROR)

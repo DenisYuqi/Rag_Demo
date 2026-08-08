@@ -70,6 +70,10 @@ class RuntimeState:
     owns_qa_services: bool = False
     evaluation_service: EvaluationOperations | None = None
     owns_evaluation_service: bool = False
+    evaluation_profile_services: Mapping[str, EvaluationOperations] = field(
+        default_factory=dict
+    )
+    owns_evaluation_profile_services: bool = False
     diagnostics_service: DiagnosticOperations | None = None
     workbench_services: WorkbenchServices | None = None
     metrics: RAGMetrics = field(default_factory=RAGMetrics)
@@ -140,9 +144,10 @@ class RuntimeState:
                 task_name="shutdown-admission-close",
             )
 
-        if self.owns_evaluation_service and self.evaluation_service is not None:
+        owned_evaluations = self._owned_evaluation_services()
+        if owned_evaluations:
             await self._attempt_async(
-                self._close_evaluation_service(),
+                self._close_evaluation_services(owned_evaluations),
                 deadline=min(hard_deadline, started + (grace * 0.3)),
                 task_name="shutdown-evaluation-close",
             )
@@ -241,15 +246,35 @@ class RuntimeState:
             # bounded by the RuntimeState cleanup deadline that owns this task.
             await asyncio.to_thread(telemetry.tracer.shutdown)
 
-    async def _close_evaluation_service(self) -> None:
-        service = self.evaluation_service
-        close = None if service is None else getattr(service, "close", None)
-        if not callable(close):
-            raise RuntimeError("evaluation_close_unavailable")
-        operation = close()
-        if not inspect.isawaitable(operation):
-            raise RuntimeError("evaluation_close_invalid")
-        await operation
+    def evaluation_services(self) -> tuple[EvaluationOperations, ...]:
+        values = (
+            *((self.evaluation_service,) if self.evaluation_service is not None else ()),
+            *self.evaluation_profile_services.values(),
+        )
+        return tuple({id(service): service for service in values}.values())
+
+    def _owned_evaluation_services(self) -> tuple[EvaluationOperations, ...]:
+        values: list[EvaluationOperations] = []
+        if self.owns_evaluation_service and self.evaluation_service is not None:
+            values.append(self.evaluation_service)
+        if self.owns_evaluation_profile_services:
+            values.extend(self.evaluation_profile_services.values())
+        return tuple({id(service): service for service in values}.values())
+
+    async def _close_evaluation_services(
+        self,
+        services: tuple[EvaluationOperations, ...],
+    ) -> None:
+        operations: list[Coroutine[Any, Any, object]] = []
+        for service in services:
+            close = getattr(service, "close", None)
+            if not callable(close):
+                raise RuntimeError("evaluation_close_unavailable")
+            operation = close()
+            if not inspect.isawaitable(operation):
+                raise RuntimeError("evaluation_close_invalid")
+            operations.append(cast(Coroutine[Any, Any, object], operation))
+        await asyncio.gather(*operations)
 
     async def _drain_or_cancel(
         self,
@@ -362,6 +387,8 @@ def _build_runtime(
     owns_qa_services: bool,
     evaluation_service: EvaluationOperations | None,
     owns_evaluation_service: bool,
+    evaluation_profile_services: Mapping[str, EvaluationOperations] | None,
+    owns_evaluation_profile_services: bool,
     diagnostics_service: DiagnosticOperations | None,
     workbench_services: WorkbenchServices | None,
     redactor: Redactor | None,
@@ -453,6 +480,11 @@ def _build_runtime(
         install_observer = getattr(qa_services.orchestrator, "set_stage_observer", None)
         if callable(install_observer):
             install_observer(effective_telemetry)
+    profile_evaluations = dict(evaluation_profile_services or {})
+    if evaluation_service is not None:
+        profile_evaluations.setdefault("openai-api", evaluation_service)
+    if any(not profile_id.strip() for profile_id in profile_evaluations):
+        raise ValueError("evaluation_profile_id_invalid")
     return RuntimeState(
         settings=settings,
         layout=layout,
@@ -464,6 +496,8 @@ def _build_runtime(
         owns_qa_services=owns_qa_services,
         evaluation_service=evaluation_service,
         owns_evaluation_service=owns_evaluation_service,
+        evaluation_profile_services=profile_evaluations,
+        owns_evaluation_profile_services=owns_evaluation_profile_services,
         diagnostics_service=diagnostics_service,
         workbench_services=workbench_services,
         metrics=metrics,
@@ -482,6 +516,8 @@ def create_app(
     owns_qa_services: bool = False,
     evaluation_service: EvaluationOperations | None = None,
     owns_evaluation_service: bool = False,
+    evaluation_profile_services: Mapping[str, EvaluationOperations] | None = None,
+    owns_evaluation_profile_services: bool = False,
     diagnostics_service: DiagnosticOperations | None = None,
     workbench_services: WorkbenchServices | None = None,
     workbench_profile_services: Mapping[str, tuple[QARuntimeServices, IngestionService]]
@@ -496,6 +532,8 @@ def create_app(
         raise ValueError("owned_qa_services_missing")
     if owns_evaluation_service and evaluation_service is None:
         raise ValueError("owned_evaluation_service_missing")
+    if owns_evaluation_profile_services and not evaluation_profile_services:
+        raise ValueError("owned_evaluation_profile_services_missing")
     resolved_settings = settings or get_settings()
     identity_error = _runtime_identity_error(resolved_settings)
     configure_logging(
@@ -514,6 +552,8 @@ def create_app(
         owns_qa_services=owns_qa_services,
         evaluation_service=evaluation_service,
         owns_evaluation_service=owns_evaluation_service,
+        evaluation_profile_services=evaluation_profile_services,
+        owns_evaluation_profile_services=owns_evaluation_profile_services,
         diagnostics_service=diagnostics_service,
         workbench_services=workbench_services,
         redactor=redactor,
@@ -536,6 +576,10 @@ def create_app(
             ingestion=ingestion_service,
             diagnostics=diagnostics_gateway,
             evaluations=cast("EvaluationGateway", evaluation_service),
+            profile_evaluations=cast(
+                "Mapping[str, EvaluationGateway]",
+                runtime.evaluation_profile_services,
+            ),
             redactor=redactor,
             profile_services=workbench_profile_services,
         )
@@ -575,8 +619,8 @@ def create_app(
                     if isinstance(ingestion_check, StaticReadinessCheck):
                         ingestion_check.ready = False
                         ingestion_check.reason = "ingestion_recovery_failed"
-            if runtime.evaluation_service is not None:
-                start_evaluations = getattr(runtime.evaluation_service, "startup", None)
+            for evaluation in runtime.evaluation_services():
+                start_evaluations = getattr(evaluation, "startup", None)
                 if callable(start_evaluations):
                     try:
                         operation = start_evaluations()
@@ -695,6 +739,9 @@ def create_executable_app(settings: Settings | None = None) -> FastAPI:
             profile_services = {
                 "openai-api": (composition.qa, composition.ingestion),
             }
+            profile_evaluations = {
+                "openai-api": composition.evaluation,
+            }
             if resolved_settings.bge_profile_enabled:
                 bge = compose_bge_services(resolved_settings, DEFAULT_REDACTOR)
                 main_close = composition.qa.close_callback
@@ -717,6 +764,15 @@ def create_executable_app(settings: Settings | None = None) -> FastAPI:
                     "openai-api": (composition.qa, composition.ingestion),
                     "bge-local": (bge.qa, bge.ingestion),
                 }
+                profile_evaluations = {
+                    "openai-api": composition.evaluation,
+                    "bge-local": bge.evaluation,
+                }
+            available_evaluations = {
+                profile_id: service
+                for profile_id, service in profile_evaluations.items()
+                if service is not None
+            }
             return create_app(
                 resolved_settings,
                 ingestion_service=composition.ingestion,
@@ -725,6 +781,8 @@ def create_executable_app(settings: Settings | None = None) -> FastAPI:
                 owns_qa_services=True,
                 evaluation_service=composition.evaluation,
                 owns_evaluation_service=composition.evaluation is not None,
+                evaluation_profile_services=available_evaluations,
+                owns_evaluation_profile_services=bool(available_evaluations),
                 diagnostics_service=composition.diagnostics,
                 workbench_profile_services=profile_services,
                 redactor=DEFAULT_REDACTOR,

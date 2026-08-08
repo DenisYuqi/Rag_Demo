@@ -412,6 +412,25 @@ def test_compare_view_renders_authoritative_tables_plot_and_path_free_artifacts(
     ) in rendered.shared_setup_rows
 
 
+def test_bge_comparison_download_links_preserve_the_selected_profile() -> None:
+    gateway = FakeComparisonGateway()
+    callbacks = WorkbenchCallbacks(
+        WorkbenchServices(
+            evaluation_profiles={
+                "openai-api": gateway,  # type: ignore[dict-item]
+                "bge-local": gateway,  # type: ignore[dict-item]
+            }
+        )
+    )
+
+    rendered = callbacks.refresh_comparisons(
+        BrowserSessionState.create(),
+        profile_id="bge-local",
+    )
+
+    assert "?retrieval_profile=bge-local" in rendered.artifact_links_markdown
+
+
 def test_model_axis_populates_model_view_without_cross_axis_substitution() -> None:
     model_plan_id = "generation-model-comparison-v1"
     variants = (
