@@ -1066,12 +1066,14 @@ def create_workbench(
             inputs=[question, mode, chatbot, session_state, retrieval_profile],
             outputs=chat_outputs,
             api_name="chat_submit",
+            show_progress="hidden",
         )
         question.submit(
             on_ask,
             inputs=[question, mode, chatbot, session_state, retrieval_profile],
             outputs=chat_outputs,
             api_name=None,
+            show_progress="hidden",
         )
         reset.click(
             on_reset,

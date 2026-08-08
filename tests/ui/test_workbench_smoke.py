@@ -116,6 +116,30 @@ def test_page_load_clears_conversation_before_loading_stateful_views(tmp_path: P
     }
 
 
+def test_chat_submission_hides_gradio_processing_indicator(tmp_path: Path) -> None:
+    blocks = create_workbench(
+        Settings(_env_file=None, data_root=tmp_path),
+        WorkbenchServices(chat=IsolatingChatGateway()),
+    )
+    config = blocks.get_config_file()
+    labels = {
+        component["id"]: component.get("props", {}).get("label")
+        for component in config["components"]
+    }
+    chat_submissions = [
+        dependency
+        for dependency in config["dependencies"]
+        if dependency.get("api_name") == "chat_submit"
+        or (
+            any(event == "submit" for _, event in dependency["targets"])
+            and labels.get(dependency["inputs"][0]) == "Question / 问题"
+        )
+    ]
+
+    assert len(chat_submissions) == 2
+    assert {dependency["show_progress"] for dependency in chat_submissions} == {"hidden"}
+
+
 @pytest.mark.asyncio
 async def test_gradio_state_factory_keeps_parallel_browser_sessions_isolated(
     tmp_path: Path,

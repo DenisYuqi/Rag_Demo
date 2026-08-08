@@ -22,6 +22,7 @@ _ACTIVE_STATUSES = frozenset({"queued", "running"})
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$")
 _API_PREFIX = "/api/v1"
 _MISSING = object()
+_DEFAULT_COMPARISON_AXIS = "retrieval-strategy"
 _FOCUSED_COMPARISON_METRICS = (
     "faithfulness",
     "context-precision",
@@ -243,14 +244,19 @@ def render_comparison_dashboard(
     plans = _plans(service)
     runs = _runs(service)
     plans_by_id = {item.plan_id: item for item in plans}
-    plan = next(
-        (item for item in plans if item.plan_id == selected_plan_id),
-        plans[0] if plans else None,
-    )
     requested_id = selected_comparison_id or state.comparison_run_id
-    run = next(
+    requested_run = next(
         (item for item in runs if item.comparison_id == requested_id),
-        runs[0] if runs else None,
+        None,
+    )
+    plan = _selected_plan(plans, runs, selected_plan_id, requested_run)
+    plan_runs = () if plan is None else tuple(item for item in runs if item.plan_id == plan.plan_id)
+    run = (
+        requested_run
+        if requested_run is not None and plan is not None and requested_run.plan_id == plan.plan_id
+        else plan_runs[0]
+        if plan_runs
+        else None
     )
     next_state = state.with_comparison(None if run is None else run.comparison_id)
     plan_choices = tuple(
@@ -269,7 +275,7 @@ def render_comparison_dashboard(
             ),
             item.comparison_id,
         )
-        for item in runs
+        for item in plan_runs
     )
     summaries = {
         item.comparison_id: _summary(
@@ -396,6 +402,37 @@ def render_comparison_dashboard(
 
 def with_comparison_status(render: ComparisonRender, status: str) -> ComparisonRender:
     return replace(render, status_markdown=status)
+
+
+def _selected_plan(
+    plans: Sequence[_Plan],
+    runs: Sequence[_Run],
+    selected_plan_id: str | None,
+    requested_run: _Run | None,
+) -> _Plan | None:
+    explicitly_selected = next(
+        (item for item in plans if item.plan_id == selected_plan_id),
+        None,
+    )
+    if explicitly_selected is not None:
+        return explicitly_selected
+    if requested_run is not None:
+        matching = next(
+            (item for item in plans if item.plan_id == requested_run.plan_id),
+            None,
+        )
+        if matching is not None:
+            return matching
+    default_with_evidence = next(
+        (
+            plan
+            for plan in plans
+            if plan.axis == _DEFAULT_COMPARISON_AXIS
+            and any(run.plan_id == plan.plan_id for run in runs)
+        ),
+        None,
+    )
+    return default_with_evidence or (plans[0] if plans else None)
 
 
 def _plans(service: EvaluationGateway) -> tuple[_Plan, ...]:
@@ -1224,8 +1261,7 @@ def _artifact_links(
     suffix = _profile_suffix(retrieval_profile)
     lines = [
         "Validated same-origin comparison downloads / 已验证的同源对比下载:",
-        f"- [Integrity manifest / 完整性清单]"
-        f"({_API_PREFIX}/comparisons/{run}/artifacts{suffix})",
+        f"- [Integrity manifest / 完整性清单]({_API_PREFIX}/comparisons/{run}/artifacts{suffix})",
     ]
     lines.extend(
         f"- [{item.artifact_id}]({_API_PREFIX}/comparisons/{run}/artifacts/"

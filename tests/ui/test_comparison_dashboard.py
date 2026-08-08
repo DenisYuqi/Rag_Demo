@@ -412,6 +412,54 @@ def test_compare_view_renders_authoritative_tables_plot_and_path_free_artifacts(
     ) in rendered.shared_setup_rows
 
 
+def test_profile_refresh_defaults_to_latest_retrieval_run_and_keeps_plan_run_aligned() -> None:
+    retrieval_plan = Plan()
+    generation_plan = replace(
+        Plan(),
+        experiment_plan_id="generation-comparison-v1",
+        display_name="Generation comparison",
+        axis="generation-model",
+    )
+    cache_plan = replace(
+        Plan(),
+        experiment_plan_id="cache-comparison-v1",
+        display_name="Cache comparison",
+        axis="cache-behavior",
+    )
+    latest_cache_run = replace(
+        Run("comparison-cache-latest"),
+        experiment_plan_id=cache_plan.experiment_plan_id,
+    )
+    retrieval_run = Run("comparison-retrieval-complete")
+    gateway = FakeComparisonGateway(
+        plans=[generation_plan, retrieval_plan, cache_plan],
+        runs=[latest_cache_run, retrieval_run],
+        summaries={
+            retrieval_run.comparison_id: _completed_summary(retrieval_run.comparison_id),
+        },
+        manifests={
+            retrieval_run.comparison_id: _manifest(retrieval_run.comparison_id),
+        },
+    )
+    callbacks = _callbacks(gateway)
+
+    initial = callbacks.refresh_comparisons(BrowserSessionState.create())
+    stale_selection = callbacks.preview_comparison(
+        retrieval_plan.experiment_plan_id,
+        latest_cache_run.comparison_id,
+        BrowserSessionState.create(),
+    )
+
+    for rendered in (initial, stale_selection):
+        assert rendered.selected_plan_id == retrieval_plan.experiment_plan_id
+        assert rendered.selected_comparison_id == retrieval_run.comparison_id
+        assert rendered.selected_axis == "retrieval-strategy"
+        assert rendered.retrieval_plot_rows
+        assert tuple(value for _, value in rendered.comparison_choices) == (
+            retrieval_run.comparison_id,
+        )
+
+
 def test_bge_comparison_download_links_preserve_the_selected_profile() -> None:
     gateway = FakeComparisonGateway()
     callbacks = WorkbenchCallbacks(

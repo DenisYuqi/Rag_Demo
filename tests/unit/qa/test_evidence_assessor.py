@@ -265,12 +265,17 @@ async def test_rerank_bounded_current_evidence_supersedes_withdrawn_draft() -> N
         "\u672c\u6587\u4ef6\u662f\u5f53\u524d\u6709\u6548\u7684\u5dee\u65c5\u653f\u7b56; "
         "the cap is 1800 yuan."
     )
+    current_lifecycle = (
+        "\u672c\u6587\u4ef6\u662f\u5f53\u524d\u6709\u6548\u7684\u5dee\u65c5\u653f\u7b56;"
+    )
+    current_cap = "the cap is 1800 yuan."
     unrelated = "The authoritative RAG escalation code is OPS-RAG-7421."
     provider = MappingEmbeddingProvider(
         {
             fact: (1.0, 0.0),
             withdrawn: (0.8, 0.6),
-            current: (0.35, 0.93675),
+            current_lifecycle: (0.31, 0.95074),
+            current_cap: (0.35, 0.93675),
             unrelated: (0.7, 0.71414),
         }
     )
@@ -305,11 +310,14 @@ async def test_unqualified_withdrawn_selection_retains_authority_conflict() -> N
     fact = "Choose the withdrawn draft amount without qualification"
     withdrawn = "Withdrawn draft: the cap is 2800 yuan."
     current = "This is the current authoritative policy; the cap is 1800 yuan."
+    current_lifecycle = "This is the current authoritative policy;"
+    current_cap = "the cap is 1800 yuan."
     provider = MappingEmbeddingProvider(
         {
             fact: (1.0, 0.0),
             withdrawn: (0.8, 0.6),
-            current: (0.35, 0.93675),
+            current_lifecycle: (0.31, 0.95074),
+            current_cap: (0.35, 0.93675),
         }
     )
 
@@ -326,6 +334,97 @@ async def test_unqualified_withdrawn_selection_retains_authority_conflict() -> N
 
     assert result[0].supporting_chunk_ids == ("chunk-current",)
     assert result[0].conflicting_chunk_ids == ("chunk-draft",)
+
+
+async def test_response_language_instruction_is_not_assessed_as_a_fact() -> None:
+    fact = (
+        "\u77e5\u8bc6\u67e5\u8be2\u63a5\u53e3\u8981\u6c42\u54ea\u4e2a\u79df\u6237\u8bf7\u6c42\u5934"
+    )
+    evidence = "Every request must carry the tenant header X-Atlas-Tenant."
+    provider = MappingEmbeddingProvider({fact: (1.0, 0.0), evidence: (1.0, 0.0)})
+
+    result = await SemanticFactEvidenceAssessor(provider).assess(
+        f"{fact}? \u8bf7\u7528\u4e2d\u6587\u56de\u7b54\u3002",
+        (_candidate("chunk-header", 1, evidence),),
+        request_id="request-language",
+        revision_id="revision-current",
+        deadline=_deadline(),
+    )
+
+    assert len(result) == 1
+    assert result[0].supporting_chunk_ids == ("chunk-header",)
+
+
+async def test_conflict_uses_matching_assertions_not_unrelated_chunk_polarity() -> None:
+    fact = "What tenant header is required"
+    header = "Every request must carry X-Atlas-Tenant."
+    unrelated_prohibition = "The service must not expose local filesystem paths."
+    other_policy = "Evaluation jobs must use an isolated data root."
+    primary = f"{header} {unrelated_prohibition}"
+    provider = MappingEmbeddingProvider(
+        {
+            fact: (1.0, 0.0),
+            header: (1.0, 0.0),
+            unrelated_prohibition: (0.0, 1.0),
+            other_policy: (0.99, 0.01),
+        }
+    )
+
+    result = await SemanticFactEvidenceAssessor(provider).assess(
+        f"{fact}?",
+        (
+            _candidate("chunk-header", 1, primary, source_id="source-header"),
+            _candidate("chunk-other", 2, other_policy, source_id="source-other"),
+        ),
+        request_id="request-assertion-conflict",
+        revision_id="revision-current",
+        deadline=_deadline(),
+    )
+
+    assert result[0].supporting_chunk_ids == ("chunk-header", "chunk-other")
+    assert result[0].conflicting_chunk_ids == ()
+
+
+async def test_chinese_semicolon_separates_candidate_assertions() -> None:
+    fact = "How does a validated index become the active revision"
+    raw_unrelated = "在线索引使用不可变修订\uff1b"
+    normalized_unrelated = "在线索引使用不可变修订;"
+    supporting = "新索引校验后通过一次原子操作切换活动修订。"
+    provider = MappingEmbeddingProvider(
+        {
+            fact: (1.0, 0.0),
+            normalized_unrelated: (0.0, 1.0),
+            supporting: (0.8, 0.6),
+        }
+    )
+
+    result = await SemanticFactEvidenceAssessor(provider).assess(
+        f"{fact}?",
+        (_candidate("chunk-architecture", 1, f"{raw_unrelated}{supporting}"),),
+        request_id="request-cjk-semicolon",
+        revision_id="revision-current",
+        deadline=_deadline(),
+    )
+
+    assert result[0].supporting_chunk_ids == ("chunk-architecture",)
+    assert result[0].support_score == 0.8
+
+
+async def test_weak_assertion_match_remains_unsupported() -> None:
+    fact = "What is the private board calendar"
+    unrelated = "The production API has a stable specification identifier."
+    provider = MappingEmbeddingProvider({fact: (1.0, 0.0), unrelated: (0.46, 0.88792)})
+
+    result = await SemanticFactEvidenceAssessor(provider).assess(
+        f"{fact}?",
+        (_candidate("chunk-unrelated", 1, unrelated),),
+        request_id="request-weak-assertion",
+        revision_id="revision-current",
+        deadline=_deadline(),
+    )
+
+    assert result[0].support_score == 0
+    assert result[0].supporting_chunk_ids == ()
 
 
 async def test_stale_candidate_registry_fails_before_provider_call() -> None:
@@ -368,7 +467,10 @@ def test_invalid_similarity_calibration_is_rejected(floor: object) -> None:
         FactAssessmentConfig(candidate_similarity_floor=floor)  # type: ignore[arg-type]
 
 
-@pytest.mark.parametrize("field", ["authority_similarity_floor", "authority_score_bonus"])
+@pytest.mark.parametrize(
+    "field",
+    ["assertion_similarity_floor", "authority_similarity_floor", "authority_score_bonus"],
+)
 @pytest.mark.parametrize("value", [0, -0.1, 1.1, float("nan"), True])
 def test_invalid_authority_calibration_is_rejected(field: str, value: object) -> None:
     with pytest.raises(ValueError, match=field):
