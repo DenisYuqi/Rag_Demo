@@ -25,7 +25,7 @@ class Variant:
     candidate_id: str
     label: str
     value: str
-    configuration_id: str = "semantic-config"
+    configuration_id: object = "semantic-config"
 
 
 @dataclass(frozen=True)
@@ -833,6 +833,57 @@ async def test_blocked_registered_plan_disables_and_rejects_launch() -> None:
     )
     assert gateway.starts == []
     assert "Select a valid registered experiment plan" in rejected.status_markdown
+
+
+def test_unmaterialized_blocked_plan_does_not_empty_the_comparison_catalog() -> None:
+    launchable = replace(
+        Plan(),
+        experiment_plan_id="generation-model-comparison-v1",
+        display_name="Generation model comparison",
+        axis="generation-model",
+    )
+    unavailable = UnavailableValue(reason="comparison-plan-not-materialized")
+    blocked = replace(
+        Plan(),
+        experiment_plan_id="retrieval-strategy-comparison-v1",
+        variants=tuple(replace(item, configuration_id=unavailable) for item in Plan().variants),
+        launchable=False,
+        blocking_codes=("comparison-generation-selection-required",),
+    )
+    callbacks = _callbacks(
+        FakeComparisonGateway(
+            plans=[launchable, blocked],
+            runs=[],
+            summaries={},
+            manifests={},
+        )
+    )
+
+    initial = callbacks.refresh_comparisons(BrowserSessionState.create())
+
+    assert len(initial.plan_choices) == 2
+    assert initial.selected_plan_id == launchable.experiment_plan_id
+    assert initial.start_enabled
+    assert initial.plan_rows
+
+    blocked_render = callbacks.preview_comparison(
+        blocked.experiment_plan_id,
+        None,
+        BrowserSessionState.create(),
+    )
+
+    assert blocked_render.selected_plan_id == blocked.experiment_plan_id
+    assert not blocked_render.start_enabled
+    assert "comparison-generation-selection-required" in blocked_render.status_markdown
+    assert "comparison-plan-not-materialized" in str(blocked_render.plan_rows[0][17])
+    assert {row[0] for row in blocked_render.retrieval_rows} == {
+        "dense",
+        "hybrid",
+        "hybrid-rerank",
+    }
+    assert all(row[3] == "blocked" for row in blocked_render.retrieval_rows)
+    assert all("not-evaluated" in str(row[5]) for row in blocked_render.retrieval_rows)
+    assert blocked_render.model_rows == ()
 
 
 def test_workbench_contains_real_compact_plot_and_no_legacy_compare_controls(

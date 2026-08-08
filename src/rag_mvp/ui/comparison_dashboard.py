@@ -365,6 +365,7 @@ def render_comparison_dashboard(
         plot_rows=plot_rows,
         selected_axis=selected_axis,
         retrieval_rows=_focused_candidate_rows(
+            plan,
             summary,
             selected_axis,
             "retrieval-strategy",
@@ -372,6 +373,7 @@ def render_comparison_dashboard(
         ),
         retrieval_plot_rows=_focused_plot_rows(plot_rows, selected_axis, "retrieval-strategy"),
         model_rows=_focused_candidate_rows(
+            plan,
             summary,
             selected_axis,
             "generation-model",
@@ -438,7 +440,7 @@ def _plan(value: object) -> _Plan:
             variant_id=_identifier(_attribute(item, "variant_id", "candidate_id")),
             display_name=_single_line(_attribute(item, "display_name", "label")),
             axis_value=_single_line(_attribute(item, "axis_value", "value")),
-            configuration_id=_identifier(
+            configuration_id=_identifier_or_unavailable(
                 _attribute(
                     item,
                     "configuration_id",
@@ -1104,6 +1106,7 @@ def _plot_rows(
 
 
 def _focused_candidate_rows(
+    plan: _Plan | None,
     summary: _Summary | None,
     selected_axis: str | None,
     expected_axis: str,
@@ -1111,8 +1114,28 @@ def _focused_candidate_rows(
 ) -> tuple[tuple[object, ...], ...]:
     """Build an interview-friendly table without replacing authoritative evidence rows."""
 
-    if summary is None or selected_axis != expected_axis:
+    if selected_axis != expected_axis:
         return ()
+    if summary is None:
+        if plan is None or plan.axis != expected_axis:
+            return ()
+        unavailable_metrics = tuple(
+            _unavailable("not-evaluated") for _ in _FOCUSED_COMPARISON_METRICS
+        )
+        status = "planned" if plan.launchable else "blocked"
+        return tuple(
+            (
+                candidate.variant_id,
+                _safe_text(candidate.display_name, redactor),
+                _safe_text(candidate.axis_value, redactor),
+                status,
+                candidate.variant_id == plan.baseline_variant_id,
+                *unavailable_metrics,
+                "not-evaluated",
+                False,
+            )
+            for candidate in plan.variants
+        )
     selected_id = summary.recommendation.selected_candidate_id
     rows: list[tuple[object, ...]] = []
     for candidate in summary.candidates:
@@ -1379,6 +1402,12 @@ def _identifier(value: object) -> str:
 
 def _optional_identifier(value: object) -> str | None:
     return None if value is None else _identifier(value)
+
+
+def _identifier_or_unavailable(value: object) -> str:
+    if isinstance(value, UnavailableValue):
+        return _unavailable(value.reason)
+    return _identifier(value)
 
 
 def _single_line(value: object) -> str:

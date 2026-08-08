@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
+from pathlib import Path
 from typing import Any, cast
 
 import gradio as gr
@@ -16,7 +17,6 @@ from .models import (
     BrowserSessionState,
     ChatRender,
     ComparisonRender,
-    DiagnosticsRender,
     DocumentsRender,
     EvaluationRender,
 )
@@ -45,6 +45,18 @@ _WORKBENCH_CSS = """
 .rag-kpi-failed { border-color: #dc2626; }
 .rag-kpi-unavailable { border-style: dashed; }
 """
+
+_README_PATH = Path(__file__).resolve().parents[3] / "README.md"
+
+
+def _readme_markdown() -> str:
+    """Load the project README for the read-only workbench tab."""
+
+    try:
+        return _README_PATH.read_text(encoding="utf-8")
+    except OSError:
+        return "# README\n\nREADME content is unavailable."
+
 
 def _chat_outputs(
     render: ChatRender,
@@ -114,16 +126,6 @@ def _evaluation_outputs(
         gr.update(interactive=render.start_enabled),
         gr.update(active=render.poll_active),
         render.state,
-    )
-
-
-def _diagnostic_outputs(
-    render: DiagnosticsRender,
-) -> tuple[list[list[Any]], list[list[Any]], str]:
-    return (
-        [list(row) for row in render.health_rows],
-        [list(row) for row in render.request_rows],
-        render.status_markdown,
     )
 
 
@@ -937,23 +939,8 @@ def create_workbench(
                             label="Same-origin API downloads / 同源 API 下载",
                         )
 
-            with gr.Tab("Diagnostics", id="diagnostics-tab"):
-                refresh_health = gr.Button("Refresh health / 刷新健康状态")
-                health_table = gr.Dataframe(
-                    headers=["component", "ready", "reason"],
-                    label="Health / 健康状态",
-                    interactive=False,
-                    type="array",
-                )
-                request_id = gr.Textbox(label="Request or trace ID / 请求或跟踪 ID")
-                inspect = gr.Button("Inspect request / 检查请求")
-                request_table = gr.Dataframe(
-                    headers=["field", "safe value"],
-                    label="Request trace / 请求跟踪",
-                    interactive=False,
-                    type="array",
-                )
-                diagnostics_status = gr.Markdown(label="Diagnostics status / 诊断状态")
+            with gr.Tab("README", id="readme-tab"):
+                gr.Markdown(_readme_markdown(), label="README")
 
         async def on_ask(
             raw_question: str,
@@ -1072,12 +1059,6 @@ def create_workbench(
                     raw_profile,
                 )
             )
-
-        def on_health() -> tuple[list[list[Any]], list[list[Any]], str]:
-            return _diagnostic_outputs(controller.refresh_health())
-
-        def on_inspect(value: str) -> tuple[list[list[Any]], list[list[Any]], str]:
-            return _diagnostic_outputs(controller.inspect_request(value))
 
         chat_outputs = [chatbot, session_state, citations, previews, chat_status, question]
         ask_event = ask.click(
@@ -1332,15 +1313,6 @@ def create_workbench(
                 *comparison_outputs[:-1],
             ],
             api_name="retrieval_profile_select",
-        )
-
-        diagnostic_outputs = [health_table, request_table, diagnostics_status]
-        refresh_health.click(on_health, outputs=diagnostic_outputs, api_name="diagnostics_health")
-        inspect.click(
-            on_inspect,
-            inputs=[request_id],
-            outputs=diagnostic_outputs,
-            api_name="diagnostics_request",
         )
 
     return cast(gr.Blocks, demo)

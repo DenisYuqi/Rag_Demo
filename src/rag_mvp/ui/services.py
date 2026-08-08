@@ -18,8 +18,14 @@ from rag_mvp.domain.ingestion import Document, IngestionJob
 from rag_mvp.domain.qa import Citation, RequestDiagnostic, ValidatedStreamEvent
 from rag_mvp.domain.retrieval import RetrievalMode
 from rag_mvp.ingestion.service import IngestionService
+from rag_mvp.performance.worker_pools import BoundedWorkerPool
 from rag_mvp.qa.query_rewrite import select_response_language
+from rag_mvp.retrieval.binding import (
+    BoundRetrievalSnapshotFactory,
+    default_chroma_worker_pool,
+)
 from rag_mvp.safety.redactor import DEFAULT_REDACTOR, Redactor
+from rag_mvp.storage.layout import DataLayout
 
 from .models import ChatServiceResult, SourcePreview, UploadPayload
 
@@ -39,8 +45,61 @@ class SourcePreviewLookup(Protocol):
     async def get_previews(
         self,
         request_id: str,
+        revision_id: str,
         citations: Sequence[Citation],
     ) -> Mapping[str, str]: ...
+
+
+@dataclass(frozen=True, slots=True)
+class SnapshotSourcePreviewLookup:
+    """Resolve cited text from the exact committed retrieval revision."""
+
+    snapshots: BoundRetrievalSnapshotFactory
+    worker_pool: BoundedWorkerPool = field(default_factory=default_chroma_worker_pool)
+
+    async def get_previews(
+        self,
+        request_id: str,
+        revision_id: str,
+        citations: Sequence[Citation],
+    ) -> Mapping[str, str]:
+        del request_id
+        if not isinstance(revision_id, str) or not revision_id.strip():
+            return {}
+        values = tuple(citations)
+        if not values:
+            return {}
+        try:
+            return await self.worker_pool.run_cancel_safe(
+                self._read_previews,
+                revision_id,
+                values,
+            )
+        except Exception:
+            # A preview is supplementary UI evidence. Never discard an already
+            # validated answer because its immutable snapshot cannot be reopened.
+            return {}
+
+    def _read_previews(
+        self,
+        revision_id: str,
+        citations: Sequence[Citation],
+    ) -> dict[str, str]:
+        with self.snapshots.open_committed(revision_id) as snapshot:
+            records = {record.chunk.chunk_id: record for record in snapshot.bm25.records}
+            previews: dict[str, str] = {}
+            for citation in citations:
+                record = records.get(citation.chunk_id)
+                if record is None:
+                    continue
+                chunk = record.chunk
+                if (
+                    chunk.document_version != citation.document_version
+                    or chunk.locator != citation.locator
+                ):
+                    continue
+                previews[citation.chunk_id] = chunk.text
+            return previews
 
 
 class ChatGateway(Protocol):
@@ -252,7 +311,16 @@ class SharedQAGateway:
         if self.preview_lookup is None:
             previews = tuple(SourcePreview(citation=citation) for citation in event.citations)
         else:
-            values = await self.preview_lookup.get_previews(request_id, event.citations)
+            raw_revision_id = event.diagnostics.metadata.get("index_revision")
+            revision_id = raw_revision_id if isinstance(raw_revision_id, str) else ""
+            try:
+                values = await self.preview_lookup.get_previews(
+                    request_id,
+                    revision_id,
+                    event.citations,
+                )
+            except Exception:
+                values = {}
             previews = tuple(
                 SourcePreview(citation=citation, preview=values.get(citation.chunk_id))
                 for citation in event.citations
@@ -337,13 +405,20 @@ def configured_workbench_services(
 ) -> WorkbenchServices:
     """Compose available backends without claiming unavailable future capabilities."""
 
-    chat = SharedQAGateway(qa, redactor) if qa and redactor else None
+    preview_lookup = _source_preview_lookup(ingestion)
+    chat = SharedQAGateway(qa, redactor, preview_lookup) if qa and redactor else None
     documents = SharedDocumentGateway(ingestion) if ingestion is not None else None
     profiles: dict[str, RetrievalProfileGateways] = {}
     if profile_services is not None:
         profiles = {
             profile_id: RetrievalProfileGateways(
-                chat=SharedQAGateway(profile_qa, redactor) if redactor else None,
+                chat=SharedQAGateway(
+                    profile_qa,
+                    redactor,
+                    _source_preview_lookup(profile_ingestion),
+                )
+                if redactor
+                else None,
                 documents=SharedDocumentGateway(profile_ingestion),
             )
             for profile_id, (profile_qa, profile_ingestion) in profile_services.items()
@@ -357,4 +432,17 @@ def configured_workbench_services(
         retrieval_profiles=profiles,
         evaluation_profiles=dict(profile_evaluations or {}),
         default_retrieval_profile=settings.default_retrieval_profile,
+    )
+
+
+def _source_preview_lookup(
+    ingestion: IngestionService | None,
+) -> SnapshotSourcePreviewLookup | None:
+    if ingestion is None:
+        return None
+    return SnapshotSourcePreviewLookup(
+        BoundRetrievalSnapshotFactory(
+            DataLayout.from_root(ingestion.data_root),
+            ingestion.repositories.index_revisions,
+        )
     )

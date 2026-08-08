@@ -75,7 +75,7 @@ def test_workbench_exposes_four_primary_tabs_and_bilingual_controls(tmp_path: Pa
         "Performance & Cost / 性能与成本",
         "Operations / 运维",
         "Artifacts / 报告下载",
-        "Diagnostics",
+        "README",
     ]
     assert sum(component["type"] == "chatbot" for component in components) == 1
     assert labels >= {
@@ -98,7 +98,7 @@ def test_workbench_exposes_four_primary_tabs_and_bilingual_controls(tmp_path: Pa
         "Canonical operations measures / 规范运维指标",
         "TXT/CSV download status / TXT/CSV 下载状态",
         "Same-origin API downloads / 同源 API 下载",
-        "Request trace / 请求跟踪",
+        "README",
     }
     assert button_values >= {
         "Ask / 提问",
@@ -107,12 +107,18 @@ def test_workbench_exposes_four_primary_tabs_and_bilingual_controls(tmp_path: Pa
         "Upload and index / 上传并索引",
         "Start evaluation / 启动评估",
         "Start comparison / 启动对比",
-        "Refresh health / 刷新健康状态",
     }
     assert api_names >= {
         "chat_submit",
         "documents_upload",
         "evaluation_start",
         "comparison_start",
-        "diagnostics_request",
     }
+
+    readme = next(
+        component
+        for component in components
+        if component["type"] == "markdown" and component["props"].get("label") == "README"
+    )
+    assert "# Rag_Demo" in readme["props"]["value"]
+    assert "Parent/child chunking and reindexing" in readme["props"]["value"]
