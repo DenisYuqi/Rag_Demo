@@ -13,8 +13,9 @@ from rag_mvp.api.qa import QARuntimeServices
 from rag_mvp.config.settings import Settings
 from rag_mvp.domain.evaluation import ReportManifest
 from rag_mvp.evaluation.application import ResolvedEvaluationArtifact
+from rag_mvp.evaluation.artifacts_v2 import ArtifactCatalogV2
 from rag_mvp.evaluation.corpus import EvaluationCorpusInstaller
-from rag_mvp.evaluation.dataset import EvaluationDataset
+from rag_mvp.evaluation.dataset import EvaluationCaseV2, EvaluationDataset
 from rag_mvp.evaluation.html_report import (
     MAX_HTML_REPORT_BYTES,
     verify_html_parity,
@@ -36,6 +37,12 @@ from rag_mvp.evaluation.runner import (
     ProductionQAExecutor,
 )
 from rag_mvp.evaluation.scoring import score_evaluation
+from rag_mvp.evaluation.scoring_v2 import score_evaluation_v2
+from rag_mvp.evaluation.standard_report_v2 import (
+    StandardReportV2Error,
+    build_standard_report_v2,
+    publish_standard_report_v2,
+)
 from rag_mvp.ingestion.service import IngestionService
 from rag_mvp.performance.admission import QAAdmissionController
 from rag_mvp.performance.deadlines import QALatencyBudgets
@@ -82,6 +89,7 @@ class ProductionEvaluationJobExecutor:
     run_artifacts_root: Path
     redactor: Redactor
     issues: Sequence[dict[str, object]] = ()
+    artifact_catalog: ArtifactCatalogV2 | None = None
     composition_factory: IsolatedCompositionFactory = field(
         default=_default_composition_factory,
         repr=False,
@@ -148,7 +156,6 @@ class ProductionEvaluationJobExecutor:
             )
             completed = await runner.execute(plan)
             results = runner.load_case_results(plan.run_id)
-            scorecard = score_evaluation(dataset, results, redactor=self.redactor)
             database = ingestion.repositories.index_revisions.database
             repositories = RuntimeRepositories.from_database(database)
             attempts = tuple(
@@ -170,43 +177,74 @@ class ProductionEvaluationJobExecutor:
                 if model is not None
             )
             pricing = openai_standard_pricing_catalog(provider=provider, models=models)
-            report = build_evaluation_report(
-                dataset=dataset,
-                manifest=runner.load_manifest(plan.run_id),
-                results=results,
-                scorecard=scorecard,
-                attempts=attempts,
-                pricing_catalog=pricing,
-                issues=self.issues,
-                redactor=self.redactor,
-            )
-            gate = cast(dict[str, object], report["gate"])
-            final_passed = gate.get("final_passed") is True
+            run_manifest = runner.load_manifest(plan.run_id)
             run_root = self.run_artifacts_root / plan.run_id
-            json_path = write_json_report(
-                report,
-                run_root / "evaluation-report.json",
-                redactor=self.redactor,
+            advanced = bool(dataset.cases) and all(
+                isinstance(case, EvaluationCaseV2) for case in dataset.cases
             )
-            html_path = write_html_report(
-                report,
-                run_root / "evaluation-report.html",
-                redactor=self.redactor,
-            )
-            self.report_repository.save(
-                ReportManifest(
-                    run_id=plan.run_id,
-                    schema_version=str(report["schema_version"]),
-                    json_report_path=str(json_path),
-                    html_report_path=str(html_path),
-                    content_hash=report_content_hash(report),
-                    metadata={
-                        "profile": "standard-evaluation",
-                        "quality_passed": scorecard.quality_gate.passed,
-                        "final_passed": final_passed,
-                    },
+            if advanced:
+                if self.artifact_catalog is None:
+                    raise EvaluationProductionError("evaluation_artifact_catalog_unavailable")
+                advanced_scorecard = score_evaluation_v2(
+                    dataset,
+                    results,
+                    redactor=self.redactor,
                 )
-            )
+                evidence = build_standard_report_v2(
+                    dataset=dataset,
+                    manifest=run_manifest,
+                    results=results,
+                    scorecard=advanced_scorecard,
+                    attempts=attempts,
+                    pricing_catalog=pricing,
+                )
+                published = publish_standard_report_v2(
+                    evidence,
+                    run_root=run_root,
+                    artifact_catalog=self.artifact_catalog,
+                    redactor=self.redactor,
+                )
+                quality_passed = advanced_scorecard.gate.passed
+                final_passed = published.report.accepted
+            else:
+                scorecard = score_evaluation(dataset, results, redactor=self.redactor)
+                report = build_evaluation_report(
+                    dataset=dataset,
+                    manifest=run_manifest,
+                    results=results,
+                    scorecard=scorecard,
+                    attempts=attempts,
+                    pricing_catalog=pricing,
+                    issues=self.issues,
+                    redactor=self.redactor,
+                )
+                gate = cast(dict[str, object], report["gate"])
+                final_passed = gate.get("final_passed") is True
+                quality_passed = scorecard.quality_gate.passed
+                json_path = write_json_report(
+                    report,
+                    run_root / "evaluation-report.json",
+                    redactor=self.redactor,
+                )
+                html_path = write_html_report(
+                    report,
+                    run_root / "evaluation-report.html",
+                    redactor=self.redactor,
+                )
+                self.report_repository.save(
+                    ReportManifest(
+                        run_id=plan.run_id,
+                        schema_version=str(report["schema_version"]),
+                        json_report_path=str(json_path),
+                        html_report_path=str(html_path),
+                        content_hash=report_content_hash(report),
+                        metadata={
+                            "profile": "standard-evaluation",
+                            "quality_passed": quality_passed,
+                            "final_passed": final_passed,
+                        },
+                    )
+                )
             _write_json_exclusive(
                 run_root / "summary.json",
                 {
@@ -215,13 +253,15 @@ class ProductionEvaluationJobExecutor:
                     "dataset_hash": dataset.manifest.content_hash,
                     "corpus_hash": dataset.corpus.manifest.content_hash,
                     "configuration_id": plan.identity.configuration_id,
-                    "quality_passed": scorecard.quality_gate.passed,
+                    "quality_passed": quality_passed,
                     "final_passed": final_passed,
                     "report_artifact_id": "evaluation-report-json",
                 },
             )
         except EvaluationProductionError:
             raise
+        except StandardReportV2Error as error:
+            raise EvaluationProductionError(error.code) from error
         except Exception as error:
             code = getattr(error, "code", None)
             if isinstance(code, str) and code.startswith("evaluation_"):

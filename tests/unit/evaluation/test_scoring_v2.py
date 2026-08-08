@@ -2,6 +2,8 @@ from pathlib import Path
 
 import pytest
 
+from rag_mvp.config.settings import Settings
+from rag_mvp.domain.evaluation import ModelAttempt, ModelAttemptStatus, ModelRole, TokenUsage
 from rag_mvp.domain.ingestion import ChunkLocator
 from rag_mvp.domain.qa import (
     AnswerClaim,
@@ -12,18 +14,35 @@ from rag_mvp.domain.qa import (
     ValidatedStreamEvent,
 )
 from rag_mvp.domain.retrieval import CachePolicy
+from rag_mvp.evaluation.artifacts_v2 import ArtifactCatalogV2
 from rag_mvp.evaluation.dataset import Answerability, EvaluationCaseV2, EvaluationLanguage
 from rag_mvp.evaluation.grounding_metrics import MetricName
-from rag_mvp.evaluation.plan import EvaluationDatasetRegistry
+from rag_mvp.evaluation.json_report import decode_json_report
+from rag_mvp.evaluation.plan import (
+    EvaluationDatasetRegistry,
+    build_evaluation_plan,
+    evaluation_scorer_versions,
+)
+from rag_mvp.evaluation.pricing import openai_standard_pricing_catalog
 from rag_mvp.evaluation.quality_gate import AdvancedMetricName
-from rag_mvp.evaluation.runner import EvaluationCaseExecution, PersistedCaseResult
+from rag_mvp.evaluation.report_v2 import parse_report_v2
+from rag_mvp.evaluation.runner import (
+    EvaluationCaseExecution,
+    EvaluationRunManifest,
+    PersistedCaseResult,
+)
 from rag_mvp.evaluation.scoring import (
     ADVANCED_SCORING_PIPELINE_VERSION,
     EvaluationScoringError,
 )
 from rag_mvp.evaluation.scoring_v2 import AdvancedScoringError, score_evaluation_v2
+from rag_mvp.evaluation.standard_report_v2 import (
+    build_standard_report_v2,
+    publish_standard_report_v2,
+)
 from rag_mvp.qa.refusal import PARTIAL_EVIDENCE_MESSAGES, EvidenceDecisionCode
 from rag_mvp.qa.refusal_guidance import DEFAULT_REFUSAL_GUIDANCE_CATALOG
+from rag_mvp.safety.redactor import DEFAULT_REDACTOR
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 _DATASETS_ROOT = _REPOSITORY_ROOT / "evaluations" / "datasets"
@@ -595,3 +614,98 @@ def test_advanced_v2_scoring_rejects_non_exact_persisted_case_sets(
 
     with pytest.raises(AdvancedScoringError, match="persisted_case_set_mismatch"):
         score_evaluation_v2(dataset, tuple(results))
+
+
+def test_advanced_run_publishes_complete_dashboard_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset = EvaluationDatasetRegistry(_DATASETS_ROOT).resolve(
+        "original-pdf-acceptance",
+        "2.0.0",
+    )
+    cases = tuple(case for case in dataset.cases if isinstance(case, EvaluationCaseV2))
+    results = tuple(_result(case) for case in cases)
+    settings = Settings(
+        _env_file=None,
+        environment="test",
+        provider_backend="openai",
+        openai_api_key="unit-test-key",
+    )
+    monkeypatch.setattr(
+        "rag_mvp.evaluation.plan.source_code_revision",
+        lambda: "sha256:" + "1" * 64,
+    )
+    plan = build_evaluation_plan(dataset, settings, "advanced-run-v2")
+    manifest = EvaluationRunManifest.create(plan, created_at=results[0].completed_at)
+    provider = plan.identity.provider_identities[ModelRole.GENERATION.value]
+    model = plan.identity.model_identities[ModelRole.GENERATION.value]
+    attempts = tuple(
+        ModelAttempt(
+            attempt_id=f"provider-{ordinal}",
+            operation_id=f"generation-{ordinal}",
+            request_id=result.execution.request_id if result.execution is not None else None,
+            run_id=plan.run_id,
+            role=ModelRole.GENERATION,
+            provider=provider,
+            model=model,
+            status=ModelAttemptStatus.SUCCEEDED,
+            latency_ms=5.0,
+            usage=TokenUsage(input_tokens=10, output_tokens=5),
+            created_at=result.completed_at,
+        )
+        for ordinal, result in enumerate(results, start=1)
+    )
+    scorecard = score_evaluation_v2(dataset, results)
+    pricing = openai_standard_pricing_catalog(provider=provider, models=(model,))
+
+    evidence = build_standard_report_v2(
+        dataset=dataset,
+        manifest=manifest,
+        results=results,
+        scorecard=scorecard,
+        attempts=attempts,
+        pricing_catalog=pricing,
+    )
+
+    assert tuple(item.metric_id for item in evidence.report.gates[0].observations) == tuple(
+        metric.value for metric in AdvancedMetricName
+    )
+    planned_versions = evaluation_scorer_versions(dataset)
+    planned_metric_keys = {
+        AdvancedMetricName.FAITHFULNESS.value: "faithfulness",
+        AdvancedMetricName.CONTEXT_PRECISION.value: "context-precision",
+        AdvancedMetricName.ANSWER_COMPLIANCE.value: "answer-compliance",
+        AdvancedMetricName.STYLE.value: "style-consistency",
+        AdvancedMetricName.REFUSAL_APPROPRIATENESS.value: "refusal-appropriateness",
+    }
+    assert all(
+        item.scorer_version == planned_versions[planned_metric_keys[item.metric_id]]
+        for item in evidence.report.gates[0].observations
+    )
+    assert len(evidence.report.operations_summary.observations) == 17
+    assert evidence.report.category_results
+
+    run_root = tmp_path / "runs" / plan.run_id
+    run_root.mkdir(parents=True)
+    (run_root / "attempt-ledger-v2.jsonl").write_bytes(evidence.attempt_ledger)
+    catalog = ArtifactCatalogV2(tmp_path / "published")
+    published = publish_standard_report_v2(
+        evidence,
+        run_root=run_root,
+        artifact_catalog=catalog,
+        redactor=DEFAULT_REDACTOR,
+    )
+
+    assert tuple(item.artifact_id for item in published.manifest.artifacts) == (
+        "evaluation-report-json",
+        "evaluation-report-html",
+        "operations-summary-txt",
+        "operations-summary-csv",
+    )
+    resolved = catalog.resolve(plan.run_id, "evaluation-report-json")
+    raw = decode_json_report(resolved.content.decode("utf-8"))
+    assert isinstance(raw, dict)
+    parsed = parse_report_v2(raw)
+    assert parsed.run_id == plan.run_id
+    assert parsed.performance_evidence.measured.logical_attempt_count == len(cases)

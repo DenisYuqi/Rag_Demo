@@ -291,6 +291,7 @@ def _compose_evaluation_service(
         report_repository=runtime_repositories.report_manifests,
         run_artifacts_root=run_root,
         redactor=redactor,
+        artifact_catalog=artifact_catalog,
         composition_factory=isolated_composition_factory,
     )
     dataset_registry = EvaluationDatasetRegistry(settings.evaluation_dataset_root)

@@ -301,6 +301,46 @@ def test_json_string_values_still_use_fail_safe_detectors(
     assert detector_categories["phone"] == 1
 
 
+def test_evaluation_html_ignores_typed_numbers_but_scans_string_nodes(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    artifact = tmp_path / "evaluation-report.html"
+    payload = {
+        "schema_version": "2.0.0",
+        "latency_ms": 848.5567909999645,
+        "score": 0.5835019999267388,
+        "status": "failed",
+    }
+    canonical = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    artifact.write_text(
+        "<!doctype html><html><body><span>848.5567909999645</span>"
+        '<script id="evaluation-report-json" type="application/json">'
+        f"{canonical}</script></body></html>",
+        encoding="utf-8",
+    )
+
+    exit_code, report, _ = _run_scan(capsys, str(artifact))
+
+    assert exit_code == 0
+    assert report["passed"] is True
+
+    payload["contact"] = "415.5552671"
+    canonical = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    artifact.write_text(
+        "<!doctype html><html><body>"
+        '<script id="evaluation-report-json" type="application/json">'
+        f"{canonical}</script></body></html>",
+        encoding="utf-8",
+    )
+
+    exit_code, report, output = _run_scan(capsys, str(artifact))
+
+    assert exit_code == 1
+    assert report["passed"] is False
+    assert "415.5552671" not in output
+
+
 def test_mixed_json_log_and_prometheus_samples_ignore_only_typed_numbers(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],

@@ -22,3 +22,9 @@
 - [x] 4.1 Document profile-specific evaluation storage, execution cost/latency, and report selection behavior
 - [x] 4.2 Run targeted/full tests, static checks, Compose validation, and strict OpenSpec validation
 - [x] 4.3 Commit only profile-aware Evaluation changes without including concurrent workspace edits
+
+## 5. BGE Local Evaluation Report Completion
+
+- [x] 5.1 Score acceptance-v2 runs with the advanced scorer identities pinned by the current parent-child chunk plan
+- [x] 5.2 Publish an independent schema-v2 BGE report and operations artifacts so every Evaluation view has typed data
+- [x] 5.3 Add regression coverage, regenerate a real bge-local report, verify profile switching, and commit the focused fix

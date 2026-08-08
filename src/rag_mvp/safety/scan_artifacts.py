@@ -60,6 +60,12 @@ _COMPARISON_HTML_BODY: Final[re.Pattern[str]] = re.compile(
 )
 _COMPARISON_HTML_ROW: Final[re.Pattern[str]] = re.compile(r"<tr>(.*?)</tr>", re.DOTALL)
 _COMPARISON_HTML_CELL: Final[re.Pattern[str]] = re.compile(r"<td>(.*?)</td>", re.DOTALL)
+_EVALUATION_HTML_EMBEDDED: Final[re.Pattern[str]] = re.compile(
+    r'<script id="evaluation-report-json" type="application/json">'
+    r"(?P<canonical>.*?)"
+    r"</script>",
+    re.DOTALL,
+)
 _COMPARISON_HTML_NUMERIC_COLUMNS: Final[frozenset[int]] = frozenset({3, 4, 10, 11, 12})
 _COMPARISON_TEXT_NUMERIC_COLUMNS: Final[frozenset[int]] = frozenset({5, 6, 12, 13, 14, 15})
 _COMPARISON_CSV_NUMERIC_COLUMNS: Final[frozenset[str]] = frozenset(
@@ -561,6 +567,27 @@ def _comparison_projection_detector_text(artifact: Path, content: str) -> str | 
     return None
 
 
+def _evaluation_html_detector_text(content: str) -> str | None:
+    """Scan report string nodes while excluding typed numeric measurements."""
+
+    embedded = _EVALUATION_HTML_EMBEDDED.search(content)
+    if embedded is None:
+        return None
+    try:
+        payload = json.loads(embedded.group("canonical"))
+        if not isinstance(payload, dict) or payload.get("schema_version") != "2.0.0":
+            return None
+        semantic = _without_json_numbers(payload)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None
+    return "\n".join(
+        (
+            json.dumps(semantic, ensure_ascii=False, separators=(",", ":"), sort_keys=True),
+            *_json_string_nodes(payload),
+        )
+    )
+
+
 def _mixed_json_lines_without_numbers(content: str) -> str | None:
     decoder = json.JSONDecoder()
     normalized_lines: list[str] = []
@@ -667,6 +694,10 @@ def scan_artifacts(
             detector_content = _comparison_projection_detector_text(artifact, content)
             if artifact.name in _COMPARISON_PROJECTION_NAMES and detector_content is None:
                 raise ValueError("comparison projection cannot be normalized safely")
+            if detector_content is None and artifact.name == "evaluation-report.html":
+                detector_content = _evaluation_html_detector_text(content)
+                if detector_content is None:
+                    raise ValueError("evaluation HTML projection cannot be normalized safely")
             if detector_content is None:
                 detector_content = _json_detector_text(artifact, content)
             artifact_exact, artifact_detector = _scan_text(
