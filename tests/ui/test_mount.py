@@ -61,6 +61,11 @@ def test_workbench_exposes_four_primary_tabs_and_bilingual_controls(tmp_path: Pa
         for dependency in config["dependencies"]
         if dependency.get("api_name")
     }
+    compare_tab = next(
+        component
+        for component in components
+        if component["type"] == "tabitem" and component["props"].get("label") == "Compare / 对比"
+    )
 
     assert tabs == [
         "Chat",
@@ -78,6 +83,7 @@ def test_workbench_exposes_four_primary_tabs_and_bilingual_controls(tmp_path: Pa
         "README",
     ]
     assert sum(component["type"] == "chatbot" for component in components) == 1
+    assert compare_tab["props"]["visible"] is False
     assert labels >= {
         "Question / 问题",
         "Retrieval mode / 检索模式",

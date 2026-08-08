@@ -87,6 +87,7 @@ class ProfileDocumentGateway:
 class ProfileEvaluationGateway:
     profile_id: str
     starts: list[tuple[str, str | None]] = field(default_factory=list)
+    reads: int = 0
 
     async def start(
         self,
@@ -97,6 +98,7 @@ class ProfileEvaluationGateway:
         return self.list_runs()[0]
 
     def list_runs(self) -> tuple[EvaluationRun, ...]:
+        self.reads += 1
         return (
             EvaluationRun(
                 run_id=f"run-{self.profile_id}",
@@ -237,6 +239,57 @@ def test_workbench_profile_selector_is_wired_to_chat_and_documents() -> None:
     ):
         assert profile["id"] in by_api_name[api_name]["inputs"]
     assert by_api_name["retrieval_profile_select"]["inputs"][0] == profile["id"]
-    assert len(by_api_name["retrieval_profile_select"]["outputs"]) > len(
-        by_api_name["chat_submit"]["outputs"]
+    profile_outputs = by_api_name["retrieval_profile_select"]["outputs"]
+    chat_outputs = by_api_name["chat_submit"]["outputs"]
+    assert profile_outputs[: len(chat_outputs)] == chat_outputs
+    assert len(profile_outputs) == len(chat_outputs) + 1
+    assert by_api_name["retrieval_profile_select"]["show_progress"] == "hidden"
+
+
+def test_evaluation_tab_reuses_loaded_results_for_the_same_profile() -> None:
+    services, _, _ = profile_services()
+    blocks = create_workbench(Settings(_env_file=None), services)
+    config = blocks.get_config_file()
+    labels = {
+        component["id"]: component.get("props", {}).get("label")
+        for component in config["components"]
+    }
+    dependency = next(
+        item
+        for item in config["dependencies"]
+        if any(
+            event == "select" and labels.get(component_id) == "Evaluation"
+            for component_id, event in item["targets"]
+        )
     )
+    handler = blocks.fns[dependency["id"]].fn
+    bge = services.evaluations_for("bge-local")
+    assert callable(handler)
+    assert isinstance(bge, ProfileEvaluationGateway)
+    baseline_reads = bge.reads
+
+    first = handler(
+        None,
+        None,
+        None,
+        BrowserSessionState.create(),
+        "bge-local",
+        None,
+    )
+    first_state = first[-2]
+    loaded_profile = first[-1]
+    assert bge.reads == baseline_reads + 1
+    assert loaded_profile == "bge-local"
+
+    second = handler(
+        None,
+        None,
+        None,
+        first_state,
+        "bge-local",
+        loaded_profile,
+    )
+
+    assert bge.reads == baseline_reads + 1
+    assert second[-1] == "bge-local"
+    assert dependency["show_progress"] == "minimal"

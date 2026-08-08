@@ -30,6 +30,7 @@ from rag_mvp.evaluation.operations_v2 import (
 from rag_mvp.evaluation.plan import EvaluationDatasetRegistry
 from rag_mvp.evaluation.report_v2 import canonical_report_document_v2, parse_report_v2
 from rag_mvp.ui.callbacks import WorkbenchCallbacks
+from rag_mvp.ui.evaluation_dashboard import _kpi_html
 from rag_mvp.ui.models import BrowserSessionState
 from rag_mvp.ui.services import WorkbenchServices
 from rag_mvp.ui.workbench import create_workbench
@@ -347,10 +348,19 @@ def test_typed_views_render_validated_evidence_without_paths_or_private_fields()
         row[0] == "cpu-utilization" and row[3] == "unavailable" for row in rendered.system_rows
     )
     assert tuple(row[0] for row in rendered.cache_rows) == (
+        "cache-policy",
+        "cache-bypassed-lookups",
         "cache-hits",
         "cache-eligible-lookups",
         "cache-hit-rate",
     )
+    cache = {row[0]: row for row in rendered.cache_rows}
+    assert cache["cache-policy"][1] == "bypass"
+    assert cache["cache-bypassed-lookups"][1] == "2"
+    assert cache["cache-bypassed-lookups"][5] == "2"
+    assert cache["cache-hit-rate"][1] == "N/A (cache bypass) / 不适用 (缓存已绕过)"
+    assert cache["cache-hit-rate"][5] == "0"
+    assert cache["cache-hit-rate"][6] == "not-applicable"
     assert rendered.failure_rows[0][1] == "review [REDACTED_EMAIL]"
     assert "raw_prompt" not in repr(rendered)
     assert "never render this prompt" not in repr(rendered)
@@ -362,6 +372,31 @@ def test_typed_views_render_validated_evidence_without_paths_or_private_fields()
     assert "C:\\" not in repr(rendered)
     assert "Scorer backend / 评估后端: `legacy`" in rendered.gate_markdown
     assert "judge: `deterministic`" in rendered.gate_markdown
+
+
+def test_kpi_displays_zero_when_cost_evidence_is_unavailable() -> None:
+    original_per_1000 = (
+        _PARSED.performance_evidence.cost.cost_per_1000_logical_attempts
+    )
+    unavailable_per_1000 = original_per_1000.model_copy(
+        update={"per_1000": None, "status": "unavailable"}
+    )
+    unavailable_cost = _PARSED.performance_evidence.cost.model_copy(
+        update={"cost_per_1000_logical_attempts": unavailable_per_1000}
+    )
+    performance = _PARSED.performance_evidence.model_copy(update={"cost": unavailable_cost})
+    report = _PARSED.model_copy(update={"performance_evidence": performance})
+
+    rendered = _kpi_html(report)
+
+    assert "Cost / 1k QA" in rendered
+    assert "USD 0" in rendered
+    assert "cost evidence unavailable; displayed as 0" in rendered
+    assert "rag-kpi-unavailable" in rendered
+
+    no_report = _kpi_html(None)
+    assert "Cost / 1k QA" in no_report
+    assert "USD 0" in no_report
 
 
 def test_typed_view_displays_ragas_backend_and_judge_identity() -> None:

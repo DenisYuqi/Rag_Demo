@@ -78,7 +78,7 @@ class ExplodingChatGateway:
         raise RuntimeError("private reset failure")
 
 
-def test_page_load_clears_conversation_before_loading_stateful_views(tmp_path: Path) -> None:
+def test_page_load_clears_conversation_without_loading_hidden_views(tmp_path: Path) -> None:
     blocks = create_workbench(
         Settings(_env_file=None, data_root=tmp_path),
         WorkbenchServices(chat=IsolatingChatGateway()),
@@ -105,12 +105,32 @@ def test_page_load_clears_conversation_before_loading_stateful_views(tmp_path: P
         "Question / 问题",
     ]
     assert chat_load["inputs"] == [chat_load["outputs"][1]]
-    stateful_successors = [
+    page_load_successors = [
         dependency
         for dependency in config["dependencies"]
         if any(event == "then" for _, event in dependency["targets"])
     ]
-    assert {labels.get(dependency["outputs"][0]) for dependency in stateful_successors} == {
+    assert page_load_successors == []
+
+
+def test_inactive_views_refresh_only_when_their_tabs_are_selected(tmp_path: Path) -> None:
+    blocks = create_workbench(
+        Settings(_env_file=None, data_root=tmp_path),
+        WorkbenchServices(chat=IsolatingChatGateway()),
+    )
+    config = blocks.get_config_file()
+    labels = {
+        component["id"]: component.get("props", {}).get("label")
+        for component in config["components"]
+    }
+    selected_view_outputs = {
+        labels.get(dependency["outputs"][0])
+        for dependency in config["dependencies"]
+        if any(event == "select" for _, event in dependency["targets"])
+    }
+
+    assert selected_view_outputs >= {
+        "Active documents / 活跃文档",
         "Registered dataset / 已注册数据集",
         "Registered experiment plan / 已注册实验计划",
     }

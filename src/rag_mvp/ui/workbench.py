@@ -242,6 +242,7 @@ def create_workbench(
         # locks and HTTP clients.  The model factory is stateless and still gives
         # every browser session a distinct owner identifier.
         session_state = gr.State(value=BrowserSessionState.create)
+        loaded_evaluation_profile = gr.State(value=None)
         retrieval_profile = gr.Dropdown(
             choices=list(services.retrieval_profile_ids),
             value=services.default_retrieval_profile,
@@ -267,7 +268,7 @@ def create_workbench(
                 citations = gr.Markdown(label="Citations / 引用")
                 previews = gr.Markdown(label="Source previews / 来源预览")
 
-            with gr.Tab("Documents", id="documents-tab"):
+            with gr.Tab("Documents", id="documents-tab") as documents_tab:
                 upload_file = gr.File(
                     label="Upload document / 上传文档",
                     file_types=[".pdf", ".md", ".markdown", ".txt"],
@@ -311,10 +312,10 @@ def create_workbench(
                     label="Document status / 文档状态",
                 )
 
-            with gr.Tab("Evaluation", id="evaluation-tab"):
+            with gr.Tab("Evaluation", id="evaluation-tab") as evaluation_tab:
                 evaluation_timer = gr.Timer(
                     value=2.0,
-                    active=initial_evaluation.poll_active,
+                    active=False,
                 )
                 with gr.Tabs(selected="evaluation-run-tab"):
                     with gr.Tab("Run / 运行", id="evaluation-run-tab"):
@@ -427,10 +428,14 @@ def create_workbench(
                             interactive=False,
                             type="array",
                         )
-                    with gr.Tab("Compare / 对比", id="evaluation-compare-tab"):
+                    with gr.Tab(
+                        "Compare / 对比",
+                        id="evaluation-compare-tab",
+                        visible=False,
+                    ) as comparison_tab:
                         comparison_timer = gr.Timer(
                             value=2.0,
-                            active=initial_comparison.poll_active,
+                            active=False,
                         )
                         comparison_plan_select = gr.Dropdown(
                             choices=list(initial_comparison.plan_choices),
@@ -1032,6 +1037,31 @@ def create_workbench(
                 )
             )
 
+        def on_select_evaluation(
+            selected_dataset: str | None,
+            selected_plan: str | None,
+            selected_run: str | None,
+            raw_state: BrowserSessionState | None,
+            raw_profile: str | None,
+            loaded_profile: str | None,
+        ) -> tuple[Any, ...]:
+            resolved_profile = raw_profile or services.default_retrieval_profile
+            if loaded_profile == resolved_profile:
+                return (
+                    *(gr.skip() for _ in evaluation_outputs),
+                    loaded_profile,
+                )
+            return (
+                *on_refresh_evaluation(
+                    selected_dataset,
+                    selected_plan,
+                    selected_run,
+                    raw_state,
+                    raw_profile,
+                ),
+                resolved_profile,
+            )
+
         async def on_start_comparison(
             selected_plan: str | None,
             raw_state: BrowserSessionState | None,
@@ -1088,7 +1118,7 @@ def create_workbench(
             cancels=[ask_event],
             api_name="chat_cancel",
         )
-        chat_load = demo.load(
+        demo.load(
             on_reset,
             inputs=[session_state],
             outputs=chat_outputs,
@@ -1120,6 +1150,12 @@ def create_workbench(
             inputs=[delete_source, confirm_delete, retrieval_profile],
             outputs=document_outputs,
             api_name="documents_delete",
+        )
+        documents_tab.select(
+            on_documents,
+            inputs=[retrieval_profile],
+            outputs=document_outputs,
+            api_name=None,
         )
         demo.load(
             on_documents,
@@ -1202,12 +1238,12 @@ def create_workbench(
             api_name=None,
             show_progress="hidden",
         )
-        chat_load.then(
-            on_refresh_evaluation,
-            inputs=evaluation_inputs,
-            outputs=evaluation_outputs,
+        evaluation_tab.select(
+            on_select_evaluation,
+            inputs=[*evaluation_inputs, loaded_evaluation_profile],
+            outputs=[*evaluation_outputs, loaded_evaluation_profile],
             api_name=None,
-            show_progress="hidden",
+            show_progress="minimal",
         )
 
         comparison_outputs = [
@@ -1275,12 +1311,11 @@ def create_workbench(
             api_name=None,
             show_progress="hidden",
         )
-        chat_load.then(
+        comparison_tab.select(
             on_refresh_comparison,
             inputs=comparison_inputs,
             outputs=comparison_outputs,
             api_name=None,
-            show_progress="hidden",
         )
 
         def on_switch_profile(
@@ -1289,32 +1324,22 @@ def create_workbench(
         ) -> tuple[Any, ...]:
             chat_render = controller.switch_profile(selected, raw_state)
             reset_state = chat_render.state.with_evaluation(None).with_comparison(None)
-            evaluation_render = controller.refresh_evaluations(
-                reset_state,
-                profile_id=selected,
-            )
-            comparison_render = controller.refresh_comparisons(
-                evaluation_render.state.with_comparison(None),
-                profile_id=selected,
-            )
-            final_state = comparison_render.state
             return (
-                *_chat_outputs(replace(chat_render, state=final_state)),
-                *_document_outputs(controller.refresh_documents(selected)),
-                *_evaluation_outputs(evaluation_render)[:-1],
-                *_comparison_outputs(comparison_render)[:-1],
+                *_chat_outputs(
+                    replace(
+                        chat_render,
+                        state=reset_state,
+                    )
+                ),
+                None,
             )
 
         retrieval_profile.change(
             on_switch_profile,
             inputs=[retrieval_profile, session_state],
-            outputs=[
-                *chat_outputs,
-                *document_outputs,
-                *evaluation_outputs[:-1],
-                *comparison_outputs[:-1],
-            ],
+            outputs=[*chat_outputs, loaded_evaluation_profile],
             api_name="retrieval_profile_select",
+            show_progress="hidden",
         )
 
     return cast(gr.Blocks, demo)

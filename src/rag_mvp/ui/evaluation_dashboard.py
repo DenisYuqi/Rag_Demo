@@ -218,6 +218,7 @@ def render_evaluation_dashboard(
     operations_links = "Operations downloads unavailable. / 运维下载不可用。"
     artifact_rows: tuple[tuple[object, ...], ...] = ()
     artifact_links = "Artifacts unavailable. / 报告文件不可用。"
+    report: EvaluationReportV2 | None = None
 
     if selected_run is not None:
         release = releases[selected_run.run_id]
@@ -304,6 +305,7 @@ def render_evaluation_dashboard(
             "Read-only refresh complete; no provider work was started. / "
             "只读刷新完成; 未启动任何模型调用。"
         )
+    cache_rows = _cache_statistics_rows(operations_rows, report)
     return EvaluationRender(
         run_rows=run_rows,
         failure_rows=failure_rows,
@@ -326,7 +328,7 @@ def render_evaluation_dashboard(
         cost_rows=_metric_subset(overview_rows, _COST_METRICS),
         category_rows=category_rows,
         operations_rows=operations_rows,
-        cache_rows=_metric_subset(operations_rows, _CACHE_METRICS),
+        cache_rows=cache_rows,
         refusal_rows=_metric_subset(operations_rows, _REFUSAL_METRICS),
         system_rows=system_rows,
         artifact_rows=artifact_rows,
@@ -920,6 +922,58 @@ def _metric_subset(
     return tuple(by_id[metric_id] for metric_id in metric_ids if metric_id in by_id)
 
 
+def _cache_statistics_rows(
+    operations_rows: Sequence[tuple[object, ...]],
+    report: EvaluationReportV2 | None,
+) -> tuple[tuple[object, ...], ...]:
+    """Expose recorded cache bypass evidence without inventing a hit rate."""
+
+    base_rows = list(_metric_subset(operations_rows, _CACHE_METRICS))
+    if report is None:
+        return tuple(base_rows)
+    attempts = report.performance_evidence.measured.attempts
+    if not attempts:
+        return tuple(base_rows)
+    policies = tuple(attempt.cache_status.get("request-policy") for attempt in attempts)
+    if not policies or any(not isinstance(policy, str) or not policy for policy in policies):
+        return tuple(base_rows)
+
+    policy = policies[0] if len(set(policies)) == 1 else "mixed"
+    bypassed = sum(item == "bypass" for item in policies)
+    evidence_rows = [
+        _metric_row(
+            "cache-policy",
+            policy,
+            "policy",
+            denominator=len(attempts),
+            status="observed",
+            scorer="attempt-ledger-v2",
+        ),
+        _metric_row(
+            "cache-bypassed-lookups",
+            bypassed,
+            "requests",
+            numerator=bypassed,
+            denominator=len(attempts),
+            status="observed",
+            scorer="attempt-ledger-v2",
+        ),
+    ]
+    if bypassed == len(attempts):
+        not_applicable = _metric_row(
+            "cache-hit-rate",
+            "N/A (cache bypass) / 不适用 (缓存已绕过)",
+            "ratio",
+            numerator=0,
+            denominator=0,
+            status="not-applicable",
+            scorer="derived-from-attempt-ledger-v2",
+        )
+        base_rows = [row for row in base_rows if row[0] != "cache-hit-rate"]
+        base_rows.append(not_applicable)
+    return tuple((*evidence_rows, *base_rows))
+
+
 def _release_overview_rows(
     release: ReleaseEvidenceSnapshot,
 ) -> tuple[tuple[object, ...], ...]:
@@ -1402,7 +1456,12 @@ def _kpi_html(report: EvaluationReportV2 | None) -> str:
         cards = (
             ("Quality gates / 质量门槛", "—", "evidence unavailable", "unavailable"),
             ("All-attempt P95 / 全请求 P95", "—", "evidence unavailable", "unavailable"),
-            ("Cost / 1k QA", "—", "evidence unavailable", "unavailable"),
+            (
+                "Cost / 1k QA",
+                "USD 0",
+                "cost evidence unavailable; displayed as 0",
+                "unavailable",
+            ),
             ("Success rate / 成功率", "—", "evidence unavailable", "unavailable"),
         )
     else:
@@ -1417,10 +1476,12 @@ def _kpi_html(report: EvaluationReportV2 | None) -> str:
         latency_state = "unavailable" if latency is None else "observed"
         cost = report.performance_evidence.cost.cost_per_1000_logical_attempts
         if cost.per_1000 is None:
-            cost_value = "—"
+            cost_value = f"{report.performance_evidence.cost.pricing.currency} 0"
+            cost_note = "cost evidence unavailable; displayed as 0"
             cost_state = "unavailable"
         else:
             cost_value = f"{report.performance_evidence.cost.pricing.currency} {cost.per_1000}"
+            cost_note = "logical attempts"
             cost_state = "observed"
         measured = report.performance_evidence.measured
         success_rate = (
@@ -1433,7 +1494,7 @@ def _kpi_html(report: EvaluationReportV2 | None) -> str:
         cards = (
             ("Quality gates / 质量门槛", quality_value, quality_note, quality_state),
             ("All-attempt P95 / 全请求 P95", latency_value, latency_note, latency_state),
-            ("Cost / 1k QA", cost_value, "logical attempts", cost_state),
+            ("Cost / 1k QA", cost_value, cost_note, cost_state),
             ("Success rate / 成功率", success_value, "logical requests", success_state),
         )
     return (
