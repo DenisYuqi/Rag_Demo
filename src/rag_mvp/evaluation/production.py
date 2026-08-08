@@ -121,8 +121,7 @@ class ProductionEvaluationJobExecutor:
             raise EvaluationProductionError("evaluation_configuration_identity_mismatch")
         if (
             plan.identity.runtime_configuration_id is not None
-            and plan.identity.runtime_configuration_id
-            != isolated.runtime_configuration_identity
+            and plan.identity.runtime_configuration_id != isolated.runtime_configuration_identity
         ):
             raise EvaluationProductionError("evaluation_runtime_identity_mismatch")
         workspace = isolated.data_root.resolve()

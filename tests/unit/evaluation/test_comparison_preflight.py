@@ -83,10 +83,14 @@ def _candidate_plans(
             ),
         }
     )
-    return dataset, experiment, {
-        experiment.variants[0].variant_id: first,
-        second_variant.variant_id: second,
-    }
+    return (
+        dataset,
+        experiment,
+        {
+            experiment.variants[0].variant_id: first,
+            second_variant.variant_id: second,
+        },
+    )
 
 
 def _cache_candidate_plans(
@@ -257,9 +261,7 @@ def test_preflight_rejects_manifest_valid_but_unpinned_dataset_identity(
                 "manifest": dataset.manifest.model_copy(
                     update={
                         field_name: (
-                            "sha256:" + "f" * 64
-                            if field_name == "content_hash"
-                            else "foreign"
+                            "sha256:" + "f" * 64 if field_name == "content_hash" else "foreign"
                         )
                     }
                 )
@@ -276,9 +278,7 @@ def test_preflight_rejects_manifest_valid_but_unpinned_dataset_identity(
                 "manifest": dataset.corpus.manifest.model_copy(
                     update={
                         field_name: (
-                            "sha256:" + "e" * 64
-                            if field_name == "content_hash"
-                            else "foreign"
+                            "sha256:" + "e" * 64 if field_name == "content_hash" else "foreign"
                         )
                     }
                 )
@@ -310,9 +310,7 @@ def test_preflight_rejects_whole_suite_cap_before_work(cap: str) -> None:
     updates: dict[str, object]
     expected: str
     if cap == "calls":
-        updates = {
-            "maximum_provider_calls": accepted.snapshot.reserved_provider_calls - 1
-        }
+        updates = {"maximum_provider_calls": accepted.snapshot.reserved_provider_calls - 1}
         expected = "provider_call_cap_exceeded"
     else:
         updates = {"maximum_cost": accepted.snapshot.reserved_cost - Decimal("0.00000001")}
@@ -531,20 +529,15 @@ def test_cache_query_uniqueness_uses_exact_history_sensitive_rewrite() -> None:
     multi_turn = (first, second)
     assert len(multi_turn) == 2
     same_follow_up = tuple(
-        case.model_copy(update={"question": "What about this policy?"})
-        for case in multi_turn
+        case.model_copy(update={"question": "What about this policy?"}) for case in multi_turn
     )
     history_sensitive = dataset.model_copy(update={"cases": same_follow_up})
     case_ids = tuple(case.case_id for case in same_follow_up)
 
     _require_unique_cache_queries(history_sensitive, case_ids)
 
-    duplicate_history = same_follow_up[1].model_copy(
-        update={"history": same_follow_up[0].history}
-    )
-    converged = dataset.model_copy(
-        update={"cases": (same_follow_up[0], duplicate_history)}
-    )
+    duplicate_history = same_follow_up[1].model_copy(update={"history": same_follow_up[0].history})
+    converged = dataset.model_copy(update={"cases": (same_follow_up[0], duplicate_history)})
     with pytest.raises(
         ComparisonPreflightError,
         match="comparison_cache_query_duplicate",
@@ -585,9 +578,7 @@ def test_multi_candidate_runners_consume_one_atomic_pre_reserved_suite_ledger(
         runners.append((runner, plan))
 
     assert set(repository.values) == {item.run_id for item in candidates.values()}
-    assert {item.status for item in repository.values.values()} == {
-        EvaluationRunStatus.QUEUED
-    }
+    assert {item.status for item in repository.values.values()} == {EvaluationRunStatus.QUEUED}
     for runner, plan in runners:
         runner.start(plan)
 

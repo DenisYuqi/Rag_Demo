@@ -524,8 +524,32 @@ class EvaluationApplicationService:
             datasets = self.registry.list()
         except EvaluationPlanError as error:
             raise EvaluationApplicationError(error.code) from None
+        released_identities: set[tuple[str, str, str, str, str]] | None = None
+        if self.release_store is not None:
+            try:
+                released_identities = {
+                    (
+                        snapshot.run.dataset_id,
+                        snapshot.run.dataset_version,
+                        snapshot.run.dataset_hash,
+                        snapshot.run.corpus_version,
+                        snapshot.corpus_hash,
+                    )
+                    for snapshot in self.release_store.list()
+                }
+            except Exception:
+                raise EvaluationApplicationError("evaluation_release_catalog_unavailable") from None
         for dataset in datasets:
             manifest = dataset.manifest
+            identity = (
+                manifest.dataset_id,
+                manifest.version,
+                manifest.content_hash,
+                dataset.corpus.manifest.version,
+                dataset.corpus.manifest.content_hash,
+            )
+            if released_identities is not None and identity not in released_identities:
+                continue
             schema_version = str(getattr(manifest, "schema_version", "unknown"))
             values.append(
                 EvaluationDatasetCatalogEntry(

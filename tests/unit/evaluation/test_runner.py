@@ -234,9 +234,7 @@ async def test_runner_propagates_declared_use_policy_for_cache_experiments(
     executor = FakeExecutor()
     runner = EvaluationRunner(repository, tmp_path / "evaluations", executor)
     plan = _plan().model_copy(
-        update={
-            "identity": _identity().model_copy(update={"cache_policy": CachePolicy.USE})
-        }
+        update={"identity": _identity().model_copy(update={"cache_policy": CachePolicy.USE})}
     )
 
     runner.queue(plan)
@@ -245,8 +243,7 @@ async def test_runner_propagates_declared_use_policy_for_cache_experiments(
     assert completed.cache_policy == CachePolicy.USE.value
     assert all(policy is CachePolicy.USE for _, _, policy in executor.calls)
     assert all(
-        result.execution is not None
-        and result.execution.cache_policy is CachePolicy.USE
+        result.execution is not None and result.execution.cache_policy is CachePolicy.USE
         for result in runner.load_case_results(plan.run_id)
     )
 

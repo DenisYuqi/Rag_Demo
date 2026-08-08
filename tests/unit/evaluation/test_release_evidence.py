@@ -63,6 +63,9 @@ def _service(tmp_path: Path) -> EvaluationApplicationService:
 def test_sealed_release_is_the_default_read_only_evaluation_evidence(tmp_path: Path) -> None:
     service = _service(tmp_path)
 
+    assert [(item.dataset_id, item.dataset_version) for item in service.datasets()] == [
+        ("mvp-bilingual-rag", "1.0.0")
+    ]
     runs = service.list_runs()
     assert runs[0].run_id == _RUN_ID
     assert service.get(_RUN_ID) == runs[0]
@@ -76,6 +79,15 @@ def test_sealed_release_is_the_default_read_only_evaluation_evidence(tmp_path: P
         redactor=DEFAULT_REDACTOR,
         state=BrowserSessionState(owner_id="owner-release-test"),
     )
+    assert rendered.dataset_choices == (
+        (
+            "mvp-bilingual-rag 1.0.0 (8 cases)",
+            "mvp-bilingual-rag::1.0.0",
+        ),
+    )
+    assert rendered.selected_dataset_key == "mvp-bilingual-rag::1.0.0"
+    assert rendered.selected_plan_key == ("standard-evaluation-v1::mvp-bilingual-rag::1.0.0")
+    assert rendered.start_enabled is True
     assert rendered.selected_run_id == _RUN_ID
     assert "4.61s" in rendered.kpi_html
     assert "USD 1.4996" in rendered.kpi_html
@@ -115,3 +127,23 @@ def test_tampered_release_is_not_listed(tmp_path: Path) -> None:
 
     assert store.list() == ()
     assert store.get(_RUN_ID) is None
+
+
+def test_unverified_release_cannot_allowlist_a_registered_dataset(tmp_path: Path) -> None:
+    copied_root = tmp_path / "releases"
+    source = next(_RELEASES.iterdir())
+    target = copied_root / source.name
+    shutil.copytree(source, target)
+    report = target / "evaluation-report.json"
+    report.write_bytes(report.read_bytes() + b"\n")
+    service = EvaluationApplicationService(
+        registry=EvaluationDatasetRegistry(_DATASETS),
+        settings=Settings(_env_file=None, data_root=tmp_path / "data"),
+        repository=_MemoryRuns(),
+        run_artifacts_root=tmp_path / "runs",
+        executor=_NoopExecutor(),
+        release_store=VerifiedReleaseEvidenceStore(copied_root),
+    )
+
+    assert service.datasets() == ()
+    assert service.plans() == ()

@@ -284,9 +284,7 @@ class WorkbenchCallbacks:
             )
             submitted = service.submit_upload(payload)
             completed = await service.run_job(submitted.job_id)
-            return self._documents_after_job(
-                completed, operation="upload", profile_id=profile_id
-            )
+            return self._documents_after_job(completed, operation="upload", profile_id=profile_id)
         except Exception:
             return DocumentsRender((), (), SAFE_UI_ERROR)
 
@@ -296,9 +294,7 @@ class WorkbenchCallbacks:
             return DocumentsRender((), (), SAFE_UNAVAILABLE)
         try:
             completed = await service.run_job(service.submit_reindex().job_id)
-            return self._documents_after_job(
-                completed, operation="reindex", profile_id=profile_id
-            )
+            return self._documents_after_job(completed, operation="reindex", profile_id=profile_id)
         except Exception:
             return DocumentsRender((), (), SAFE_UI_ERROR)
 
@@ -550,10 +546,7 @@ class WorkbenchCallbacks:
                 f"Comparison: `{run_id}`",
             )
         except ComparisonDashboardError:
-            status = (
-                "Select a valid registered experiment plan. / "
-                "请选择有效的已注册实验计划。"
-            )
+            status = "Select a valid registered experiment plan. / 请选择有效的已注册实验计划。"
         except Exception as error:
             code = getattr(error, "code", None)
             if code == "comparison_duplicate":

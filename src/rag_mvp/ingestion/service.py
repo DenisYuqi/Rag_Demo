@@ -631,7 +631,7 @@ class IngestionService:
                     raise IngestionRecoveryError("delete_job_completion_missing")
                 return completed, active_at_start.revision_id
         if (
-            not isinstance(command, ReindexCommand)
+            isinstance(command, UploadCommand)
             and active_at_start is not None
             and not self._stager.is_compatible(active_at_start)
         ):

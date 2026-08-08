@@ -113,9 +113,7 @@ async def test_callbacks_route_explicit_profile_and_reject_unknown_profile() -> 
         BrowserSessionState.create(),
         "bge-local",
     )
-    unknown = await callbacks.submit_chat(
-        "Question", "hybrid", None, None, "unknown-profile"
-    )
+    unknown = await callbacks.submit_chat("Question", "hybrid", None, None, "unknown-profile")
 
     assert bge.submissions == ["Question"]
     assert openai.submissions == []
@@ -152,9 +150,7 @@ def test_workbench_profile_selector_is_wired_to_chat_and_documents() -> None:
         ("bge-local", "bge-local"),
     ]
     assert profile["props"]["value"] == "openai-api"
-    by_api_name = {
-        dependency.get("api_name"): dependency for dependency in config["dependencies"]
-    }
+    by_api_name = {dependency.get("api_name"): dependency for dependency in config["dependencies"]}
     for api_name in (
         "chat_submit",
         "documents_refresh",

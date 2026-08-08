@@ -141,9 +141,8 @@ def build_comparison_schedule(
         full_case_ids,
         selected_case_ids,
     )
-    if (
-        len(canonical_cases) != fixed.case_count
-        or fixed.case_set_hash != case_ids_content_hash(canonical_cases)
+    if len(canonical_cases) != fixed.case_count or fixed.case_set_hash != case_ids_content_hash(
+        canonical_cases
     ):
         raise ComparisonScheduleError("comparison_schedule_case_set_mismatch")
     variants = tuple(item.variant_id for item in plan.variants)
@@ -207,13 +206,9 @@ def materialize_variant_cases(
     if variant is None:
         raise ComparisonScheduleError("comparison_schedule_variant_mismatch")
     selected = tuple(item for item in schedule.steps if item.variant_id == variant_id)
-    expected_count = (
-        len(schedule.dataset_case_ids) * plan.repeat_order_policy.repeats_per_case
-    )
-    if (
-        len(selected) != expected_count
-        or {item.dataset_case_id for item in selected}
-        != set(schedule.dataset_case_ids)
+    expected_count = len(schedule.dataset_case_ids) * plan.repeat_order_policy.repeats_per_case
+    if len(selected) != expected_count or {item.dataset_case_id for item in selected} != set(
+        schedule.dataset_case_ids
     ):
         raise ComparisonScheduleError("comparison_schedule_variant_mismatch")
     retrieval_mode: RetrievalMode | None = None
@@ -231,8 +226,7 @@ def materialize_variant_cases(
                         "source_case_id": step.dataset_case_id,
                         "repeat_index": step.repetition,
                         "retrieval_mode": (
-                            retrieval_mode
-                            or by_id[step.dataset_case_id].retrieval_mode
+                            retrieval_mode or by_id[step.dataset_case_id].retrieval_mode
                         ),
                     }
                 )
@@ -302,9 +296,7 @@ def _ordered_work(
             for index, case_id in enumerate(cases):
                 offset = (rng.randrange(len(variant_ids)) + index) % len(variant_ids)
                 interleaved = list(variant_ids[offset:] + variant_ids[:offset])
-                work.extend(
-                    (variant_id, repetition, case_id) for variant_id in interleaved
-                )
+                work.extend((variant_id, repetition, case_id) for variant_id in interleaved)
     return tuple(work)
 
 

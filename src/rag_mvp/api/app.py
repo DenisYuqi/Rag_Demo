@@ -484,9 +484,8 @@ def create_app(
     owns_evaluation_service: bool = False,
     diagnostics_service: DiagnosticOperations | None = None,
     workbench_services: WorkbenchServices | None = None,
-    workbench_profile_services: Mapping[
-        str, tuple[QARuntimeServices, IngestionService]
-    ] | None = None,
+    workbench_profile_services: Mapping[str, tuple[QARuntimeServices, IngestionService]]
+    | None = None,
     redactor: Redactor | None = DEFAULT_REDACTOR,
     writer_lock: DataRootWriterLock | None = None,
 ) -> FastAPI:

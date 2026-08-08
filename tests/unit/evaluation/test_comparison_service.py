@@ -370,9 +370,9 @@ def _result_bundle() -> tuple[
         shared_setup=_shared_setup(plan),
     )
     payloads = {
-        "comparison-plan-json": (
-            canonical_json_value(plan.model_dump(mode="json")) + "\n"
-        ).encode("utf-8"),
+        "comparison-plan-json": (canonical_json_value(plan.model_dump(mode="json")) + "\n").encode(
+            "utf-8"
+        ),
         "comparison-report-json": (
             canonical_json_value(result.model_dump(mode="json")) + "\n"
         ).encode("utf-8"),
@@ -461,9 +461,9 @@ def test_artifacts_require_matching_persisted_result_and_canonical_bytes(
     repository.suite = suite
 
     noncanonical = dict(payloads)
-    noncanonical["comparison-report-json"] = (
-        result.model_dump_json(indent=2) + "\n"
-    ).encode("utf-8")
+    noncanonical["comparison-report-json"] = (result.model_dump_json(indent=2) + "\n").encode(
+        "utf-8"
+    )
     _, _, noncanonical_manifest, _ = _result_bundle()
     replacement = _artifact(
         "comparison-report-json",

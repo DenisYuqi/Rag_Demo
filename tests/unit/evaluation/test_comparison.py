@@ -1423,9 +1423,7 @@ def test_discriminating_reranker_requires_predeclared_minimum_quality_benefit() 
     )
 
     assert result.recommendation.selected_variant_id == "variant-1"
-    assert "reranker-minimum-quality-benefit-not-met" in (
-        result.recommendation.rationale_codes
-    )
+    assert "reranker-minimum-quality-benefit-not-met" in (result.recommendation.rationale_codes)
 
 
 def test_cache_axis_pairs_miss_hit_and_rejects_retrieval_evidence_drift() -> None:

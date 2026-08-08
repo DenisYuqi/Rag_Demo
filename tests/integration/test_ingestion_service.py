@@ -426,6 +426,35 @@ async def test_startup_physically_purges_legacy_soft_deleted_source(tmp_path: Pa
 
 
 @pytest.mark.integration
+async def test_last_source_delete_does_not_require_reindex_after_config_change(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "data"
+    original, _ = _service(
+        root,
+        chunking=ChunkingConfig(target_tokens=8, overlap_tokens=2),
+    )
+    uploaded = await original.run(
+        _submit(original, "Delete obsolete schema LAST-DELETE-919 source.").job_id
+    )
+    assert uploaded.source_id is not None
+    source_id = uploaded.source_id
+    original.close()
+
+    changed, _ = _service(
+        root,
+        chunking=ChunkingConfig(target_tokens=6, overlap_tokens=1),
+    )
+    deleted = await changed.run(changed.submit_delete(source_id).job_id)
+
+    assert deleted.status is IngestionJobStatus.SUCCEEDED
+    assert _active(changed).active_sources == {}
+    assert changed.repositories.documents.get(source_id) is None
+    assert changed.repositories.documents.list_versions(source_id) == []
+    changed.close()
+
+
+@pytest.mark.integration
 async def test_fresh_service_sees_same_active_documents_and_indexes(tmp_path: Path) -> None:
     root = tmp_path / "data"
     first_service, _ = _service(root)

@@ -132,9 +132,7 @@ def test_identical_cases_across_candidates_use_one_atomic_scoped_suite_ledger() 
 
 
 def test_multi_candidate_suite_cap_failure_is_atomic_before_any_reservation() -> None:
-    cases = (
-        EvaluationCaseInput(case_id="same-case", question="One?", language="en"),
-    )
+    cases = (EvaluationCaseInput(case_id="same-case", question="One?", language="en"),)
 
     def base(item: ProviderWorkItem) -> ProviderWorkEstimate:
         return _estimate(item.case_id, 2, "0.10")

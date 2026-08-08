@@ -140,18 +140,17 @@ def test_repeat_materialization_uses_unique_persisted_ids_with_source_identity()
 
     assert len(materialized) == len(dataset.cases) * 2
     assert len({item.case_id for item in materialized}) == len(materialized)
-    assert tuple(item.source_case_id for item in materialized).count(
-        dataset.cases[0].case_id
-    ) == 2
+    assert tuple(item.source_case_id for item in materialized).count(dataset.cases[0].case_id) == 2
     assert {item.repeat_index for item in materialized} == {0, 1}
     expected = tuple(
         (item.repetition, item.dataset_case_id, item.execution_case_id)
         for item in schedule.steps
         if item.variant_id == "model-v1"
     )
-    assert tuple(
-        (item.repeat_index, item.source_case_id, item.case_id) for item in materialized
-    ) == expected
+    assert (
+        tuple((item.repeat_index, item.source_case_id, item.case_id) for item in materialized)
+        == expected
+    )
 
 
 def test_retrieval_variant_is_applied_to_every_materialized_case() -> None:
@@ -217,9 +216,7 @@ def test_materialization_rejects_tampered_schedule_or_dataset_binding() -> None:
             base.cases,
         )
 
-    foreign = plan.fixed_identities.model_copy(
-        update={"dataset_hash": "sha256:" + ("f" * 64)}
-    )
+    foreign = plan.fixed_identities.model_copy(update={"dataset_hash": "sha256:" + ("f" * 64)})
     foreign_plan = type(plan).create(
         **{
             **plan.model_dump(exclude={"content_hash"}),

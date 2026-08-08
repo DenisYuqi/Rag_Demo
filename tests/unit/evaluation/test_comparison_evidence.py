@@ -337,9 +337,7 @@ def test_candidate_evidence_is_bound_to_real_non_sla_attempt_and_provider_ledger
     forged_evidence = verified.evidence.model_copy(
         update={
             "gates": tuple(
-                forged_gate
-                if item.gate_id == COMPARISON_SELECTION_ELIGIBILITY_GATE_ID
-                else item
+                forged_gate if item.gate_id == COMPARISON_SELECTION_ELIGIBILITY_GATE_ID else item
                 for item in verified.evidence.gates
             )
         }
@@ -448,9 +446,7 @@ def test_timed_out_usage_preserves_priced_retrieval_lower_bound_in_candidate_evi
     assert evidence.cost_complete is False
     assert evidence.cost_unknown_reasons == ("input-usage-unknown",)
     selection_gate = next(
-        item
-        for item in evidence.gates
-        if item.gate_id == COMPARISON_SELECTION_ELIGIBILITY_GATE_ID
+        item for item in evidence.gates if item.gate_id == COMPARISON_SELECTION_ELIGIBILITY_GATE_ID
     )
     assert selection_gate.passed is True
     cost_observation = next(

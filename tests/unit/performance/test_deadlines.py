@@ -103,10 +103,7 @@ async def test_optional_reranker_cancels_and_degrades_to_exact_base_ranking() ->
 async def test_generation_does_not_start_without_full_budget_and_finalization_reserve() -> None:
     budgets = QALatencyBudgets()
     elapsed = (
-        budgets.total_seconds
-        - budgets.generation_seconds
-        - budgets.finalization_seconds
-        + 0.01
+        budgets.total_seconds - budgets.generation_seconds - budgets.finalization_seconds + 0.01
     )
     controller = DeadlineController(
         budgets,

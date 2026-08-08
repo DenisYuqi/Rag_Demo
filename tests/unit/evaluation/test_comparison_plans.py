@@ -205,9 +205,7 @@ def test_catalog_blocks_manifest_valid_but_unpinned_acceptance_dataset(
     source = _dataset()
     dataset = source.model_copy(
         update={
-            "manifest": source.manifest.model_copy(
-                update={"content_hash": "sha256:" + "f" * 64}
-            )
+            "manifest": source.manifest.model_copy(update={"content_hash": "sha256:" + "f" * 64})
         }
     )
     registry = RegisteredComparisonPlanRegistry()
@@ -554,9 +552,7 @@ def test_cache_plan_commits_eligible_subset_capacity_ttl_and_upstream_provenance
     assert controlled["upstream.generation-model.result-hash"] == _SHA_B
     assert controlled["upstream.retrieval-strategy.result-hash"] == _SHA_B
     assert controlled["retrieval.retrieval_cache_max_entries"] == str(len(eligible))
-    assert controlled["retrieval.retrieval_cache_ttl_seconds"] == str(
-        expected_ttl
-    )
+    assert controlled["retrieval.retrieval_cache_ttl_seconds"] == str(expected_ttl)
     assert materialized.preflight.cache_eligible_case_count == len(eligible)
     assert materialized.preflight.minimum_cache_ttl_seconds == expected_ttl
 
