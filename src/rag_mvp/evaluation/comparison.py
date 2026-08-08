@@ -101,7 +101,9 @@ _IDENTITY_KEYS: Mapping[str, frozenset[str]] = {
             "reranking-parser",
         }
     ),
-    "provider": frozenset({"adapter", "backend", "embedding", "generation", "reranking"}),
+    "provider": frozenset(
+        {"adapter", "backend", "embedding", "evaluation-judge", "generation", "reranking"}
+    ),
     "generation": frozenset(
         {
             "max_tokens_parameter",
@@ -185,6 +187,8 @@ _IDENTITY_KEYS: Mapping[str, frozenset[str]] = {
             "answer-compliance",
             "answer-completeness",
             "context-precision",
+            "evaluation-backend",
+            "evaluation-judge",
             "faithfulness",
             "faithfulness-text-matcher",
             "faithfulness-text-normalization",
@@ -3150,7 +3154,8 @@ def project_evaluation_identity(
         for name, value in mapping.items():
             values[f"{prefix}.{name}"] = _safe_identity_text(_canonical_identity_value(value))
     if any(
-        name not in {"embedding", "generation", "reranking"} for name in identity.model_identities
+        name not in {"embedding", "evaluation-judge", "generation", "reranking"}
+        for name in identity.model_identities
     ):
         raise ComparisonDomainError("comparison_identity_key_not_allowlisted")
     for name, value in identity.model_identities.items():

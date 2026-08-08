@@ -216,6 +216,7 @@ def test_preflight_reserves_complete_suite_and_reuses_one_exact_index() -> None:
         "scoring-pipeline",
         "quality-gate",
         "advanced-quality-gate",
+        "evaluation-backend",
     ],
 )
 def test_preflight_rejects_self_consistent_forged_scorer_before_reservation(

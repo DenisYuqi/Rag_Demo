@@ -115,6 +115,11 @@ class Settings(BaseSettings):
     evaluation_release_root: Path = Path("evaluations/releases")
     evaluation_max_active_jobs: int = Field(default=1, ge=1, le=4)
     evaluation_shutdown_grace_seconds: float = Field(default=2.0, ge=0, le=10)
+    evaluation_scorer_backend: Literal["legacy", "ragas"] = "legacy"
+    evaluation_ragas_judge_model: str | None = None
+    evaluation_ragas_timeout_seconds: float = Field(default=30.0, gt=0, le=120)
+    evaluation_ragas_retry_limit: int = Field(default=1, ge=0, le=3)
+    evaluation_ragas_max_concurrency: int = Field(default=2, ge=1, le=8)
 
     upload_max_bytes: int = Field(default=25 * 1024 * 1024, ge=1)
     parent_chunk_target_tokens: int = Field(default=1536, ge=64, le=8192)
@@ -189,6 +194,13 @@ class Settings(BaseSettings):
             return None
         return value
 
+    @field_validator("evaluation_ragas_judge_model", mode="before")
+    @classmethod
+    def normalize_optional_ragas_judge_model(cls, value: object) -> object:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
+        return str(value).strip()
+
     @field_validator(
         "bge_embedding_model",
         "bge_reranking_model",
@@ -247,6 +259,8 @@ class Settings(BaseSettings):
             raise ValueError("hybrid-rerank default requires a configured reranking model")
         if self.default_retrieval_profile == "bge-local" and not self.bge_profile_enabled:
             raise ValueError("default BGE retrieval profile must be enabled")
+        if self.evaluation_scorer_backend == "ragas" and self.provider_backend != "openai":
+            raise ValueError("Ragas evaluation requires an OpenAI-compatible judge provider")
         if self.bge_embedding_model == "BAAI/bge-m3" and self.bge_embedding_dimension != 1024:
             raise ValueError("BAAI/bge-m3 requires a 1024-dimensional embedding space")
         if self.resolved_bge_data_root == self.data_root.resolve(strict=False):
@@ -316,6 +330,12 @@ class Settings(BaseSettings):
         """Maximum configured server drain plus application cleanup duration."""
 
         return self.server_shutdown_grace_seconds + self.app_shutdown_grace_seconds
+
+    @property
+    def effective_evaluation_judge_model(self) -> str:
+        """Return the non-secret model identity used by semantic evaluation."""
+
+        return self.evaluation_ragas_judge_model or self.generation_model
 
     def provider_readiness_errors(self) -> tuple[str, ...]:
         """Return safe configuration categories without exposing secret values."""

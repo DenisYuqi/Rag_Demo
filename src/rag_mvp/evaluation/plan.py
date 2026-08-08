@@ -39,6 +39,13 @@ from rag_mvp.evaluation.quality_gate import (
     ADVANCED_QUALITY_GATE_VERSION,
     QUALITY_GATE_VERSION,
 )
+from rag_mvp.evaluation.ragas_backend import (
+    RAGAS_BACKEND_VERSION,
+    RAGAS_CONTEXT_PRECISION_SCORER_VERSION,
+    RAGAS_FAITHFULNESS_SCORER_VERSION,
+    RAGAS_SCORING_PIPELINE_VERSION,
+    ragas_judge_identity,
+)
 from rag_mvp.evaluation.runner import (
     EvaluationCaseInput,
     EvaluationConversationTurn,
@@ -215,6 +222,11 @@ def build_evaluation_plan(
         raise EvaluationPlanError("evaluation_settings_invalid")
     if not isinstance(run_id, str) or _SAFE_RUN_ID.fullmatch(run_id) is None:
         raise EvaluationPlanError("evaluation_run_id_invalid")
+    advanced = bool(dataset.cases) and all(
+        isinstance(case, EvaluationCaseV2) for case in dataset.cases
+    )
+    if settings.evaluation_scorer_backend == "ragas" and not advanced:
+        raise EvaluationPlanError("evaluation_ragas_dataset_v2_required")
     _require_matching_derivation(dataset, settings)
 
     retrieval_mode = RetrievalMode(settings.default_retrieval_mode)
@@ -259,11 +271,21 @@ def build_evaluation_plan(
             "generation": provider_alias,
             "reranking": provider_alias if settings.reranking_model is not None else "disabled",
             "adapter": adapter_version,
+            **(
+                {"evaluation-judge": provider_alias}
+                if settings.evaluation_scorer_backend == "ragas"
+                else {}
+            ),
         },
         model_identities={
             "embedding": settings.embedding_model,
             "generation": settings.generation_model,
             "reranking": settings.reranking_model or "disabled",
+            **(
+                {"evaluation-judge": settings.effective_evaluation_judge_model}
+                if settings.evaluation_scorer_backend == "ragas"
+                else {}
+            ),
         },
         generation_settings={
             "temperature": 0.0,
@@ -330,7 +352,7 @@ def build_evaluation_plan(
             "grounding_validator_version": GROUNDING_VALIDATOR_VERSION,
             "refusal_policy_version": REFUSAL_POLICY_VERSION,
         },
-        scorer_versions=evaluation_scorer_versions(dataset),
+        scorer_versions=evaluation_scorer_versions(dataset, settings=settings),
         pricing_version=settings.pricing_version,
         random_seeds={
             "case-order": EVALUATION_RANDOM_SEED,
@@ -350,7 +372,11 @@ def build_evaluation_plan(
         raise EvaluationPlanError("evaluation_plan_invalid") from None
 
 
-def evaluation_scorer_versions(dataset: EvaluationDataset) -> dict[str, str]:
+def evaluation_scorer_versions(
+    dataset: EvaluationDataset,
+    *,
+    settings: Settings | None = None,
+) -> dict[str, str]:
     advanced = bool(dataset.cases) and all(
         isinstance(case, EvaluationCaseV2) for case in dataset.cases
     )
@@ -372,6 +398,7 @@ def evaluation_scorer_versions(dataset: EvaluationDataset) -> dict[str, str]:
         ),
         "quality-gate": QUALITY_GATE_VERSION,
         "advanced-quality-gate": ADVANCED_QUALITY_GATE_VERSION,
+        "evaluation-backend": "legacy-v1",
     }
     if advanced:
         versions.update(
@@ -380,6 +407,18 @@ def evaluation_scorer_versions(dataset: EvaluationDataset) -> dict[str, str]:
                 "faithfulness-text-normalization": TEXT_SUPPORT_NORMALIZATION_VERSION,
             }
         )
+    if settings is not None and settings.evaluation_scorer_backend == "ragas":
+        versions.update(
+            {
+                MetricName.FAITHFULNESS.value: RAGAS_FAITHFULNESS_SCORER_VERSION,
+                MetricName.CONTEXT_PRECISION.value: RAGAS_CONTEXT_PRECISION_SCORER_VERSION,
+                "scoring-pipeline": RAGAS_SCORING_PIPELINE_VERSION,
+                "evaluation-backend": RAGAS_BACKEND_VERSION,
+                "evaluation-judge": ragas_judge_identity(settings),
+            }
+        )
+        versions.pop("faithfulness-text-matcher", None)
+        versions.pop("faithfulness-text-normalization", None)
     return versions
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import cast
 
@@ -32,10 +33,12 @@ from rag_mvp.evaluation.grounding_metrics import (
     AdjudicatedFaithfulnessScorer,
     MetricName,
     MetricResult,
+    aggregate_metric,
 )
 from rag_mvp.evaluation.quality_gate import (
     AdvancedMetricName,
     AdvancedQualityGate,
+    QualityGate,
 )
 from rag_mvp.evaluation.runner import PersistedCaseResult
 from rag_mvp.evaluation.scoring import (
@@ -110,6 +113,8 @@ def score_evaluation_v2(
     results: tuple[PersistedCaseResult, ...],
     *,
     redactor: Redactor = DEFAULT_REDACTOR,
+    semantic_results: Sequence[MetricResult] = (),
+    scoring_version: str | None = None,
 ) -> AdvancedEvaluationScorecard:
     """Score all advanced metrics from immutable case evidence, never from defaults."""
 
@@ -124,6 +129,12 @@ def score_evaluation_v2(
         refusal=GuidedRefusalAppropriatenessScorer(),
         scoring_version=ADVANCED_SCORING_PIPELINE_VERSION,
     ).score(dataset, _normalized_v2_language_results(v2_cases, results))
+    if semantic_results:
+        legacy = _replace_semantic_results(
+            legacy,
+            semantic_results,
+            scoring_version=scoring_version,
+        )
     result_by_case = {result.case_id: result for result in results}
     compliance_results: list[AnswerComplianceResult] = []
     for case in v2_cases:
@@ -201,6 +212,64 @@ def score_evaluation_v2(
         observations=gate.observations,
         gate=gate,
         categories=categories,
+    )
+
+
+def _replace_semantic_results(
+    legacy: EvaluationScorecard,
+    semantic_results: Sequence[MetricResult],
+    *,
+    scoring_version: str | None,
+) -> EvaluationScorecard:
+    values = tuple(semantic_results)
+    expected = {
+        (case_id, metric)
+        for case_id in legacy.case_ids
+        for metric in (MetricName.FAITHFULNESS, MetricName.CONTEXT_PRECISION)
+    }
+    identities = tuple((result.case_id, result.metric) for result in values)
+    if (
+        len(values) != len(expected)
+        or len(set(identities)) != len(identities)
+        or set(identities) != expected
+    ):
+        raise AdvancedScoringError("semantic_result_set_mismatch")
+    versions_by_metric = {
+        metric: {result.scorer_version for result in values if result.metric is metric}
+        for metric in (MetricName.FAITHFULNESS, MetricName.CONTEXT_PRECISION)
+    }
+    if any(len(versions) != 1 for versions in versions_by_metric.values()):
+        raise AdvancedScoringError("semantic_scorer_version_mismatch")
+    replacements = {identity: result for identity, result in zip(identities, values, strict=True)}
+    per_case = tuple(
+        replacements.get((result.case_id, result.metric), result) for result in legacy.per_case
+    )
+    aggregates = tuple(
+        aggregate_metric(
+            tuple(result for result in per_case if result.metric is metric),
+            metric=metric,
+            scorer_version=(
+                next(iter(versions_by_metric[metric]))
+                if metric in versions_by_metric
+                else legacy.aggregates_by_metric[metric].scorer_version
+            ),
+        )
+        for metric in MetricName
+    )
+    quality_gate = QualityGate().evaluate(
+        {aggregate.metric: aggregate for aggregate in aggregates},
+        case_executions_complete=not legacy.failed_case_ids,
+    )
+    return EvaluationScorecard(
+        run_id=legacy.run_id,
+        dataset_id=legacy.dataset_id,
+        dataset_version=legacy.dataset_version,
+        case_ids=legacy.case_ids,
+        failed_case_ids=legacy.failed_case_ids,
+        per_case=per_case,
+        aggregates=aggregates,
+        quality_gate=quality_gate,
+        scoring_version=scoring_version or legacy.scoring_version,
     )
 
 

@@ -360,6 +360,29 @@ def test_typed_views_render_validated_evidence_without_paths_or_private_fields()
     assert "\\" not in rendered.artifact_links_markdown
     assert "D:\\" not in repr(rendered)
     assert "C:\\" not in repr(rendered)
+    assert "Scorer backend / 评估后端: `legacy`" in rendered.gate_markdown
+    assert "judge: `deterministic`" in rendered.gate_markdown
+
+
+def test_typed_view_displays_ragas_backend_and_judge_identity() -> None:
+    gateway = TypedEvaluationGateway()
+    document = json.loads(_REPORT)
+    document["provenance"]["evaluation_scorer_backend"] = "ragas"
+    document["provenance"]["evaluation_judge_model"] = "judge-model-v1"
+    content = json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
+    gateway._artifacts["evaluation-report-json"] = ResolvedEvaluationArtifact(
+        "evaluation-report-json",
+        content,
+        "application/json",
+        "evaluation-report.json",
+    )
+
+    rendered = WorkbenchCallbacks(
+        WorkbenchServices(evaluations=gateway)
+    ).refresh_evaluations(BrowserSessionState.create())
+
+    assert "Scorer backend / 评估后端: `ragas`" in rendered.gate_markdown
+    assert "judge: `judge-model-v1`" in rendered.gate_markdown
 
 
 def test_bge_evaluation_download_links_preserve_the_selected_profile() -> None:

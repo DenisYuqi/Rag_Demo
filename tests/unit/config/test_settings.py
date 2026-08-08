@@ -23,6 +23,12 @@ def test_defaults_are_safe_and_offline_ready(tmp_path: object) -> None:
     assert settings.retrieval_cache_ttl_seconds == 300
     assert settings.evaluation_max_active_jobs == 1
     assert settings.evaluation_shutdown_grace_seconds == 2
+    assert settings.evaluation_scorer_backend == "legacy"
+    assert settings.evaluation_ragas_judge_model is None
+    assert settings.effective_evaluation_judge_model == settings.generation_model
+    assert settings.evaluation_ragas_timeout_seconds == 30
+    assert settings.evaluation_ragas_retry_limit == 1
+    assert settings.evaluation_ragas_max_concurrency == 2
     assert settings.reranking_model is None
     assert settings.default_retrieval_profile == "openai-api"
     assert settings.bge_profile_enabled
@@ -98,6 +104,29 @@ def test_bge_profile_configuration_invariants_are_enforced(tmp_path: Path) -> No
             chunk_target_tokens=256,
             _env_file=None,
         )
+
+
+def test_ragas_evaluation_requires_openai_compatible_judge(tmp_path: Path) -> None:
+    with pytest.raises(ValidationError, match="Ragas evaluation requires"):
+        Settings(
+            data_root=tmp_path,
+            evaluation_scorer_backend="ragas",
+            provider_backend="offline",
+            _env_file=None,
+        )
+
+    settings = Settings(
+        data_root=tmp_path,
+        evaluation_scorer_backend="ragas",
+        evaluation_ragas_judge_model=" judge-model ",
+        provider_backend="openai",
+        openai_api_key=SecretStr("test-key"),
+        _env_file=None,
+    )
+
+    assert settings.effective_evaluation_judge_model == "judge-model"
+    assert settings.safe_dump()["evaluation_scorer_backend"] == "ragas"
+    assert settings.safe_dump()["openai_api_key"] == "[REDACTED_SECRET]"
 
 
 @pytest.mark.parametrize(

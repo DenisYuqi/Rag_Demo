@@ -826,7 +826,9 @@
         "configuration_id": {"$ref": "#/$defs/identifier"},
         "code_revision": {"$ref": "#/$defs/identifier"},
         "pricing_version": {"$ref": "#/$defs/identifier"},
-        "pricing_content_hash": {"$ref": "#/$defs/sha256Digest"}
+        "pricing_content_hash": {"$ref": "#/$defs/sha256Digest"},
+        "evaluation_scorer_backend": {"type": "string", "enum": ["legacy", "ragas"]},
+        "evaluation_judge_model": {"type": ["string", "null"], "minLength": 1, "maxLength": 255}
       }
     },
     "categoryResult": {

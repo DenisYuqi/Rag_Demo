@@ -281,6 +281,25 @@ def test_real_v2_fixture_is_typed_canonical_and_deterministic() -> None:
     assert document["performance_evidence"]["cost"]["complete"] is True
 
 
+def test_v2_report_validates_and_serializes_ragas_provenance() -> None:
+    report = _report_v2()
+    ragas_report = report.model_copy(
+        update={
+            "provenance": report.provenance.model_copy(
+                update={
+                    "evaluation_scorer_backend": "ragas",
+                    "evaluation_judge_model": "judge-model-v1",
+                }
+            )
+        }
+    )
+
+    document = validate_report_v2(ragas_report)
+
+    assert document["provenance"]["evaluation_scorer_backend"] == "ragas"
+    assert document["provenance"]["evaluation_judge_model"] == "judge-model-v1"
+
+
 def test_v2_json_writer_is_immutable_and_round_trips(tmp_path: Path) -> None:
     target = tmp_path / "evaluation-report-v2.json"
     report = _report_v2()

@@ -244,6 +244,11 @@ def render_evaluation_dashboard(
             latency_plot_rows = _latency_plot_rows(report)
             kpi_html = _kpi_html(report)
             system_rows = _system_rows(report)
+            judge = report.provenance.evaluation_judge_model or "deterministic"
+            gate_markdown = (
+                f"{gate_markdown}\n\nScorer backend / 评估后端: "
+                f"`{report.provenance.evaluation_scorer_backend}` · judge: `{judge}`"
+            )
         elif release is not None:
             overview_rows = _release_overview_rows(release)
             quality_plot_rows = _release_quality_plot_rows(release)

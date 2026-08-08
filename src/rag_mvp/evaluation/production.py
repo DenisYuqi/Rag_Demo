@@ -30,6 +30,11 @@ from rag_mvp.evaluation.json_report import (
     write_json_report,
 )
 from rag_mvp.evaluation.pricing import openai_standard_pricing_catalog
+from rag_mvp.evaluation.ragas_backend import (
+    NativeRagasMetricGateway,
+    RagasMetricGateway,
+    score_evaluation_v2_with_ragas,
+)
 from rag_mvp.evaluation.report_builder import build_evaluation_report
 from rag_mvp.evaluation.runner import (
     EvaluationRunner,
@@ -71,12 +76,17 @@ class IsolatedComposition(Protocol):
 
 
 type IsolatedCompositionFactory = Callable[[Settings, Redactor], IsolatedComposition]
+type RagasMetricGatewayFactory = Callable[[Settings], RagasMetricGateway]
 
 
 def _default_composition_factory(settings: Settings, redactor: Redactor) -> IsolatedComposition:
     from rag_mvp.api.composition import compose_openai_services
 
     return compose_openai_services(settings, redactor, include_evaluation=False)
+
+
+def _default_ragas_gateway_factory(settings: Settings) -> RagasMetricGateway:
+    return NativeRagasMetricGateway.from_settings(settings)
 
 
 @dataclass(slots=True)
@@ -92,6 +102,10 @@ class ProductionEvaluationJobExecutor:
     artifact_catalog: ArtifactCatalogV2 | None = None
     composition_factory: IsolatedCompositionFactory = field(
         default=_default_composition_factory,
+        repr=False,
+    )
+    ragas_gateway_factory: RagasMetricGatewayFactory = field(
+        default=_default_ragas_gateway_factory,
         repr=False,
     )
 
@@ -147,7 +161,12 @@ class ProductionEvaluationJobExecutor:
             admission=admission,
             latency_budgets=QALatencyBudgets.from_settings(isolated),
         )
+        ragas_gateway: RagasMetricGateway | None = None
         try:
+            if isolated.evaluation_scorer_backend == "ragas":
+                # Validate the optional dependency and judge configuration before
+                # installing the corpus or issuing any evaluation QA requests.
+                ragas_gateway = self.ragas_gateway_factory(isolated)
             await EvaluationCorpusInstaller(ingestion).install(dataset)
             runner = EvaluationRunner(
                 self.repository,
@@ -185,11 +204,24 @@ class ProductionEvaluationJobExecutor:
             if advanced:
                 if self.artifact_catalog is None:
                     raise EvaluationProductionError("evaluation_artifact_catalog_unavailable")
-                advanced_scorecard = score_evaluation_v2(
-                    dataset,
-                    results,
-                    redactor=self.redactor,
-                )
+                if isolated.evaluation_scorer_backend == "ragas":
+                    if ragas_gateway is None:
+                        raise EvaluationProductionError("evaluation_ragas_judge_unavailable")
+                    advanced_scorecard = await score_evaluation_v2_with_ragas(
+                        dataset,
+                        results,
+                        gateway=ragas_gateway,
+                        timeout_seconds=isolated.evaluation_ragas_timeout_seconds,
+                        retry_limit=isolated.evaluation_ragas_retry_limit,
+                        maximum_concurrency=isolated.evaluation_ragas_max_concurrency,
+                        redactor=self.redactor,
+                    )
+                else:
+                    advanced_scorecard = score_evaluation_v2(
+                        dataset,
+                        results,
+                        redactor=self.redactor,
+                    )
                 evidence = build_standard_report_v2(
                     dataset=dataset,
                     manifest=run_manifest,
@@ -268,6 +300,8 @@ class ProductionEvaluationJobExecutor:
                 raise EvaluationProductionError(code) from error
             raise EvaluationProductionError("evaluation_execution_failed") from error
         finally:
+            if ragas_gateway is not None:
+                await ragas_gateway.close()
             await admission.close()
             await _close_composition(composition)
 

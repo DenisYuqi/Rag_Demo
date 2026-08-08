@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -25,6 +26,16 @@ from rag_mvp.evaluation.plan import (
 )
 from rag_mvp.evaluation.pricing import openai_standard_pricing_catalog
 from rag_mvp.evaluation.quality_gate import AdvancedMetricName
+from rag_mvp.evaluation.ragas_backend import (
+    RAGAS_CONTEXT_PRECISION_SCORER_VERSION,
+    RAGAS_FAITHFULNESS_SCORER_VERSION,
+    EvaluationRagasError,
+    NativeRagasMetricGateway,
+    RagasCaseSample,
+    _apply_openai_parameter_compatibility,
+    build_ragas_samples,
+    score_evaluation_v2_with_ragas,
+)
 from rag_mvp.evaluation.report_v2 import parse_report_v2
 from rag_mvp.evaluation.runner import (
     EvaluationCaseExecution,
@@ -123,6 +134,188 @@ def _result(case: EvaluationCaseV2, *, wrong_language: bool = False) -> Persiste
             latency_ms=10.0,
         ),
     )
+
+
+class _FixedRagasGateway:
+    def __init__(
+        self,
+        faithfulness: float = 0.95,
+        context_precision: float = 0.8,
+        delay_seconds: float = 0.0,
+    ) -> None:
+        self.faithfulness = faithfulness
+        self.context_precision = context_precision
+        self.delay_seconds = delay_seconds
+        self.faithfulness_calls: list[str] = []
+        self.context_calls: list[str] = []
+        self.closed = False
+        self.active_calls = 0
+        self.peak_active_calls = 0
+
+    async def _score(self, value: float) -> float:
+        self.active_calls += 1
+        self.peak_active_calls = max(self.peak_active_calls, self.active_calls)
+        try:
+            await asyncio.sleep(self.delay_seconds)
+            return value
+        finally:
+            self.active_calls -= 1
+
+    async def score_faithfulness(self, sample: RagasCaseSample) -> float:
+        self.faithfulness_calls.append(sample.case_id)
+        return await self._score(self.faithfulness)
+
+    async def score_context_precision(self, sample: RagasCaseSample) -> float:
+        self.context_calls.append(sample.case_id)
+        return await self._score(self.context_precision)
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+def test_ragas_adapter_honors_openai_completion_parameter_policy() -> None:
+    class StubLLM:
+        def __init__(self) -> None:
+            self.model_args = {"max_tokens": 1024, "temperature": 0.0, "top_p": 1.0}
+
+    llm = StubLLM()
+    settings = Settings(
+        _env_file=None,
+        provider_backend="openai",
+        generation_model="gpt-5.4",
+        openai_max_tokens_parameter="max_completion_tokens",
+    )
+
+    _apply_openai_parameter_compatibility(llm, settings)
+
+    assert llm.model_args == {"max_completion_tokens": 1024, "temperature": 1.0}
+
+
+def test_native_ragas_gateway_fails_closed_without_judge_credentials() -> None:
+    settings = Settings(
+        _env_file=None,
+        provider_backend="openai",
+        evaluation_scorer_backend="ragas",
+    )
+
+    with pytest.raises(EvaluationRagasError, match="evaluation_ragas_judge_unavailable"):
+        NativeRagasMetricGateway.from_settings(settings)
+
+
+async def test_ragas_backend_replaces_only_aligned_semantic_metrics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset = EvaluationDatasetRegistry(_DATASETS_ROOT).resolve(
+        "original-pdf-acceptance",
+        "2.0.0",
+    )
+    cases = tuple(case for case in dataset.cases if isinstance(case, EvaluationCaseV2))
+    results = tuple(_result(case) for case in cases)
+    gateway = _FixedRagasGateway(delay_seconds=0.001)
+
+    samples = build_ragas_samples(dataset, results)
+    scorecard = await score_evaluation_v2_with_ragas(
+        dataset,
+        results,
+        gateway=gateway,
+        timeout_seconds=1,
+        retry_limit=0,
+        maximum_concurrency=3,
+    )
+
+    assert len(samples) == 18
+    first = samples[0]
+    first_result = next(result for result in results if result.case_id == first.case_id)
+    assert first_result.execution is not None
+    first_child_id = first_result.execution.context_chunk_ids[0]
+    child = dataset.corpus.chunks_by_id[first_child_id]
+    parent = next(
+        item for item in dataset.corpus.parents if item.parent_chunk_id == child.parent_chunk_id
+    )
+    assert first.retrieved_contexts[0] == parent.text
+    observations = {item.metric_id: item for item in scorecard.observations}
+    assert observations["faithfulness"].value == pytest.approx(0.95)
+    assert observations["faithfulness"].scorer_version == RAGAS_FAITHFULNESS_SCORER_VERSION
+    assert observations["context-precision"].value == pytest.approx(0.8)
+    assert (
+        observations["context-precision"].scorer_version
+        == RAGAS_CONTEXT_PRECISION_SCORER_VERSION
+    )
+    assert observations["answer-compliance"].value == 1.0
+    assert observations["style"].value == 1.0
+    assert observations["refusal-appropriateness"].value == 1.0
+    assert len(gateway.faithfulness_calls) == 18
+    assert len(gateway.context_calls) == 18
+    assert gateway.peak_active_calls == 3
+
+    settings = Settings(
+        _env_file=None,
+        environment="test",
+        provider_backend="openai",
+        openai_api_key="unit-test-key",
+        evaluation_scorer_backend="ragas",
+        evaluation_ragas_judge_model="judge-model-v1",
+    )
+    monkeypatch.setattr(
+        "rag_mvp.evaluation.plan.source_code_revision",
+        lambda: "sha256:" + "1" * 64,
+    )
+    plan = build_evaluation_plan(dataset, settings, "advanced-run-v2")
+    manifest = EvaluationRunManifest.create(plan, created_at=results[0].completed_at)
+    provider = plan.identity.provider_identities[ModelRole.GENERATION.value]
+    generation_model = plan.identity.model_identities[ModelRole.GENERATION.value]
+    attempts = tuple(
+        ModelAttempt(
+            attempt_id=f"ragas-provider-{ordinal}",
+            operation_id=f"ragas-generation-{ordinal}",
+            request_id=result.execution.request_id if result.execution is not None else None,
+            run_id=plan.run_id,
+            role=ModelRole.GENERATION,
+            provider=provider,
+            model=generation_model,
+            status=ModelAttemptStatus.SUCCEEDED,
+            latency_ms=5.0,
+            usage=TokenUsage(input_tokens=10, output_tokens=5),
+            created_at=result.completed_at,
+        )
+        for ordinal, result in enumerate(results, start=1)
+    )
+    evidence = build_standard_report_v2(
+        dataset=dataset,
+        manifest=manifest,
+        results=results,
+        scorecard=scorecard,
+        attempts=attempts,
+        pricing_catalog=openai_standard_pricing_catalog(
+            provider=provider,
+            models=(generation_model,),
+        ),
+    )
+    assert evidence.report.provenance.evaluation_scorer_backend == "ragas"
+    assert evidence.report.provenance.evaluation_judge_model == "judge-model-v1"
+    assert "ragas-judge-cost-untracked" in evidence.report.limitations
+
+
+async def test_ragas_backend_fails_closed_on_invalid_metric_result() -> None:
+    dataset = EvaluationDatasetRegistry(_DATASETS_ROOT).resolve(
+        "original-pdf-acceptance",
+        "2.0.0",
+    )
+    cases = tuple(case for case in dataset.cases if isinstance(case, EvaluationCaseV2))
+    results = tuple(_result(case) for case in cases)
+    gateway = _FixedRagasGateway(faithfulness=float("nan"))
+
+    with pytest.raises(EvaluationRagasError, match="evaluation_ragas_judge_failed"):
+        await score_evaluation_v2_with_ragas(
+            dataset,
+            results,
+            gateway=gateway,
+            timeout_seconds=1,
+            retry_limit=1,
+            maximum_concurrency=2,
+        )
+
+    assert len(gateway.faithfulness_calls) >= 2
 
 
 def test_advanced_v2_scoring_uses_real_obligations_and_nonzero_denominators() -> None:

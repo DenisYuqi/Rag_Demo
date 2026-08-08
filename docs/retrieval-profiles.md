@@ -15,6 +15,8 @@ BGE evaluation installs each registered corpus into a per-run workspace beneath 
 
 Evaluation and Comparison API routes accept `?retrieval_profile=bge-local`; omitting the parameter preserves the existing `openai-api` behavior. Same-origin report and artifact links rendered in the BGE view include that qualifier, including polling and downloads. Unknown profile identifiers fail closed with `evaluation_unavailable` or `comparison_unavailable` rather than falling back to another profile.
 
+Evaluation scoring is restart-bound configuration shared by both retrieval profiles. `RAG_MVP_EVALUATION_SCORER_BACKEND=legacy` preserves the deterministic scorer. Setting it to `ragas` uses the configured OpenAI-compatible judge for semantic faithfulness and final-context precision while retaining deterministic compliance, style, refusal, safety, and operational checks. The Evidence Assessor remains enabled in both modes. Use `RAG_MVP_EVALUATION_RAGAS_JUDGE_MODEL` to override the generation model for judging, and bound judge work with the timeout, retry, and concurrency settings documented in `.env.example`. Reports record the backend and judge identity; scores from different backends are not comparison-compatible.
+
 ## First local use
 
 FlagEmbedding loads models lazily. The first BGE ingestion loads/downloads `BAAI/bge-m3`; the first `hybrid-rerank` question loads/downloads `BAAI/bge-reranker-v2-m3`. These artifacts require several gigabytes of persistent disk and memory, and cold loading can exceed ordinary request deadlines. Production deployments should provision the configured `RAG_MVP_BGE_MODEL_CACHE_DIR` before serving traffic or warm both models after startup.

@@ -83,6 +83,14 @@ class EvaluationReportProvenanceV2(DomainModel):
     code_revision: Identifier
     pricing_version: Identifier
     pricing_content_hash: Sha256DigestV2
+    evaluation_scorer_backend: Literal["legacy", "ragas"] = Field(
+        default="legacy",
+        exclude_if=lambda value: value == "legacy",
+    )
+    evaluation_judge_model: Annotated[
+        str,
+        Field(min_length=1, max_length=255),
+    ] | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class CategoryResultV2(DomainModel):

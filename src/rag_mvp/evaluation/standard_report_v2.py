@@ -127,6 +127,11 @@ def build_standard_report_v2(
         raise StandardReportV2Error("evaluation_v2_provider_attempt_unbound")
 
     generated_at = max(result.completed_at for result in ordered_results)
+    scorer_backend = (
+        "ragas"
+        if manifest.identity.scorer_versions.get("evaluation-backend", "").startswith("ragas-")
+        else "legacy"
+    )
     pricing = _pricing_provenance(manifest, pricing_catalog)
     performance = build_performance_evidence_v2(
         run_id=manifest.run_id,
@@ -185,6 +190,8 @@ def build_standard_report_v2(
             code_revision=manifest.identity.code_revision,
             pricing_version=pricing.pricing_version,
             pricing_content_hash=pricing.digest,
+            evaluation_scorer_backend=scorer_backend,
+            evaluation_judge_model=manifest.identity.model_identities.get("evaluation-judge"),
         ),
         acceptance_contract=contract,
         acceptance_gate_id=scorecard.gate.gate_id,
@@ -206,6 +213,7 @@ def build_standard_report_v2(
         limitations=(
             "single-evaluation-run",
             *(("local-model-cost-unavailable",) if not performance.cost.complete else ()),
+            *(("ragas-judge-cost-untracked",) if scorer_backend == "ragas" else ()),
         ),
     )
     return StandardReportV2Evidence(report=report, attempt_ledger=ledger)
