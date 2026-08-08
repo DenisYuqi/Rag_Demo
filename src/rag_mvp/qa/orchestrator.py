@@ -65,7 +65,11 @@ from rag_mvp.providers.routing import ModelProviderRouter
 from rag_mvp.qa.citations import StructuredAnswerError, StructuredAnswerParser
 from rag_mvp.qa.context import ContextBuilder, ContextSelectionError
 from rag_mvp.qa.deadlines import DeadlineRunner, QAStageBudgets
-from rag_mvp.qa.evidence_assessor import EvidenceAssessmentError, FactAssessmentResult
+from rag_mvp.qa.evidence_assessor import (
+    FACT_EVIDENCE_ASSESSOR_VERSION,
+    EvidenceAssessmentError,
+    FactAssessmentResult,
+)
 from rag_mvp.qa.grounding import (
     GroundingValidationError,
     GroundingValidator,
@@ -1200,6 +1204,21 @@ class QAOrchestrator:
                 }
             )
         if fact_assessment is not None:
+            authority_counts = {
+                status: sum(
+                    item.status.value == status for item in fact_assessment.authority_metadata
+                )
+                for status in ("current", "withdrawn", "unspecified")
+            }
+            metadata.update(
+                {
+                    "fact_evidence_assessor_version": FACT_EVIDENCE_ASSESSOR_VERSION,
+                    "authority_current_candidate_count": authority_counts["current"],
+                    "authority_withdrawn_candidate_count": authority_counts["withdrawn"],
+                    "authority_unspecified_candidate_count": authority_counts["unspecified"],
+                    "authority_resolution_count": (fact_assessment.authority_resolution_count),
+                }
+            )
             provider_attempt_count += fact_assessment.provider_attempt_count
             provider_failed_attempt_count += fact_assessment.provider_failed_attempt_count
             provider_unknown_usage_attempt_count += (

@@ -62,6 +62,24 @@ def test_generation_without_sentence_boundary_scans_and_redacts_tail() -> None:
     assert stream.finish() == ("Email [REDACTED_EMAIL]",)
 
 
+def test_terminal_currency_amount_is_not_misclassified_as_partial_ip() -> None:
+    stream = SafeStream()
+    answer = "The current airfare reimbursement cap is RMB 1,800."
+
+    assert stream.push(answer) == ()
+    assert stream.finish() == (answer,)
+    assert not stream.failed
+
+
+def test_actual_partial_ip_tail_remains_fail_closed() -> None:
+    stream = SafeStream()
+    stream.push("Internal address 192.168.1.")
+
+    assert stream.finish() == (SAFE_UNAVAILABLE_MESSAGE,)
+    assert stream.failed
+    assert stream.failure_reason == "ambiguous_tail"
+
+
 def test_ambiguous_or_incomplete_tail_is_discarded() -> None:
     stream = SafeStream()
     stream.push("Email person@")

@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import math
 import re
+import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
+from enum import StrEnum
 from typing import cast
 
 from rag_mvp.domain.retrieval import RankingEvidence
@@ -28,7 +30,7 @@ from rag_mvp.providers.routing import ModelProviderRouter
 from rag_mvp.qa.refusal import FactEvidence
 from rag_mvp.retrieval.request import RetrievalRequestError, canonicalize_query
 
-FACT_EVIDENCE_ASSESSOR_VERSION = "semantic-cosine-assertion-conflict-v1"
+FACT_EVIDENCE_ASSESSOR_VERSION = "semantic-authority-rerank-v2"
 
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,254}$")
 _FACT_SEPARATOR = re.compile(
@@ -45,6 +47,31 @@ _NEGATIVE_ASSERTION = re.compile(
 )
 _POSITIVE_ASSERTION = re.compile(
     r"(?i)\b(?:must|required|may|allowed|permitted)\b|(?:必须|需要|可以|允许|应当)"
+)
+_CURRENT_EVIDENCE = re.compile(
+    r"(?i)(?:\bcurrent(?:ly)?\b.{0,48}\b(?:authoritative|effective|valid)\b|"
+    r"\b(?:authoritative|effective|valid)\b.{0,48}\bcurrent(?:ly)?\b|"
+    r"\bauthoritative\s+(?:policy|source|document)\b|"
+    r"\u5f53\u524d\u6709\u6548|\u73b0\u884c\u6709\u6548|\u5f53\u524d\u751f\u6548|"
+    r"\u6743\u5a01\u653f\u7b56)"
+)
+_WITHDRAWN_EVIDENCE = re.compile(
+    r"(?i)(?:\bwithdrawn\b|\bobsolete\b|\bsuperseded\b|\bdraft\b|"
+    r"\btraining\s+(?:draft|example)\b|\bnot\s+an?\s+authoritative\b|"
+    r"\u5df2\u64a4\u56de|\u64a4\u56de|\u8349\u6848|\u57f9\u8bad\u793a\u4f8b|"
+    r"\u4f5c\u5e9f|\u5e9f\u6b62|\u4e0d\u518d\u6709\u6548)"
+)
+_WITHDRAWN_REFERENCE = re.compile(
+    r"(?i)(?:\b(?:draft|withdrawn|obsolete|superseded)\b|"
+    r"\u8349\u6848|\u5df2\u64a4\u56de|\u64a4\u56de|\u4f5c\u5e9f|\u5e9f\u6b62)"
+)
+_WITHDRAWN_SELECTION = re.compile(
+    r"(?i)(?:\b(?:choose|select|use|return|give)\b|"
+    r"\u9009\u62e9|\u91c7\u7528|\u4f7f\u7528|\u7ed9\u51fa)"
+)
+_UNQUALIFIED_SELECTION = re.compile(
+    r"(?i)(?:\bwithout\s+qualification\b|\bunqualified\b|\bdirectly\b|"
+    r"\u76f4\u63a5|\u4e0d\u52a0\u8bf4\u660e|\u65e0\u9700\u8bf4\u660e)"
 )
 _UNIT_ALIASES = {
     "%": "percent",
@@ -97,16 +124,52 @@ class EvidenceAssessmentError(ValueError):
         )
 
 
+class EvidenceLifecycleStatus(StrEnum):
+    """Explicit lifecycle status derived from one reranked child."""
+
+    CURRENT = "current"
+    WITHDRAWN = "withdrawn"
+    UNSPECIFIED = "unspecified"
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceAuthorityMetadata:
+    """Safe request-scoped authority metadata without retaining source text."""
+
+    chunk_id: str
+    status: EvidenceLifecycleStatus
+    authority_level: int
+    signals: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if _SAFE_ID.fullmatch(self.chunk_id) is None:
+            raise ValueError("authority_chunk_id_invalid")
+        expected_level = {
+            EvidenceLifecycleStatus.WITHDRAWN: 0,
+            EvidenceLifecycleStatus.UNSPECIFIED: 1,
+            EvidenceLifecycleStatus.CURRENT: 2,
+        }[self.status]
+        if self.authority_level != expected_level:
+            raise ValueError("authority_level_invalid")
+
+
 @dataclass(frozen=True, slots=True)
 class FactAssessmentResult:
     facts: tuple[FactEvidence, ...]
     provider_attempts: tuple[ModelAttempt, ...] = ()
     direct_provider_usage: TokenUsage | None = None
     direct_provider_identity: ModelIdentity | None = None
+    authority_metadata: tuple[EvidenceAuthorityMetadata, ...] = ()
+    authority_resolution_count: int = 0
 
     def __post_init__(self) -> None:
         if (self.direct_provider_usage is None) != (self.direct_provider_identity is None):
             raise ValueError("direct provider usage and identity must be recorded together")
+        object.__setattr__(self, "authority_metadata", tuple(self.authority_metadata))
+        if self.authority_resolution_count < 0:
+            raise ValueError("authority_resolution_count_invalid")
+        if len({item.chunk_id for item in self.authority_metadata}) != len(self.authority_metadata):
+            raise ValueError("authority_metadata_duplicate")
 
     @property
     def provider_attempt_count(self) -> int:
@@ -130,6 +193,9 @@ class FactAssessmentResult:
 class FactAssessmentConfig:
     candidate_similarity_floor: float = 0.45
     maximum_supporting_chunks: int = 3
+    authority_similarity_floor: float = 0.30
+    authority_score_bonus: float = 0.15
+    authority_rerank_limit: int = 3
     maximum_facts: int = 8
     maximum_candidates: int = 20
     version: str = FACT_EVIDENCE_ASSESSOR_VERSION
@@ -142,10 +208,28 @@ class FactAssessmentConfig:
             or not 0 < self.candidate_similarity_floor <= 1
         ):
             raise ValueError("candidate_similarity_floor must be finite and in (0, 1]")
-        for name in ("maximum_supporting_chunks", "maximum_facts", "maximum_candidates"):
+        for name, value in (
+            ("authority_similarity_floor", self.authority_similarity_floor),
+            ("authority_score_bonus", self.authority_score_bonus),
+        ):
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or not 0 < value <= 1
+            ):
+                raise ValueError(f"{name} must be finite and in (0, 1]")
+        for name in (
+            "maximum_supporting_chunks",
+            "authority_rerank_limit",
+            "maximum_facts",
+            "maximum_candidates",
+        ):
             value = getattr(self, name)
             if type(value) is not int or value < 1:
                 raise ValueError(f"{name} must be a positive integer")
+        if self.authority_rerank_limit > self.maximum_candidates:
+            raise ValueError("authority_rerank_limit must not exceed maximum_candidates")
         if self.version != FACT_EVIDENCE_ASSESSOR_VERSION:
             raise ValueError("unsupported_fact_assessment_version")
 
@@ -180,7 +264,10 @@ class SemanticFactEvidenceAssessor:
         return (
             f"{self.config.version}:{space.provider}/{space.model}/{space.dimension}/"
             f"{space.normalization.value}:{space.adapter_version}:"
-            f"floor-{self.config.candidate_similarity_floor:g}"
+            f"floor-{self.config.candidate_similarity_floor:g}:"
+            f"authority-floor-{self.config.authority_similarity_floor:g}:"
+            f"authority-bonus-{self.config.authority_score_bonus:g}:"
+            f"authority-top-{self.config.authority_rerank_limit}"
         )
 
     async def assess(
@@ -228,6 +315,9 @@ class SemanticFactEvidenceAssessor:
                 tuple(FactEvidence(f"fact-{index}", 0) for index in range(1, len(facts) + 1))
             )
 
+        authority_metadata = tuple(_authority_metadata(candidate) for candidate in evidence)
+        authority_by_id = {item.chunk_id: item for item in authority_metadata}
+
         texts = (*facts, *(candidate.text for candidate in evidence))
         request = EmbeddingRequest(tuple(texts))
         context = ProviderCallContext(request_id, "fact-evidence-assessment", deadline)
@@ -241,14 +331,28 @@ class SemanticFactEvidenceAssessor:
             candidate_vectors = raw_result.vectors[len(facts) :]
 
             assessments: list[FactEvidence] = []
+            authority_resolution_count = 0
             for index, fact_vector in enumerate(fact_vectors, start=1):
-                ranked = sorted(
-                    (
-                        (_cosine_score(fact_vector, vector), candidate)
-                        for vector, candidate in zip(candidate_vectors, evidence, strict=True)
-                    ),
-                    key=lambda item: (-item[0], item[1].final_rank, item[1].chunk_id),
+                ranked = tuple(
+                    sorted(
+                        (
+                            (_cosine_score(fact_vector, vector), candidate)
+                            for vector, candidate in zip(candidate_vectors, evidence, strict=True)
+                        ),
+                        key=lambda item: (-item[0], item[1].final_rank, item[1].chunk_id),
+                    )
                 )
+                authority_resolution = _resolve_authority_evidence(
+                    fact_id=f"fact-{index}",
+                    query=query,
+                    ranked=ranked,
+                    authority_by_id=authority_by_id,
+                    config=self.config,
+                )
+                if authority_resolution is not None:
+                    assessments.append(authority_resolution)
+                    authority_resolution_count += 1
+                    continue
                 selected = tuple(
                     item for item in ranked if item[0] >= self.config.candidate_similarity_floor
                 )[: self.config.maximum_supporting_chunks]
@@ -287,10 +391,14 @@ class SemanticFactEvidenceAssessor:
                 unrecorded_provider_attempt_count=int(direct_provider_usage is not None),
             ) from None
         return FactAssessmentResult(
-            tuple(assessments),
-            provider_attempts,
-            direct_provider_usage,
-            raw_result.identity.model_identity if direct_provider_usage is not None else None,
+            facts=tuple(assessments),
+            provider_attempts=provider_attempts,
+            direct_provider_usage=direct_provider_usage,
+            direct_provider_identity=(
+                raw_result.identity.model_identity if direct_provider_usage is not None else None
+            ),
+            authority_metadata=authority_metadata,
+            authority_resolution_count=authority_resolution_count,
         )
 
     async def _embed(
@@ -393,6 +501,138 @@ def _cosine_score(left: Sequence[float], right: Sequence[float]) -> float:
     if not math.isfinite(cosine):
         raise EvidenceAssessmentError("embedding_result_invalid")
     return min(1.0, max(0.0, cosine))
+
+
+def _authority_metadata(candidate: RankingEvidence) -> EvidenceAuthorityMetadata:
+    title = unicodedata.normalize("NFKC", candidate.display_title)
+    title_withdrawn = _WITHDRAWN_EVIDENCE.search(title)
+    title_current = _CURRENT_EVIDENCE.search(title)
+    if title_withdrawn is not None:
+        return EvidenceAuthorityMetadata(
+            candidate.chunk_id,
+            EvidenceLifecycleStatus.WITHDRAWN,
+            0,
+            ("explicit-withdrawn",),
+        )
+    if title_current is not None:
+        return EvidenceAuthorityMetadata(
+            candidate.chunk_id,
+            EvidenceLifecycleStatus.CURRENT,
+            2,
+            ("explicit-current",),
+        )
+    text = unicodedata.normalize("NFKC", candidate.text)
+    body_current = _CURRENT_EVIDENCE.search(text)
+    body_withdrawn = _WITHDRAWN_EVIDENCE.search(text)
+    if body_current is not None and (
+        body_withdrawn is None or body_current.start() < body_withdrawn.start()
+    ):
+        return EvidenceAuthorityMetadata(
+            candidate.chunk_id,
+            EvidenceLifecycleStatus.CURRENT,
+            2,
+            ("explicit-current",),
+        )
+    if body_withdrawn is not None:
+        return EvidenceAuthorityMetadata(
+            candidate.chunk_id,
+            EvidenceLifecycleStatus.WITHDRAWN,
+            0,
+            ("explicit-withdrawn",),
+        )
+    return EvidenceAuthorityMetadata(
+        candidate.chunk_id,
+        EvidenceLifecycleStatus.UNSPECIFIED,
+        1,
+    )
+
+
+def _resolve_authority_evidence(
+    *,
+    fact_id: str,
+    query: str,
+    ranked: Sequence[tuple[float, RankingEvidence]],
+    authority_by_id: dict[str, EvidenceAuthorityMetadata],
+    config: FactAssessmentConfig,
+) -> FactEvidence | None:
+    window = tuple(
+        (score, candidate)
+        for score, candidate in ranked
+        if candidate.final_rank <= config.authority_rerank_limit
+        and score >= config.authority_similarity_floor
+    )
+    current = tuple(
+        item
+        for item in window
+        if authority_by_id[item[1].chunk_id].status is EvidenceLifecycleStatus.CURRENT
+    )
+    withdrawn = tuple(
+        item
+        for item in window
+        if authority_by_id[item[1].chunk_id].status is EvidenceLifecycleStatus.WITHDRAWN
+    )
+    if not current or not withdrawn:
+        return None
+
+    conflicting_pairs = tuple(
+        (current_item, withdrawn_item)
+        for current_item in current
+        for withdrawn_item in withdrawn
+        if max(current_item[0], withdrawn_item[0]) >= config.candidate_similarity_floor
+        and _materially_conflicts(current_item[1].text, withdrawn_item[1].text)
+    )
+    if not conflicting_pairs:
+        return None
+
+    involved_current = _unique_ranked(tuple(item[0] for item in conflicting_pairs))
+    involved_withdrawn = _unique_ranked(tuple(item[1] for item in conflicting_pairs))
+    primary_score, primary = min(
+        involved_current,
+        key=lambda item: (
+            -min(1.0, item[0] + config.authority_score_bonus),
+            item[1].final_rank,
+            item[1].chunk_id,
+        ),
+    )
+    support_score = round(
+        min(1.0, primary_score + config.authority_score_bonus),
+        6,
+    )
+    if _requests_unqualified_withdrawn_evidence(query):
+        return FactEvidence(
+            fact_id,
+            support_score,
+            (primary.chunk_id,),
+            tuple(item[1].chunk_id for item in involved_withdrawn),
+        )
+    return FactEvidence(
+        fact_id,
+        support_score,
+        tuple(item[1].chunk_id for item in involved_current),
+    )
+
+
+def _unique_ranked(
+    values: Sequence[tuple[float, RankingEvidence]],
+) -> tuple[tuple[float, RankingEvidence], ...]:
+    by_id: dict[str, tuple[float, RankingEvidence]] = {}
+    for score, candidate in values:
+        by_id.setdefault(candidate.chunk_id, (score, candidate))
+    return tuple(
+        sorted(
+            by_id.values(),
+            key=lambda item: (-item[0], item[1].final_rank, item[1].chunk_id),
+        )
+    )
+
+
+def _requests_unqualified_withdrawn_evidence(query: str) -> bool:
+    normalized = unicodedata.normalize("NFKC", query)
+    return bool(
+        _WITHDRAWN_REFERENCE.search(normalized)
+        and _WITHDRAWN_SELECTION.search(normalized)
+        and _UNQUALIFIED_SELECTION.search(normalized)
+    )
 
 
 def _materially_conflicts(left: str, right: str) -> bool:

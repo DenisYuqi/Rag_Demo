@@ -14,6 +14,7 @@ from rag_mvp.providers.models import (
 )
 from rag_mvp.qa.evidence_assessor import (
     EvidenceAssessmentError,
+    EvidenceLifecycleStatus,
     FactAssessmentConfig,
     SemanticFactEvidenceAssessor,
 )
@@ -257,6 +258,76 @@ async def test_explicit_opposite_policy_assertions_are_conflict() -> None:
     assert result[0].conflicting_chunk_ids == ("chunk-prohibited",)
 
 
+async def test_rerank_bounded_current_evidence_supersedes_withdrawn_draft() -> None:
+    fact = "Which travel identifier is authoritative rather than the draft"
+    withdrawn = "Withdrawn draft: the cap is 2800 yuan."
+    current = (
+        "\u672c\u6587\u4ef6\u662f\u5f53\u524d\u6709\u6548\u7684\u5dee\u65c5\u653f\u7b56; "
+        "the cap is 1800 yuan."
+    )
+    unrelated = "The authoritative RAG escalation code is OPS-RAG-7421."
+    provider = MappingEmbeddingProvider(
+        {
+            fact: (1.0, 0.0),
+            withdrawn: (0.8, 0.6),
+            current: (0.35, 0.93675),
+            unrelated: (0.7, 0.71414),
+        }
+    )
+    assessor = SemanticFactEvidenceAssessor(provider)
+
+    result = await assessor.assess_with_diagnostics(
+        f"{fact}?",
+        (
+            _candidate("chunk-draft", 1, withdrawn, source_id="source-draft"),
+            _candidate("chunk-current", 2, current, source_id="source-current"),
+            _candidate("chunk-unrelated", 3, unrelated, source_id="source-other"),
+        ),
+        request_id="request-authority",
+        revision_id="revision-current",
+        deadline=_deadline(),
+    )
+
+    assert result.facts[0].support_score == 0.5
+    assert result.facts[0].supporting_chunk_ids == ("chunk-current",)
+    assert result.facts[0].conflicting_chunk_ids == ()
+    assert result.authority_resolution_count == 1
+    assert {
+        item.chunk_id: (item.status, item.authority_level) for item in result.authority_metadata
+    } == {
+        "chunk-draft": (EvidenceLifecycleStatus.WITHDRAWN, 0),
+        "chunk-current": (EvidenceLifecycleStatus.CURRENT, 2),
+        "chunk-unrelated": (EvidenceLifecycleStatus.UNSPECIFIED, 1),
+    }
+
+
+async def test_unqualified_withdrawn_selection_retains_authority_conflict() -> None:
+    fact = "Choose the withdrawn draft amount without qualification"
+    withdrawn = "Withdrawn draft: the cap is 2800 yuan."
+    current = "This is the current authoritative policy; the cap is 1800 yuan."
+    provider = MappingEmbeddingProvider(
+        {
+            fact: (1.0, 0.0),
+            withdrawn: (0.8, 0.6),
+            current: (0.35, 0.93675),
+        }
+    )
+
+    result = await SemanticFactEvidenceAssessor(provider).assess(
+        f"{fact}.",
+        (
+            _candidate("chunk-draft", 1, withdrawn, source_id="source-draft"),
+            _candidate("chunk-current", 2, current, source_id="source-current"),
+        ),
+        request_id="request-withdrawn",
+        revision_id="revision-current",
+        deadline=_deadline(),
+    )
+
+    assert result[0].supporting_chunk_ids == ("chunk-current",)
+    assert result[0].conflicting_chunk_ids == ("chunk-draft",)
+
+
 async def test_stale_candidate_registry_fails_before_provider_call() -> None:
     provider = MappingEmbeddingProvider({})
     assessor = SemanticFactEvidenceAssessor(provider)
@@ -295,3 +366,10 @@ async def test_expired_deadline_fails_before_provider_call() -> None:
 def test_invalid_similarity_calibration_is_rejected(floor: object) -> None:
     with pytest.raises(ValueError, match="candidate_similarity_floor"):
         FactAssessmentConfig(candidate_similarity_floor=floor)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("field", ["authority_similarity_floor", "authority_score_bonus"])
+@pytest.mark.parametrize("value", [0, -0.1, 1.1, float("nan"), True])
+def test_invalid_authority_calibration_is_rejected(field: str, value: object) -> None:
+    with pytest.raises(ValueError, match=field):
+        FactAssessmentConfig(**{field: value})  # type: ignore[arg-type]

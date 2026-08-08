@@ -30,7 +30,7 @@ class SafeStream:
     )
     _ambiguous_tails: Final[tuple[re.Pattern[str], ...]] = (
         re.compile(r"(?:\d[ .-]?){6,}\Z"),
-        re.compile(r"(?:\d{1,3}\.){1,3}\d{0,3}\Z"),
+        re.compile(r"(?<![\d.,])(?:\d{1,3}\.){1,3}\d{0,3}\Z"),
         re.compile(
             r"(?i)(?:bearer|basic|api[_-]?key|access[_-]?token|password|passwd|pwd)"
             r"\s*[:=]?\s*\S*\Z"
