@@ -6,6 +6,7 @@
 
 - [Release v2 验收说明](../docs/release-v2-acceptance.md)：当前验收流程和命令。
 - [当前 Release v2 交付包](../deliverables/release-v2-bge-20260809-r3/)：当前发布报告及证据。
+- [检索策略对比报告](../deliverables/release-v2-bge-20260809-r3/retrieval-comparison.md)：vector-only、hybrid 与 hybrid+rerank 的量化结果和结论。
 - [问题诊断数据](two-issue-diagnosis.json)：两项问题的权威机器可读记录。
 - [问题诊断报告](two-issue-diagnosis-report.md)：上述问题记录的人类可读说明。
 - [Phase 12 历史发布](releases/phase12_20260807t030340z-954bb3e2/README.md)：已封存的旧版发布证据。

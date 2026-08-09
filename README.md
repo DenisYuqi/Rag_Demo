@@ -50,6 +50,18 @@ BGE 本地检索评测总览：
 
 ![BGE 本地检索评测结果总览](docs/screenshots/bge-local-evaluations-overview.png)
 
+### 三种检索策略对比
+
+历史受控实验比较了 vector-only（`dense`）、`hybrid` 和 `hybrid-rerank`。每种策略执行 48 次逻辑请求；完整证据和口径说明见 [检索策略对比报告](deliverables/release-v2-bge-20260809-r3/retrieval-comparison.md)。
+
+| 策略 | Context Precision | Answer Compliance | P90 延迟 | 错误率 | 超时率 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `dense` | 0.9135 | 0.4231 | 4,832.7 ms | 22.92% | 0% |
+| `hybrid` | 0.6454 | 0.4483 | 5,134.3 ms | 16.67% | 0% |
+| `hybrid-rerank` | 0.8489 | 0.0000 | 7,167.7 ms | 16.67% | 33.33% |
+
+该历史实验按预注册策略推荐 `dense`；其使用 OpenAI embedding 和 reranking，只作为三模式比较证据，不替代最终 BGE `hybrid-rerank` 配置的独立验收结果。工作台的 `Evaluations → Compare / 对比` 页面提供候选表格、基线差值图和推荐理由。
+
 ## 快速开始
 
 ### 1. 准备环境

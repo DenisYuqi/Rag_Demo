@@ -70,19 +70,24 @@
       "sha256": "sha256:53d60cadd732960c8b8a49d928782a75975b41aa7cae305ec2ab0346535f3ef6"
     },
     {
-      "bytes": 4083,
+      "bytes": 3973,
       "path": "pdf-crosswalk.json",
-      "sha256": "sha256:7e350137841350e9c36e05ab45fdf403b7ab0b4b75c02c52e825b2a36b21cde2"
+      "sha256": "sha256:2c208ae2acf5ba554bdcd4bfb4676b1bd4a9f57bff7375acd6dc0c675e7a08c3"
     },
     {
-      "bytes": 2131,
+      "bytes": 2021,
       "path": "pdf-crosswalk.md",
-      "sha256": "sha256:7fcb044627e0a2d23ecba04f0e973e932a7fced8f40f531c8c4ca51729c97397"
+      "sha256": "sha256:626173b579765e55d2a1aa098701b6a3ffa5dc1c92a01c6a15c1a2a21f230d84"
     },
     {
       "bytes": 970,
       "path": "reproduce.md",
       "sha256": "sha256:c9dda8e77604b545b86d1be5aa6b748e3595c0d7e7945d018582eec0de04b079"
+    },
+    {
+      "bytes": 2413,
+      "path": "retrieval-comparison.md",
+      "sha256": "sha256:e90cf839b0c61829895e6f70df36384a6258dfedb2c1637833442a06482d6b48"
     },
     {
       "bytes": 3235,
@@ -100,7 +105,7 @@
       "sha256": "sha256:fa7c562dbc395373d623a0eb6050db8c9c32a1c93852a7604fe1e850702a06d7"
     }
   ],
-  "generated_at": "2026-08-09T13:13:22.860218Z",
+  "generated_at": "2026-08-09T15:12:49.226914Z",
   "schema_version": "rag-mvp-release-v2",
   "status": "accepted"
 }

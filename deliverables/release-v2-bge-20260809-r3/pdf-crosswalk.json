@@ -37,7 +37,7 @@
     },
     {
       "denominator": "comparison",
-      "evidence": "evidence/retrieval-reranker-comparison.json",
+      "evidence": "retrieval-comparison.md",
       "limitation": "The historical three-mode retrieval comparison uses OpenAI embeddings and reranking, so it demonstrates the required alternatives but does not substitute for the selected BGE profile quality gate.",
       "requirement_id": "vector-and-hybrid",
       "status": "complete"
@@ -72,8 +72,8 @@
     },
     {
       "denominator": "comparison",
-      "evidence": "evidence/retrieval-reranker-comparison.json",
-      "limitation": "The historical three-mode retrieval comparison uses OpenAI embeddings and reranking, so it demonstrates the required alternatives but does not substitute for the selected BGE profile quality gate.",
+      "evidence": "retrieval-comparison.md",
+      "limitation": "The report provides the three configurations, quantitative results, conclusion, and a link to the authoritative JSON evidence.",
       "requirement_id": "three-retrieval-configurations",
       "status": "complete"
     },
