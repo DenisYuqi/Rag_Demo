@@ -7,7 +7,7 @@ This checklist records the current evidence state for OpenSpec change
 - [x] Acceptance CLI, fixed 100-request mode, Release v2 packaging, and offline verification are
   implemented and covered by focused tests.
 - [x] Passing BGE quality evidence identified at
-  `data/profiles/bge-local/evaluations/published/eval_d3d76490c9ef444c8ad00d3cb829ffe4/evaluation-report.json`.
+  `deliverables/release-v2-bge-20260809-r3/evidence/quality-report.json`.
 - [x] Quality evidence SHA-256:
   `sha256:319afad3d2773a7f556d1c20563783c2a86f54ebb3fa850b9ffc0e5403d66c12`.
 - [x] Quality gates pass: Faithfulness 1.0/18, Context Precision
