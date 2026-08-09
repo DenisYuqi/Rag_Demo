@@ -116,16 +116,49 @@ def _performance(*, slow_attempts: int = 0) -> dict[str, object]:
     }
 
 
+def _issues() -> list[dict[str, object]]:
+    return [
+        {
+            "issue_id": f"issue-{index}",
+            "symptom": "A bounded stage timed out.",
+            "root_cause": "The original deadline was below measured provider latency.",
+            "exact_fix": "Calibrate the stage deadline while retaining the total deadline.",
+            "primary_metric": f"stage-{index}-error-rate",
+            "baseline_value": 1.0,
+            "post_fix_value": 0.0,
+            "relative_improvement_percent": 100.0,
+            "passed": True,
+        }
+        for index in range(1, 3)
+    ]
+
+
 def _arguments(tmp_path: Path, *, slow_attempts: int = 0) -> list[str]:
     selected = _write_json(tmp_path / "selected.json", _selected())
     quality = _write_json(tmp_path / "quality.json", _quality())
     model = _write_json(tmp_path / "model.json", _comparison("model-comparison"))
-    retrieval = _write_json(
-        tmp_path / "retrieval.json", _comparison("retrieval-comparison")
-    )
+    retrieval = _write_json(tmp_path / "retrieval.json", _comparison("retrieval-comparison"))
     cache = _write_json(tmp_path / "cache.json", _comparison("cache-comparison"))
     performance = _write_json(
         tmp_path / "performance.json", _performance(slow_attempts=slow_attempts)
+    )
+    issues = _write_json(tmp_path / "issues.json", _issues())
+    log_dictionary = _write_json(
+        tmp_path / "log-dictionary.json",
+        {"fields": [{"name": name} for name in ("event", "level", "service", "timestamp")]},
+    )
+    log_sample = tmp_path / "log-sample.jsonl"
+    log_sample.write_text(
+        json.dumps(
+            {
+                "event": "request.completed",
+                "level": "info",
+                "service": "rag-mvp",
+                "timestamp": "2026-08-09T00:00:00Z",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
     )
     return [
         "--selected-config",
@@ -138,6 +171,12 @@ def _arguments(tmp_path: Path, *, slow_attempts: int = 0) -> list[str]:
         str(retrieval),
         "--cache-report",
         str(cache),
+        "--issue-data",
+        str(issues),
+        "--log-dictionary",
+        str(log_dictionary),
+        "--log-sample",
+        str(log_sample),
         "--performance-report",
         str(performance),
         "--output",
@@ -154,11 +193,20 @@ def test_builds_non_overwriting_release_and_verifies_offline(tmp_path: Path) -> 
     summary = json.loads((release / "summary.json").read_text(encoding="utf-8"))
     manifest = json.loads((release / "manifest.json").read_text(encoding="utf-8"))
     operations = json.loads((release / "operations-cost.json").read_text(encoding="utf-8"))
+    crosswalk = json.loads((release / "pdf-crosswalk.json").read_text(encoding="utf-8"))
     assert summary["accepted"] is True
     assert summary["gates"]["performance"]["measured_requests"] == 100
     assert summary["gates"]["performance"]["successful_within_10s"] == 100
     assert operations["performance"]["latency_ms"]["p90"] <= 10_000
     assert manifest["status"] == "accepted"
+    assert (release / "reproduce.md").is_file()
+    assert not (release / "REPRODUCE.md").exists()
+    assert (release / "evidence" / "issue-diagnosis.json").is_file()
+    assert (release / "evidence" / "structured-log-sample.jsonl").is_file()
+    assert all(item["status"] == "complete" for item in crosswalk["requirements"])
+    assert all(
+        part == part.casefold() for item in manifest["files"] for part in item["path"].split("/")
+    )
     assert acceptance.main(["--offline-verify", str(release)]) == 0
     assert acceptance.main(arguments) == 2
 
@@ -181,14 +229,41 @@ def test_offline_verification_rejects_unmanifested_file(tmp_path: Path) -> None:
     assert acceptance.main(["--offline-verify", str(release)]) == 2
 
 
+@pytest.mark.parametrize(
+    "relative",
+    ("REPRODUCE.md", "evidence/Issue Report.json", "evidence\\report.json"),
+)
+def test_release_filename_policy_rejects_nonportable_names(relative: str) -> None:
+    with pytest.raises(acceptance.AcceptanceError, match="packaged_filename_invalid"):
+        acceptance._validate_release_relative_name(relative)
+
+
+def test_content_scan_ignores_machine_decimals_but_rejects_string_pii(
+    tmp_path: Path,
+) -> None:
+    machine = tmp_path / "machine.json"
+    _write_json(
+        machine,
+        {
+            "latency_ms": 2748.0203000013717,
+            "cost": "0.00344382",
+            "note": "No private data is present.",
+        },
+    )
+    assert acceptance._scan_text_files(tmp_path) == (True, [])
+
+    _write_json(machine, {"contact": "person@example.com"})
+    passed, issues = acceptance._scan_text_files(tmp_path)
+    assert passed is False
+    assert issues == ["sensitive_content:machine.json"]
+
+
 def test_failed_performance_gate_is_packaged_but_returns_nonzero(tmp_path: Path) -> None:
     arguments = _arguments(tmp_path, slow_attempts=11)
 
     assert acceptance.main(arguments) == 1
 
-    summary = json.loads(
-        (tmp_path / "release-v2" / "summary.json").read_text(encoding="utf-8")
-    )
+    summary = json.loads((tmp_path / "release-v2" / "summary.json").read_text(encoding="utf-8"))
     assert summary["accepted"] is False
     assert summary["gates"]["performance"]["passed"] is False
 
@@ -197,6 +272,25 @@ def test_dry_run_preflights_without_creating_output(tmp_path: Path) -> None:
     arguments = [*_arguments(tmp_path), "--dry-run"]
 
     assert acceptance.main(arguments) == 0
+    assert not (tmp_path / "release-v2").exists()
+
+
+def test_load_preflight_rejects_cost_cap_before_service_call(tmp_path: Path) -> None:
+    arguments = [
+        *_arguments(tmp_path),
+        "--run-load",
+        "--base-url",
+        "http://127.0.0.1:1",
+        "--scenario-file",
+        str(tmp_path / "missing-scenarios.json"),
+        "--max-run-cost",
+        "0.0001",
+        "--dry-run",
+    ]
+    performance_index = arguments.index("--performance-report")
+    del arguments[performance_index : performance_index + 2]
+
+    assert acceptance.main(arguments) == 2
     assert not (tmp_path / "release-v2").exists()
 
 
@@ -209,6 +303,58 @@ def test_incompatible_quality_report_fails_before_output(tmp_path: Path) -> None
 
     assert acceptance.main(arguments) == 2
     assert not (tmp_path / "release-v2").exists()
+
+
+def test_partial_historical_comparison_is_reused_with_explicit_limitation(
+    tmp_path: Path,
+) -> None:
+    selected = _selected()
+    selected["comparison_compatibility"] = {
+        "cache": {
+            "status": "partial",
+            "limitation": "Historical OpenAI-profile cache evidence is directional only.",
+        }
+    }
+    payload = {
+        "schema_version": "comparison-result-v1",
+        "comparison_id": "historical-cache",
+        "axis": "cache-behavior",
+        "completed_at": "2026-08-07T00:00:00Z",
+        "plan": {"fixed_identities": {"dataset_id": "original-pdf-acceptance"}},
+        "candidates": [
+            {"candidate_variant_id": "cache-cold", "status": "completed"},
+            {"candidate_variant_id": "cache-warm", "status": "failed"},
+        ],
+        "recommendation": {"state": "no-recommendation"},
+    }
+
+    metadata = acceptance._validate_compatibility(
+        payload,
+        selected,
+        label="cache",
+        require_scorer=False,
+    )
+
+    assert metadata["dataset_id"] == "original-pdf-acceptance"
+    assert metadata["compatibility_status"] == "partial"
+    assert "directional only" in metadata["limitation"]
+
+
+def test_runtime_configuration_identity_is_distinct_from_quality_source_identity() -> None:
+    selected = _selected()
+    selected["runtime_configuration_id"] = "runtime-bge-current"
+    selected["source_configuration_ids"] = {"quality": "quality-bge-historical"}
+    quality = _quality()
+    quality["metadata"]["configuration_id"] = "quality-bge-historical"
+
+    metadata = acceptance._validate_compatibility(
+        quality,
+        selected,
+        label="quality",
+        require_scorer=True,
+    )
+
+    assert metadata["configuration_id"] == "quality-bge-historical"
 
 
 def test_fixed_sample_load_configuration_requires_no_retries() -> None:

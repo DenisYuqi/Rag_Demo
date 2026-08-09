@@ -1,12 +1,29 @@
-# To Improve
+# 改进路线与待办
 
-## Evidence Assessor：引入可审计的规则策略层 （Drools）
+本文档汇总当前尚未实现的改进建议，按“问题证据 → 建议方案 → 实施顺序 → 验收标准”组织。所有改动均应先通过项目现有离线评估与候选对比，不以功能数量替代可验证的质量收益。
 
-状态：提议，尚未实现。
+## 优先级总览
+
+| 优先级 | 改进项 | 目标 | 状态 |
+| --- | --- | --- | --- |
+| P0 | Evidence Assessor 规则策略层 | 区分越界、低置信与冲突证据，提供可审计决策 | 提议 |
+| P0 | Hit-anchored parent window | 确保命中事实不会因父块前缀截断而丢失 | 待实现 |
+| P0 | 版本化结构增强索引文本 | 利用标题和章节路径提高召回准确性 | 待实现 |
+| P0 | 近重复抑制与上下文多样化 | 减少重复证据对上下文预算的占用 | 待实现 |
+| P1 | 自适应分块与预览诊断 | 在保留稳定回退路径的前提下提高分块质量 | 待实现 |
+| P1 | 受控低召回查询扩展 | 用确定性变体改善缩写、同义词等低召回场景 | 待实现 |
+| P1 | 请求级检索范围 | 支持按来源和文档类型约束检索范围 | 待实现 |
+| P2 | 解析、多模态、FAQ 与图谱扩展 | 根据真实语料和评估收益按需建设 | 条件实施 |
+
+---
+
+## 1. Evidence Assessor：引入可审计的规则策略层（Drools）
+
+**状态：** 提议，尚未实现。
 
 详细问题分析和修复验证见 [Evidence Assessor 问题分析与解决方案报告](./evidence-assessor-issues-report.md)。
 
-### 背景与证据
+### 1.1 背景与证据
 
 当前 Evidence Assessor 已经是语义判断与内嵌规则的混合实现，包括响应指令过滤、断言切分、current/withdrawn/authority 识别、冲突判断、相似度阈值和最终拒答策略。规则目前分散在代码和正则表达式中，不容易独立版本化、解释和校准。
 
@@ -19,7 +36,7 @@ BGE/Ragas 评估 `eval_d3d76490c9ef444c8ad00d3cb829ffe4` 的 Quality Gates 为 5
 
 根因是 assessor 将“知识库中没有相关主题”和“存在相关证据但不足以支持事实”都压缩成无支持证据，下游拒答策略无法恢复二者的区别。
 
-### 建议方向
+### 1.2 建议方向
 
 保留 BGE 负责跨语言、同义改写和 OCR 噪声下的语义相关性，在其后增加一个类型化、版本化的 `EvidencePolicyEngine`。规则层负责确定性的资格、权威性、冲突和拒答原因判断，不用纯规则替换语义模型。
 
@@ -48,7 +65,7 @@ Query
 5. BGE 语义支持。
 6. `out-of-scope`、`low-confidence`、`conflicting-evidence` 等拒答原因分类。
 
-### 决策模型
+### 1.3 决策模型
 
 不要通过任意 bonus 将所有判断混入一个相似度分数。至少分别保留：
 
@@ -67,7 +84,7 @@ Query
 - 存在主题相关候选，但事实支持未达到要求：`low-confidence`。
 - 相同事实槽位和适用范围出现无法由 authority/lifecycle 消解的不同值：`conflicting-evidence`。
 
-### 适合规则化的判断
+### 1.4 适合规则化的判断
 
 - 响应语言、格式或安全指令不作为待检索事实。
 - withdrawn/draft 不得作为现行规范依据，除非问题明确询问历史或草案。
@@ -79,7 +96,7 @@ Query
 
 BGE 仍负责中英文释义、同义表达、隐式语义关系和 OCR 噪声文本，避免规则数量失控。
 
-### 约束与风险
+### 1.5 约束与风险
 
 - 生产规则不得读取 evaluation dataset 的 `authoritative_evidence_ids`、`approved_propositions` 或 `support_anchor_groups`，避免评估标签泄漏。
 - authority、lifecycle、生效日期和适用范围应来自摄取阶段的通用文档元数据或受控来源注册表。
@@ -88,7 +105,7 @@ BGE 仍负责中英文释义、同义表达、隐式语义关系和 OCR 噪声�
 - 规则定义必须使用固定枚举和受控条件，不允许任意表达式或 `eval`。
 - 每次规则或阈值调整都必须改变 assessor/policy identity，确保评估和缓存不会混用不同策略。
 
-### 实施顺序
+### 1.6 实施顺序
 
 1. 抽取当前内嵌规则为类型化决策和稳定规则 ID，保持现有行为不变。
 2. 保留未达支持阈值的最佳相关性、实体覆盖和候选诊断，避免过早压缩为零。
@@ -97,7 +114,7 @@ BGE 仍负责中英文释义、同义表达、隐式语义关系和 OCR 噪声�
 5. 以 shadow mode 同时记录旧决策和规则策略决策，不影响线上回答。
 6. 在双语、跨语言、OCR、权威/撤回、数值冲突和越界数据集上完成校准后再启用。
 
-### 验收标准
+### 1.7 验收标准
 
 - `accept-zh-009` 和 `accept-en-009` 返回 `out-of-scope`，而不是 `low-confidence`。
 - 现有 24 条 BGE acceptance 的回答/拒答结果无回归。
@@ -105,21 +122,23 @@ BGE 仍负责中英文释义、同义表达、隐式语义关系和 OCR 噪声�
 - Refusal Appropriateness 达到 24/24，且每条规则决策可以追溯到规则版本和命中规则 ID。
 - 未知、缺失或矛盾元数据保持 fail-closed，不通过默认值伪造 authority 或适用范围。
 
-## RAG 改进路线审查（2026-08-09）
+---
 
-状态：代码审查完成，以下事项尚未实现。
+## 2. RAG 检索链路改进路线
 
-### 审查范围与结论边界
+**审查日期：** 2026-08-09 ｜ **状态：** 代码审查完成，以下事项尚未实现。
+
+### 2.1 审查范围与结论边界
 
 主要检查了文档摄取、分块、索引输入、混合检索、查询理解、重排、上下文组装、FAQ、知识图谱、多模态解析和可观测性。以下结论是当前实现的代码审查结果，所有改进项都必须先经过项目自身的离线评估和候选对比。
 
 总体判断：Rag_Demo 的检索主干已经较为完整。它已经具有父子分块、Dense + BM25、加权 RRF、可选重排、BGE 本地 profile、查询历史扩展、严格引用、原子索引修订、检索缓存、阶段预算和较完整的评估体系。当前最值得改进的不是重写主干，而是修正上下文窗口、提高结构信息利用率、减少重复上下文，并在低召回时做受控扩展。
 
-### 能力盘点
+### 2.2 能力盘点
 
 | 能力 | 当前状态 | 可采用的改进方向 | 判断 |
 | --- | --- | --- | --- |
-| 父子分块 | 已实现；子块检索、父块生成 | 已实现；并可补充父块、相邻块和关系块 | 主干无需重做，但父块截断方式需要立即修正 |
+| 父子分块 | 已实现子块检索、父块生成 | 可补充父块、相邻块和关系块 | 主干无需重做，但父块截断方式需要立即修正 |
 | 混合检索 | Dense + BM25 + weighted RRF；单路失败可降级 | Vector + keyword + weighted RRF | 已基本对齐 |
 | 重排 | OpenAI-compatible 或 BGE cross-encoder | 多 provider 重排、阈值降级、综合分数和 MMR | 应补候选多样性，不必复制 provider 数量 |
 | 查询处理 | 基于规则识别追问，只拼接历史用户问题 | LLM 改写 + 意图分类 + 图片理解；低召回时本地 query expansion | 应增加受控的低召回扩展；LLM 改写保持可选 |
@@ -131,7 +150,11 @@ BGE 仍负责中英文释义、同义表达、隐式语义关系和 OCR 噪声�
 | FAQ / Graph | 没有专用 FAQ 索引和知识图谱检索 | FAQ 专用元数据/负问题过滤；实体图谱与 chunk 检索并行 | 都是条件型能力，优先级低于基础检索正确性 |
 | 评估与发布证据 | 数据集版本、质量门、候选对比、不可变报告较完整 | 提供在线 evaluation 与 Langfuse 链路 | Rag_Demo 现有体系是优势，应作为所有改造的准入门 |
 
-### P0：修正父块上下文截断，确保命中事实进入生成上下文
+### 2.3 P0：修正父块上下文截断
+
+#### 目标
+
+确保命中事实进入生成上下文，避免父块前缀截断丢失位于中后部的有效证据。
 
 #### 现状与风险
 
@@ -161,7 +184,7 @@ text = parent.text if not truncated else parent.text[: spans[token_count][0]]
 - 引用继续指向 active revision 中的 child，现有 citation/grounding 校验无回归。
 - 增加 `context_hit_coverage` 诊断，验收数据集必须为 100%。
 
-### P0：为检索引入版本化的标题与章节上下文
+### 2.4 P0：引入版本化的标题与章节上下文
 
 #### 现状与差距
 
@@ -184,7 +207,7 @@ Rag_Demo 已在 `ChunkLocator.section_path` 保存 Markdown 章节路径，也�
 - embedding cache 不会跨不同 `index_text` 误命中。
 - 在现有双语 acceptance 上无回归，并新增 repeated-heading、generic-section 和跨文档同文案例。
 
-### P0：重排后增加近重复抑制与上下文多样化
+### 2.5 P0：增加近重复抑制与上下文多样化
 
 #### 现状与差距
 
@@ -204,7 +227,7 @@ Rag_Demo 已在 `ChunkLocator.section_path` 保存 Markdown 章节路径，也�
 - current/authoritative 证据不会仅因与 withdrawn/draft 文本相似而被去除。
 - 多样化步骤完全确定、受 deadline 约束，并具有独立版本和可审计 drop reason。
 
-### P1：增加自适应分块与只读预览诊断
+### 2.6 P1：增加自适应分块与只读预览诊断
 
 Rag_Demo 当前已经保留 Markdown heading block 和 PDF page block，不能简单描述为“完全不感知结构”；差距在于 block 内仍固定按 token 窗口切分，没有基于文档画像选择 heading/heuristic/fallback，也没有分块结果质量诊断。
 
@@ -217,7 +240,7 @@ Rag_Demo 当前已经保留 Markdown heading block 和 PDF page block，不能�
 
 验收数据应包含 Markdown 文档、扫描 PDF、长叙述文本、表格、代码块、中英混合与 OCR 碎行。除端到端指标外，还要检查字符覆盖、顺序、重复率、parent-child 包含关系和 chunk size 分布。
 
-### P1：增加受控的低召回 query expansion
+### 2.7 P1：增加受控的低召回查询扩展
 
 Rag_Demo 的 `QueryRewriter` 只在规则识别为追问时拼接有限数量的历史**用户**问题，安全边界清晰，但它不会生成同义词、缩写展开、关键词变体，也没有意图分类。建议在初次召回不足时生成少量本地变体并并发检索；LLM/VLM 自包含改写和意图判断保持为可选能力。
 
@@ -230,7 +253,7 @@ Rag_Demo 的 `QueryRewriter` 只在规则识别为追问时拼接有限数量的
 
 LLM rewrite/intent 可以作为后续 feature flag，但不要采用未经约束的完整历史策略。继续禁止把未验证的 assistant 输出拼入检索 query；模型输出必须结构化校验、经过 injection 检查，并有失败回退、成本上限和独立评估。
 
-### P1：支持请求级检索范围与元数据过滤
+### 2.8 P1：支持请求级检索范围与元数据过滤
 
 当前一个 Rag_Demo retrieval profile 对应一个整体 corpus，问答 API 没有一等公民的文档范围。随着文档增加，用户很难表达“只查这几份文件”，也无法从检索层保证范围隔离。建议逐步支持 KB、文档、tag 等 scope。
 
@@ -243,7 +266,7 @@ LLM rewrite/intent 可以作为后续 feature flag，但不要采用未经约束
 
 验收要求 scope leakage 为 0，并覆盖 Dense/BM25 单路降级、缓存命中、重排和旧 revision 场景。
 
-### P2：按语料需求扩展解析、多模态、FAQ 和图谱
+### 2.9 P2：按语料需求扩展解析、多模态、FAQ 和图谱
 
 以下扩展能力不应排在检索正确性之前：
 
@@ -253,7 +276,7 @@ LLM rewrite/intent 可以作为后续 feature flag，但不要采用未经约束
 - **Knowledge Graph**：仅在实体关系或 multi-hop 数据集证明 chunk RAG 明显不足时引入；图谱命中最终仍要回到可引用 source chunk，不能把未溯源的图节点直接当事实。
 - **可插拔向量存储与多 worker**：当单进程 SQLite/Chroma 的容量或吞吐数据确实不达标时，再抽象外部 vector store、任务队列和分布式锁；不要仅为功能对齐而增加运维复杂度。
 
-### 不建议重复建设的部分
+### 2.10 不建议重复建设的部分
 
 - 不重写现有 weighted RRF、BGE reranker 和 parent-child 主干；先修复窗口选择并做消融实验。
 - 不因存在更多模型/向量库选项，就扩大当前 MVP 的 provider surface；这会显著增加组合测试和故障模式。
@@ -261,7 +284,7 @@ LLM rewrite/intent 可以作为后续 feature flag，但不要采用未经约束
 - 不默认引入 web search、Agent tool loop、tenant/RBAC 或完整 Wiki 系统；它们不是当前文档 RAG 正确性的前置条件。
 - 不直接采用重排阈值自动下调。Rag_Demo 当前是证据优先、低置信拒答语义，阈值降级必须证明不会降低拒答适当性。
 
-### 推荐实施顺序
+### 2.11 推荐实施顺序
 
 1. **正确性阶段**：hit-anchored parent window、相关 schema/identity 版本和尾部命中回归集。
 2. **上下文质量阶段**：结构增强 `index_text`、近重复抑制、MMR/source diversity 和诊断字段。

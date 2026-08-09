@@ -23,7 +23,12 @@ from rag_mvp.storage.layout import DataLayout
 
 
 def _dataset_root() -> Path:
-    return Path(__file__).resolve().parents[3] / "evaluations" / "datasets" / "mvp-v1"
+    return (
+        Path(__file__).resolve().parents[3]
+        / "evaluations"
+        / "datasets"
+        / "acceptance-v2"
+    )
 
 
 @pytest.mark.asyncio

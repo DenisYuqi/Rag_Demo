@@ -1,0 +1,106 @@
+{
+  "content_checks": {
+    "issues": [],
+    "passed": true
+  },
+  "files": [
+    {
+      "bytes": 237800,
+      "path": "evidence/cache-comparison.json",
+      "sha256": "sha256:f458c75344b74071bb40b5de2f2f7a3a77766ff74be971ad5ff0a2b2fdd0741b"
+    },
+    {
+      "bytes": 6166,
+      "path": "evidence/issue-diagnosis.json",
+      "sha256": "sha256:44330c7aeb94f0c5753aac4b5885149ada234d3ab01753adb952151e110e65d7"
+    },
+    {
+      "bytes": 1222,
+      "path": "evidence/issue-diagnosis.md",
+      "sha256": "sha256:5df759e132fff387051d7cbd9da4ddabde527bd75a29cc7d66c6681cc39444e8"
+    },
+    {
+      "bytes": 623218,
+      "path": "evidence/model-comparison.json",
+      "sha256": "sha256:4adf73d346fbda73354f2b6640264825b550d6d22e6ca17c67268a84db447267"
+    },
+    {
+      "bytes": 401260,
+      "path": "evidence/performance-100.json",
+      "sha256": "sha256:e2daf73f4f45b287f5650c4e09b77a195f2d5eec81427d6a980ce7c98fc06b98"
+    },
+    {
+      "bytes": 120108,
+      "path": "evidence/quality-report.json",
+      "sha256": "sha256:319afad3d2773a7f556d1c20563783c2a86f54ebb3fa850b9ffc0e5403d66c12"
+    },
+    {
+      "bytes": 899157,
+      "path": "evidence/retrieval-reranker-comparison.json",
+      "sha256": "sha256:666e2d39eadd6a569fcc51816aa711e23b3ae1a00566d1cf43a251f8bf3c7738"
+    },
+    {
+      "bytes": 11040,
+      "path": "evidence/structured-log-field-dictionary.json",
+      "sha256": "sha256:8817eb7b450f43f0812983bb471fd6e8bdf79072fd77bf06eb83712008015cbd"
+    },
+    {
+      "bytes": 2123,
+      "path": "evidence/structured-log-sample.jsonl",
+      "sha256": "sha256:3afdef6c622b0be2f5dbc616f0a2deaf32849964d07c6206d135e5bf7c5e8326"
+    },
+    {
+      "bytes": 486,
+      "path": "implementation-evidence.md",
+      "sha256": "sha256:88f918def667bde8bdd580db5a1179652846d7ec98091136fb2bbeb01bf3095d"
+    },
+    {
+      "bytes": 467,
+      "path": "limitations.md",
+      "sha256": "sha256:ff30fca84f0acbe86e6217d4d20bc6b8295c37fdfa050ad1278cf418cefe94a8"
+    },
+    {
+      "bytes": 4947,
+      "path": "operations-cost.json",
+      "sha256": "sha256:e28f5cab9a43e8938cef2c1a8c20b9173668ce9bb520e9f5ec2b3c07e697fe62"
+    },
+    {
+      "bytes": 1543,
+      "path": "operations-cost.md",
+      "sha256": "sha256:53d60cadd732960c8b8a49d928782a75975b41aa7cae305ec2ab0346535f3ef6"
+    },
+    {
+      "bytes": 4083,
+      "path": "pdf-crosswalk.json",
+      "sha256": "sha256:7e350137841350e9c36e05ab45fdf403b7ab0b4b75c02c52e825b2a36b21cde2"
+    },
+    {
+      "bytes": 2131,
+      "path": "pdf-crosswalk.md",
+      "sha256": "sha256:7fcb044627e0a2d23ecba04f0e973e932a7fced8f40f531c8c4ca51729c97397"
+    },
+    {
+      "bytes": 970,
+      "path": "reproduce.md",
+      "sha256": "sha256:c9dda8e77604b545b86d1be5aa6b748e3595c0d7e7945d018582eec0de04b079"
+    },
+    {
+      "bytes": 3235,
+      "path": "selected-configuration.json",
+      "sha256": "sha256:524d7965a7d9d4378750f8784e688f3ab4c76b7ad19eb8cbb80a9188bc64450e"
+    },
+    {
+      "bytes": 5246,
+      "path": "summary.json",
+      "sha256": "sha256:db6737d085db960a62625fa1daa3601f43c5f99deba2754e786960c3ff0b1485"
+    },
+    {
+      "bytes": 166,
+      "path": "summary.md",
+      "sha256": "sha256:fa7c562dbc395373d623a0eb6050db8c9c32a1c93852a7604fe1e850702a06d7"
+    }
+  ],
+  "generated_at": "2026-08-09T13:13:22.860218Z",
+  "schema_version": "rag-mvp-release-v2",
+  "status": "accepted"
+}

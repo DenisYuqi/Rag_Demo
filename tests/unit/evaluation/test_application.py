@@ -234,7 +234,7 @@ async def test_catalog_queue_duplicate_capacity_and_missing_evidence_state(
     assert all(item.maximum_provider_calls >= item.maximum_logical_calls for item in plans)
     assert all(item.cost_estimate_status == "unavailable" for item in plans)
 
-    queued = await service.start("mvp-bilingual-rag", "1.0.0")
+    queued = await service.start("original-pdf-acceptance", "2.0.0")
     await executor.entered.wait()
     assert queued.status is EvaluationRunStatus.QUEUED
     persisted_plan = EvaluationRunner(repository, tmp_path / "runs", None).load_plan(queued.run_id)
@@ -244,9 +244,9 @@ async def test_catalog_queue_duplicate_capacity_and_missing_evidence_state(
     )
 
     with pytest.raises(EvaluationConflictError, match="evaluation_duplicate"):
-        await service.start("mvp-bilingual-rag", "1.0.0")
-    with pytest.raises(EvaluationCapacityError, match="evaluation_capacity"):
         await service.start("original-pdf-acceptance", "2.0.0")
+    with pytest.raises(EvaluationCapacityError, match="evaluation_capacity"):
+        await service.start("mvp-bilingual-rag", "1.0.0")
 
     executor.release.set()
     completed = await service.wait(queued.run_id)
@@ -263,7 +263,10 @@ async def test_catalog_queue_duplicate_capacity_and_missing_evidence_state(
 async def test_restart_reconciles_stale_run_without_reusing_it(tmp_path: Path) -> None:
     repository = MemoryRunRepository()
     settings = _settings(tmp_path)
-    dataset = EvaluationDatasetRegistry(_DATASETS).resolve("mvp-bilingual-rag", "1.0.0")
+    dataset = EvaluationDatasetRegistry(_DATASETS).resolve(
+        "original-pdf-acceptance",
+        "2.0.0",
+    )
     plan = build_evaluation_plan(dataset, settings, "stale_run")
     runner = EvaluationRunner(repository, tmp_path / "runs", None)
     runner.queue(plan)
@@ -287,7 +290,7 @@ async def test_close_cancels_after_own_grace_and_persists_interruption(tmp_path:
     executor = BlockingJobExecutor(repository, tmp_path / "runs")
     service = _service(tmp_path, repository, executor, shutdown_grace=0)
     await service.startup()
-    queued = await service.start("mvp-bilingual-rag", "1.0.0")
+    queued = await service.start("original-pdf-acceptance", "2.0.0")
     await executor.entered.wait()
 
     await service.close()
@@ -305,7 +308,7 @@ async def test_post_case_report_failure_cannot_remain_completed(tmp_path: Path) 
     service = _service(tmp_path, repository, executor)
     await service.startup()
 
-    queued = await service.start("mvp-bilingual-rag", "1.0.0")
+    queued = await service.start("original-pdf-acceptance", "2.0.0")
     failed = await service.wait(queued.run_id)
 
     assert failed is not None
@@ -430,7 +433,7 @@ async def test_failed_case_diagnostics_are_allowlisted_and_tagged(tmp_path: Path
     executor.release.set()
     service = _service(tmp_path, repository, executor)
     await service.startup()
-    queued = await service.start("mvp-bilingual-rag", "1.0.0")
+    queued = await service.start("original-pdf-acceptance", "2.0.0")
     await service.wait(queued.run_id)
 
     cases = service.failed_cases(queued.run_id)
@@ -463,7 +466,10 @@ def test_production_plan_identity_uses_exact_isolated_runtime_without_online_ind
         redactor=DEFAULT_REDACTOR,
     )
     isolated = executor.isolated_settings("identity_run")
-    dataset = EvaluationDatasetRegistry(_DATASETS).resolve("mvp-bilingual-rag", "1.0.0")
+    dataset = EvaluationDatasetRegistry(_DATASETS).resolve(
+        "original-pdf-acceptance",
+        "2.0.0",
+    )
     plan = build_evaluation_plan(dataset, isolated, "identity_run")
 
     assert plan.identity.configuration_id == isolated.evaluation_configuration_identity

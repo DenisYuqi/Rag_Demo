@@ -1,0 +1,130 @@
+{
+  "requirements": [
+    {
+      "denominator": "100 requests",
+      "evidence": "summary.json#/gates/performance",
+      "limitation": null,
+      "requirement_id": "performance",
+      "status": "complete"
+    },
+    {
+      "denominator": "per 1,000 requests",
+      "evidence": "operations-cost.json",
+      "limitation": null,
+      "requirement_id": "cost",
+      "status": "complete"
+    },
+    {
+      "denominator": "quality denominators",
+      "evidence": "summary.json#/gates/quality",
+      "limitation": null,
+      "requirement_id": "rag-quality",
+      "status": "complete"
+    },
+    {
+      "denominator": "packaged samples and 100 attempts",
+      "evidence": "evidence/structured-log-sample.jsonl",
+      "limitation": null,
+      "requirement_id": "logging-tracing",
+      "status": "complete"
+    },
+    {
+      "denominator": "quality safety cases and packaged content scan",
+      "evidence": "evidence/quality-report.json",
+      "limitation": null,
+      "requirement_id": "security",
+      "status": "complete"
+    },
+    {
+      "denominator": "comparison",
+      "evidence": "evidence/retrieval-reranker-comparison.json",
+      "limitation": "The historical three-mode retrieval comparison uses OpenAI embeddings and reranking, so it demonstrates the required alternatives but does not substitute for the selected BGE profile quality gate.",
+      "requirement_id": "vector-and-hybrid",
+      "status": "complete"
+    },
+    {
+      "denominator": "configuration",
+      "evidence": "selected-configuration.json",
+      "limitation": null,
+      "requirement_id": "reranker-toggle",
+      "status": "complete"
+    },
+    {
+      "denominator": "refusal denominator",
+      "evidence": "summary.json#/gates/quality",
+      "limitation": null,
+      "requirement_id": "refusal-safety",
+      "status": "complete"
+    },
+    {
+      "denominator": "all packaged text",
+      "evidence": "manifest.json#/content_checks",
+      "limitation": null,
+      "requirement_id": "privacy",
+      "status": "complete"
+    },
+    {
+      "denominator": "100 requests",
+      "evidence": "operations-cost.md",
+      "limitation": null,
+      "requirement_id": "operations-report",
+      "status": "complete"
+    },
+    {
+      "denominator": "comparison",
+      "evidence": "evidence/retrieval-reranker-comparison.json",
+      "limitation": "The historical three-mode retrieval comparison uses OpenAI embeddings and reranking, so it demonstrates the required alternatives but does not substitute for the selected BGE profile quality gate.",
+      "requirement_id": "three-retrieval-configurations",
+      "status": "complete"
+    },
+    {
+      "denominator": "repository seams",
+      "evidence": "implementation-evidence.md",
+      "limitation": null,
+      "requirement_id": "evolvability",
+      "status": "complete"
+    },
+    {
+      "denominator": "quality denominators",
+      "evidence": "summary.json#/gates/quality",
+      "limitation": null,
+      "requirement_id": "advanced-generative-quality",
+      "status": "complete"
+    },
+    {
+      "denominator": "two issues",
+      "evidence": "evidence/issue-diagnosis.json",
+      "limitation": null,
+      "requirement_id": "two-issue-diagnosis",
+      "status": "complete"
+    },
+    {
+      "denominator": "repository",
+      "evidence": "implementation-evidence.md",
+      "limitation": null,
+      "requirement_id": "complete-code-configs",
+      "status": "complete"
+    },
+    {
+      "denominator": "one command",
+      "evidence": "reproduce.md",
+      "limitation": null,
+      "requirement_id": "one-click-evaluation",
+      "status": "complete"
+    },
+    {
+      "denominator": "two comparisons",
+      "evidence": "evidence/issue-diagnosis.md",
+      "limitation": null,
+      "requirement_id": "before-after-report",
+      "status": "complete"
+    },
+    {
+      "denominator": "field dictionary and samples",
+      "evidence": "evidence/structured-log-field-dictionary.json",
+      "limitation": null,
+      "requirement_id": "log-dictionary-samples",
+      "status": "complete"
+    }
+  ]
+}

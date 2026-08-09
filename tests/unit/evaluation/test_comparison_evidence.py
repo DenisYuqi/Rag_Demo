@@ -78,7 +78,11 @@ def _run_fixture():
         "original-pdf-acceptance",
         "2.0.0",
     )
-    source_plan = build_evaluation_plan(dataset, Settings(), "candidate-run-1")
+    source_plan = build_evaluation_plan(
+        dataset,
+        Settings(_env_file=None),
+        "candidate-run-1",
+    )
     pricing_version = _plan().pricing.pricing_version
     evaluation_plan = source_plan.model_copy(
         update={

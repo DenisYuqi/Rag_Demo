@@ -1,0 +1,140 @@
+{
+  "accepted": true,
+  "configuration_id": "8ddda8354b9e56ec",
+  "content_safety_passed": true,
+  "gates": {
+    "cost": {
+      "passed": true
+    },
+    "performance": {
+      "configured_concurrency": 5,
+      "failures": 0,
+      "gates": {
+        "all_attempt_p90_at_most_10s": true,
+        "at_least_90_successful_within_10s": true,
+        "cache_bypassed": true,
+        "configured_concurrency_five": true,
+        "exactly_100_logical_requests": true,
+        "exactly_100_measured": true,
+        "observed_concurrency_at_least_five": true,
+        "one_instance": true
+      },
+      "instance_count": 1,
+      "instance_identity_count": 1,
+      "latency_ms": {
+        "p50": 2748.0203000013717,
+        "p90": 4343.22159999283,
+        "p95": 4519.4246000028215
+      },
+      "measured_requests": 100,
+      "observed_concurrency": 5,
+      "passed": true,
+      "successes": 100,
+      "successful_within_10s": 100,
+      "timeouts": 0
+    },
+    "quality": {
+      "metrics": {
+        "answer-compliance": {
+          "denominator": 18,
+          "passed": true,
+          "threshold": "0.90",
+          "value": "1.0"
+        },
+        "context-precision": {
+          "denominator": 18,
+          "passed": true,
+          "threshold": "0.70",
+          "value": "0.9444444443499999"
+        },
+        "faithfulness": {
+          "denominator": 18,
+          "passed": true,
+          "threshold": "0.85",
+          "value": "1.0"
+        },
+        "refusal-appropriateness": {
+          "denominator": 24,
+          "passed": true,
+          "threshold": "0.90",
+          "value": "0.9166666666666666"
+        },
+        "style-consistency": {
+          "denominator": 24,
+          "passed": true,
+          "threshold": "0.85",
+          "value": "1.0"
+        }
+      },
+      "passed": true
+    },
+    "source_compatibility": {
+      "passed": true
+    },
+    "supporting_evidence": {
+      "passed": true
+    }
+  },
+  "incomplete_non_blocking": [
+    {
+      "kind": "model",
+      "limitation": "The historical generation-model comparison uses the OpenAI retrieval profile; its GPT-5.4 generation trade-off is directional evidence and the passing BGE quality report remains authoritative for the selected profile.",
+      "status": "partial"
+    },
+    {
+      "kind": "retrieval",
+      "limitation": "The historical three-mode retrieval comparison uses OpenAI embeddings and reranking, so it demonstrates the required alternatives but does not substitute for the selected BGE profile quality gate.",
+      "status": "partial"
+    },
+    {
+      "kind": "cache",
+      "limitation": "The historical cache comparison has incomplete paired candidate evidence and no recommendation; official performance traffic therefore bypasses cache and no cache benefit is claimed.",
+      "status": "partial"
+    }
+  ],
+  "limitations": [
+    "The 100-request single-instance sample is MVP evidence and is not a production capacity guarantee.",
+    "The local BGE cost uses a declared USD 0.50 per GPU-hour workstation allocation rate and the measured load duration.",
+    "Historical comparison reports are partial cross-profile supporting evidence and are not used for mandatory quality, performance, or cost gates.",
+    "Evaluation-only judge cost is unavailable and is not represented as zero."
+  ],
+  "schema_version": "rag-mvp-release-v2",
+  "source_evidence": [
+    {
+      "compatibility_status": "exact",
+      "kind": "quality",
+      "sha256": "sha256:319afad3d2773a7f556d1c20563783c2a86f54ebb3fa850b9ffc0e5403d66c12",
+      "source_id": "standard-evaluation-v2"
+    },
+    {
+      "compatibility_status": "partial",
+      "kind": "model",
+      "limitation": "The historical generation-model comparison uses the OpenAI retrieval profile; its GPT-5.4 generation trade-off is directional evidence and the passing BGE quality report remains authoritative for the selected profile.",
+      "sha256": "sha256:4adf73d346fbda73354f2b6640264825b550d6d22e6ca17c67268a84db447267",
+      "source_id": "comparison_64fefafcac1d4f29aa5c64d74532cff2"
+    },
+    {
+      "compatibility_status": "partial",
+      "kind": "retrieval",
+      "limitation": "The historical three-mode retrieval comparison uses OpenAI embeddings and reranking, so it demonstrates the required alternatives but does not substitute for the selected BGE profile quality gate.",
+      "sha256": "sha256:666e2d39eadd6a569fcc51816aa711e23b3ae1a00566d1cf43a251f8bf3c7738",
+      "source_id": "comparison_ea683e2348374722841303dee9116d7e"
+    },
+    {
+      "compatibility_status": "partial",
+      "kind": "cache",
+      "limitation": "The historical cache comparison has incomplete paired candidate evidence and no recommendation; official performance traffic therefore bypasses cache and no cache benefit is claimed.",
+      "sha256": "sha256:f458c75344b74071bb40b5de2f2f7a3a77766ff74be971ad5ff0a2b2fdd0741b",
+      "source_id": "comparison_63289a35abe34e1da4aa09ee255d11ea"
+    }
+  ],
+  "supporting_evidence": {
+    "cache_comparison": true,
+    "implementation_documentation": true,
+    "model_comparison": true,
+    "one_command_reproduction": true,
+    "retrieval_comparison": true,
+    "structured_logs": true,
+    "two_issue_diagnosis": true
+  }
+}

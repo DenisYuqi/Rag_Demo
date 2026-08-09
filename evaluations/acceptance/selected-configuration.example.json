@@ -1,8 +1,27 @@
 {
-  "configuration_id": "replace-with-compatible-report-configuration-id",
+  "configuration_id": "replace-with-current-functional-configuration-id",
+  "runtime_configuration_id": "replace-with-readyz-configuration-id",
+  "source_configuration_ids": {
+    "quality": "replace-with-compatible-quality-report-configuration-id"
+  },
+  "comparison_compatibility": {
+    "model": {
+      "status": "partial",
+      "limitation": "Declare any historical revision or profile difference precisely."
+    },
+    "retrieval": {
+      "status": "partial",
+      "limitation": "Declare any historical revision or profile difference precisely."
+    },
+    "cache": {
+      "status": "partial",
+      "limitation": "Declare missing paired evidence or recommendation state precisely."
+    }
+  },
   "cost": {
     "local": {
       "allocation_duration_seconds": "60",
+      "allocation_duration_source": "measured-load-duration",
       "currency": "USD",
       "hardware": "replace-with-measured-bge-hardware",
       "hourly_rate": "0.50"

@@ -565,6 +565,15 @@ def create_app(
             configured_workbench_services,
         )
 
+        effective_profile_services = dict(workbench_profile_services or {})
+        default_profile_services = effective_profile_services.get(
+            resolved_settings.default_retrieval_profile
+        )
+        if runtime.qa_services is not None and default_profile_services is not None:
+            effective_profile_services[resolved_settings.default_retrieval_profile] = (
+                runtime.qa_services,
+                default_profile_services[1],
+            )
         diagnostics_gateway = (
             RuntimeDiagnosticsGateway(diagnostics_service, runtime.readiness.report)
             if diagnostics_service is not None
@@ -581,7 +590,7 @@ def create_app(
                 runtime.evaluation_profile_services,
             ),
             redactor=redactor,
-            profile_services=workbench_profile_services,
+            profile_services=effective_profile_services,
         )
 
     @asynccontextmanager
@@ -727,7 +736,13 @@ def create_executable_app(settings: Settings | None = None) -> FastAPI:
     ):
         from rag_mvp.api.composition import compose_bge_services, compose_openai_services
 
-        layout = DataLayout.from_root(resolved_settings.data_root)
+        selected_profile = resolved_settings.default_retrieval_profile
+        selected_data_root = (
+            resolved_settings.resolved_bge_data_root
+            if selected_profile == "bge-local"
+            else resolved_settings.data_root
+        )
+        layout = DataLayout.from_root(selected_data_root)
         try:
             layout.initialize()
         except OSError:
@@ -735,37 +750,48 @@ def create_executable_app(settings: Settings | None = None) -> FastAPI:
         writer_lock = DataRootWriterLock(layout.writer_lock)
         writer_lock.acquire()
         try:
-            composition = compose_openai_services(resolved_settings, DEFAULT_REDACTOR)
+            openai = compose_openai_services(resolved_settings, DEFAULT_REDACTOR)
+            composition = openai
             profile_services = {
-                "openai-api": (composition.qa, composition.ingestion),
+                "openai-api": (openai.qa, openai.ingestion),
             }
             profile_evaluations = {
-                "openai-api": composition.evaluation,
+                "openai-api": openai.evaluation,
             }
             if resolved_settings.bge_profile_enabled:
                 bge = compose_bge_services(resolved_settings, DEFAULT_REDACTOR)
-                main_close = composition.qa.close_callback
+                composition = bge if selected_profile == "bge-local" else openai
+                secondary = openai if composition is bge else bge
+                selected_close = composition.qa.close_callback
+                secondary_close = secondary.qa.close_callback
 
                 async def close_all_profiles() -> None:
                     try:
-                        await bge.qa.close()
+                        if secondary_close is not None:
+                            await secondary_close()
                     finally:
                         try:
-                            await asyncio.to_thread(bge.ingestion.close)
+                            await asyncio.to_thread(secondary.ingestion.close)
                         finally:
-                            if main_close is not None:
-                                await main_close()
+                            if selected_close is not None:
+                                await selected_close()
 
                 composition = replace(
                     composition,
                     qa=replace(composition.qa, close_callback=close_all_profiles),
                 )
                 profile_services = {
-                    "openai-api": (composition.qa, composition.ingestion),
-                    "bge-local": (bge.qa, bge.ingestion),
+                    "openai-api": (
+                        composition.qa if selected_profile == "openai-api" else openai.qa,
+                        openai.ingestion,
+                    ),
+                    "bge-local": (
+                        composition.qa if selected_profile == "bge-local" else bge.qa,
+                        bge.ingestion,
+                    ),
                 }
                 profile_evaluations = {
-                    "openai-api": composition.evaluation,
+                    "openai-api": openai.evaluation,
                     "bge-local": bge.evaluation,
                 }
             available_evaluations = {
@@ -773,8 +799,16 @@ def create_executable_app(settings: Settings | None = None) -> FastAPI:
                 for profile_id, service in profile_evaluations.items()
                 if service is not None
             }
+            runtime_settings = resolved_settings
+            if selected_profile == "bge-local":
+                runtime_settings = resolved_settings.bge_profile_settings().model_copy(
+                    update={
+                        "workbench_enabled": resolved_settings.workbench_enabled,
+                        "workbench_path": resolved_settings.workbench_path,
+                    }
+                )
             return create_app(
-                resolved_settings,
+                runtime_settings,
                 ingestion_service=composition.ingestion,
                 owns_ingestion_service=True,
                 qa_services=composition.qa,

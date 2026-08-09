@@ -561,6 +561,8 @@ def _matching_revision(key: EvaluationIndexReuseKey) -> IndexRevision:
         dense_index_path="indexes/dense",
         lexical_index_path="indexes/lexical.json",
         chunk_count=key.chunk_count,
+        parent_chunk_count=key.parent_chunk_count,
+        parent_chunk_set_digest=key.parent_chunk_set_digest,
         dense_schema_version=str(index["dense_schema_version"]),
         dense_metric=str(index["dense_metric"]),
         lexical_schema_version=str(index["lexical_schema_version"]),

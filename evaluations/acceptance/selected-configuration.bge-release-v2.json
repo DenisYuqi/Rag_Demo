@@ -1,0 +1,61 @@
+{
+  "schema_version": "mvp-selected-configuration-v1",
+  "configuration_id": "8ddda8354b9e56ec",
+  "runtime_configuration_id": "756f75e0829adc51",
+  "source_configuration_ids": {
+    "quality": "a08612c63747bc7b"
+  },
+  "comparison_compatibility": {
+    "model": {
+      "status": "partial",
+      "limitation": "The historical generation-model comparison uses the OpenAI retrieval profile; its GPT-5.4 generation trade-off is directional evidence and the passing BGE quality report remains authoritative for the selected profile."
+    },
+    "retrieval": {
+      "status": "partial",
+      "limitation": "The historical three-mode retrieval comparison uses OpenAI embeddings and reranking, so it demonstrates the required alternatives but does not substitute for the selected BGE profile quality gate."
+    },
+    "cache": {
+      "status": "partial",
+      "limitation": "The historical cache comparison has incomplete paired candidate evidence and no recommendation; official performance traffic therefore bypasses cache and no cache benefit is claimed."
+    }
+  },
+  "profile": "bge-local",
+  "retrieval_mode": "hybrid-rerank",
+  "dataset_id": "original-pdf-acceptance",
+  "scorer_contract": "rag-advanced-quality-thresholds-v2",
+  "models": {
+    "embedding": "BAAI/bge-m3",
+    "reranking": "BAAI/bge-reranker-v2-m3",
+    "generation": "gpt-5.4"
+  },
+  "parent_child_strategy": "structure-page-parent-child-v1",
+  "selection_rationale": {
+    "model": "GPT-5.4 is retained because the selected BGE configuration passes every mandatory advanced bilingual quality gate; the historical model comparison supplies directional latency and cost trade-offs.",
+    "retrieval": "Hybrid parent-child retrieval combines bilingual semantic recall with exact-identifier lexical matching and returns bounded parent context.",
+    "reranker": "The local BGE cross-encoder is enabled in the passing selected configuration to improve top-context ordering after hybrid candidate fusion.",
+    "cache": "Official performance traffic bypasses retrieval cache for attributable measurements; no cache-performance benefit is claimed because historical paired cache evidence is incomplete."
+  },
+  "cost": {
+    "remote": {
+      "currency": "USD",
+      "input_per_million": "2.50",
+      "output_per_million": "15.00",
+      "maximum_input_tokens": 4000,
+      "maximum_output_tokens": 512,
+      "pricing_source": "evaluations/pricing/openai-standard-2026-08-07.json"
+    },
+    "local": {
+      "currency": "USD",
+      "hardware": "NVIDIA RTX 2000 Ada Generation Laptop GPU (8 GiB), declared workstation allocation",
+      "hourly_rate": "0.50",
+      "allocation_duration_seconds": "300",
+      "allocation_duration_source": "measured-load-duration"
+    }
+  },
+  "limitations": [
+    "The 100-request single-instance sample is MVP evidence and is not a production capacity guarantee.",
+    "The local BGE cost uses a declared USD 0.50 per GPU-hour workstation allocation rate and the measured load duration.",
+    "Historical comparison reports are partial cross-profile supporting evidence and are not used for mandatory quality, performance, or cost gates.",
+    "Evaluation-only judge cost is unavailable and is not represented as zero."
+  ]
+}

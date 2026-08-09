@@ -11,6 +11,7 @@ from rag_mvp.config.settings import Settings
 from rag_mvp.safety.redactor import Redactor
 from rag_mvp.storage.layout import DataLayout
 from rag_mvp.storage.writer_lock import DataRootWriterLock, DataRootWriterLockError
+from rag_mvp.ui.services import SharedQAGateway
 
 
 def test_healthz_is_live_even_when_provider_is_unready(tmp_path: Path) -> None:
@@ -154,6 +155,41 @@ def test_configured_executable_can_disable_local_profile(tmp_path: Path) -> None
         assert services is not None
         assert services.retrieval_profile_ids == ("openai-api",)
         assert not (tmp_path / "profiles" / "bge-local").exists()
+
+
+def test_configured_executable_binds_http_qa_to_default_bge_profile(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        data_root=tmp_path,
+        provider_backend="openai",
+        openai_api_key="test-key",
+        openai_send_dimensions=False,
+        openai_max_tokens_parameter="max_tokens",
+        default_retrieval_profile="bge-local",
+        _env_file=None,
+    )
+    app = create_executable_app(settings)
+
+    with TestClient(app, raise_server_exceptions=False):
+        runtime = app.state.runtime
+        services = runtime.workbench_services
+        assert services is not None
+        bge_chat = services.chat_for("bge-local")
+        assert isinstance(bge_chat, SharedQAGateway)
+        assert bge_chat.services is runtime.qa_services
+        assert runtime.ingestion_service is not None
+        assert runtime.ingestion_service.data_root == settings.resolved_bge_data_root
+        expected_runtime_settings = settings.bge_profile_settings().model_copy(
+            update={
+                "workbench_enabled": settings.workbench_enabled,
+                "workbench_path": settings.workbench_path,
+            }
+        )
+        assert (
+            runtime.settings.configuration_identity
+            == expected_runtime_settings.configuration_identity
+        )
 
 
 def test_configured_executable_stays_live_when_storage_is_not_writable(

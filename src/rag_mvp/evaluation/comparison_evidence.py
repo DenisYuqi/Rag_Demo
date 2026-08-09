@@ -526,6 +526,7 @@ def _validate_scorecard_versions(
         "scoring-pipeline": scorecard.legacy.scoring_version,
         "quality-gate": scorecard.legacy.quality_gate.version,
         "advanced-quality-gate": scorecard.gate.profile_version,
+        "evaluation-backend": "legacy-v1",
         "faithfulness-text-matcher": TEXT_SUPPORT_MATCHER_VERSION,
         "faithfulness-text-normalization": TEXT_SUPPORT_NORMALIZATION_VERSION,
     }
