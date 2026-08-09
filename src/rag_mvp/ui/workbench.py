@@ -454,7 +454,7 @@ def create_workbench(
                     with gr.Tab(
                         "Compare / 对比",
                         id="evaluation-compare-tab",
-                        visible=True,
+                        visible=False,
                     ) as comparison_tab:
                         comparison_timer = gr.Timer(
                             value=2.0,
