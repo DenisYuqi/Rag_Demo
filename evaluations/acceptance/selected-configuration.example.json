@@ -1,0 +1,41 @@
+{
+  "configuration_id": "replace-with-compatible-report-configuration-id",
+  "cost": {
+    "local": {
+      "allocation_duration_seconds": "60",
+      "currency": "USD",
+      "hardware": "replace-with-measured-bge-hardware",
+      "hourly_rate": "0.50"
+    },
+    "remote": {
+      "currency": "USD",
+      "input_per_million": "2.50",
+      "maximum_input_tokens": 4000,
+      "maximum_output_tokens": 512,
+      "output_per_million": "15.00",
+      "pricing_source": "evaluations/pricing/openai-standard-2026-08-07.json"
+    }
+  },
+  "dataset_id": "original-pdf-acceptance",
+  "limitations": [
+    "The 100-request sample is MVP evidence and is not a production capacity guarantee.",
+    "The local BGE cost is an allocation estimate based on the declared hardware hourly rate.",
+    "Evaluation-only judge cost is reported separately when available and is never assumed to be zero."
+  ],
+  "models": {
+    "embedding": "BAAI/bge-m3",
+    "generation": "gpt-5.4",
+    "reranking": "BAAI/bge-reranker-v2-m3"
+  },
+  "parent_child_strategy": "structure-page-parent-child-v1",
+  "profile": "bge-local",
+  "retrieval_mode": "hybrid-rerank",
+  "schema_version": "mvp-selected-configuration-v1",
+  "scorer_contract": "rag-advanced-quality-thresholds-v2",
+  "selection_rationale": {
+    "cache": "Normal serving may use compatible retrieval caching, while official performance traffic bypasses it so latency and usage remain attributable.",
+    "model": "The selected generation model passes the advanced bilingual gate; the source model comparison records its quality, latency, and cost trade-offs.",
+    "reranker": "The local cross-encoder improves top-context ordering; the source retrieval comparison records the measured effect and added latency.",
+    "retrieval": "Hybrid parent-child retrieval preserves bilingual semantic recall and exact-term matches while returning bounded parent context."
+  }
+}

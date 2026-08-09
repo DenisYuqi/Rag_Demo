@@ -55,6 +55,7 @@ dev = [
 
 [project.scripts]
 rag-mvp = "rag_mvp.__main__:main"
+rag-mvp-acceptance = "rag_mvp.acceptance:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/rag_mvp"]

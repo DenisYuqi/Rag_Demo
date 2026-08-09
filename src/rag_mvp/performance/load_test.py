@@ -75,6 +75,7 @@ class HttpLoadTestConfig(DomainModel):
     concurrency: Annotated[int, Field(gt=0, le=100)] = ACCEPTANCE_CONCURRENCY
     target_successes: Annotated[int, Field(gt=0)] = MINIMUM_SUCCESSFUL_REQUESTS
     max_attempts: Annotated[int, Field(gt=0)] | None = None
+    exact_measured_attempts: Annotated[int, Field(gt=0)] | None = None
     retry_limit: Annotated[int, Field(ge=0, le=20)] = DEFAULT_RETRY_LIMIT
     request_timeout_seconds: Annotated[float, Field(gt=0, le=120)] = DEFAULT_REQUEST_TIMEOUT_SECONDS
     instance_count: Annotated[int, Field(gt=0)] = 1
@@ -104,6 +105,11 @@ class HttpLoadTestConfig(DomainModel):
             raise ValueError("maximum attempts cannot be below the success target")
         if self.resolved_max_attempts < self.concurrency:
             raise ValueError("maximum attempts must allow the initial concurrent burst")
+        if self.exact_measured_attempts is not None:
+            if self.resolved_max_attempts != self.exact_measured_attempts:
+                raise ValueError("fixed-sample runs require maximum attempts to equal the sample")
+            if self.retry_limit != 0:
+                raise ValueError("fixed-sample runs do not permit transport retries")
         return self
 
     @property
@@ -505,7 +511,10 @@ class HttpLoadTestHarness:
             while True:
                 async with lock:
                     if (
-                        successes >= self._config.target_successes
+                        (
+                            self._config.exact_measured_attempts is None
+                            and successes >= self._config.target_successes
+                        )
                         or reserved_attempts >= self._config.resolved_max_attempts
                     ):
                         return
@@ -598,7 +607,7 @@ class HttpLoadTestHarness:
                 True,
                 request_id=request_id,
                 trace_id=trace_id,
-                instance_identity=None,
+                instance_identity=self._ready_instance_identity,
             )
         except httpx.TransportError:
             parsed = _failed_parse(
@@ -607,7 +616,7 @@ class HttpLoadTestHarness:
                 True,
                 request_id=request_id,
                 trace_id=trace_id,
-                instance_identity=None,
+                instance_identity=self._ready_instance_identity,
             )
         completed_at = datetime.now(UTC)
         return LoadAttempt(
@@ -635,7 +644,7 @@ class HttpLoadTestHarness:
             stage_timings_ms=parsed.stage_timings_ms,
             token_counts=parsed.token_counts,
             model_identities=parsed.model_identities,
-            cache_status=parsed.cache_status,
+            cache_status={**parsed.cache_status, "request-policy": self._config.cache_policy},
         )
 
     def _url(self, path: str) -> str:
