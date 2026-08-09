@@ -81,14 +81,14 @@ uv sync
 
 ### 3. 配置应用
 
-复制示例配置，并将密钥单独放入不会提交到 Git 的 `.env.local`：
+复制示例配置，所有本地配置（包括密钥）统一写入不会提交到 Git 的 `.env`：
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
 ```dotenv
-# .env.local
+# .env
 RAG_MVP_OPENAI_API_KEY=replace-with-your-key
 ```
 
@@ -102,7 +102,31 @@ RAG_MVP_EMBEDDING_DIMENSION=1536
 RAG_MVP_GENERATION_MODEL=gpt-4.1-mini
 ```
 
-`.env` 和 `.env.local` 已在 `.gitignore` 中忽略。生产或容器环境应使用密钥文件或平台的 Secret 管理能力，不要把凭据写入镜像、Compose 文件或仓库。
+`.env` 已在 `.gitignore` 中忽略。生产或容器环境应使用密钥文件或平台的 Secret 管理能力，不要把凭据写入镜像、Compose 文件或仓库。
+
+#### 可选：为 BGE 启用 CUDA 加速
+
+使用 `bge-local` 时，本地嵌入或重排在 CPU 上单次处理可能需要约 10 秒，实际耗时取决于
+文档长度和硬件。配备兼容 NVIDIA GPU 的 Windows 电脑可以在 `.env` 中启用 CUDA，以明显
+缩短这部分处理时间：
+
+```dotenv
+RAG_MVP_BGE_PROFILE_ENABLED=true
+RAG_MVP_BGE_DEVICE=cuda:0
+RAG_MVP_BGE_USE_FP16=true
+RAG_MVP_BGE_EMBEDDING_BATCH_SIZE=8
+RAG_MVP_BGE_RERANKING_BATCH_SIZE=8
+```
+
+保存后重启应用。可先用以下命令确认当前项目环境能够识别 CUDA：
+
+```powershell
+.\.venv\Scripts\python.exe -c "import torch; print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'none')"
+```
+
+输出 `True` 和 GPU 名称表示 CUDA 可用。若显存不足，应降低两个 batch size；非 NVIDIA GPU
+或不支持 CUDA 的环境请保持 `RAG_MVP_BGE_DEVICE=cpu` 和
+`RAG_MVP_BGE_USE_FP16=false`。完整安装和排错步骤见 [BGE CUDA 加速](docs/bge-cuda-acceleration.md)。
 
 ### 4. 启动
 

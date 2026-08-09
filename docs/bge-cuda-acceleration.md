@@ -64,11 +64,11 @@ uv lock --check
 
 CUDA 版 Torch 和运行库体积较大，第一次下载可能需要数分钟；中断后再次执行 `uv sync`
 会复用已完成的缓存。安装完成后重启应用，已经运行的 Python 进程不会自动切换到新 Torch
-或重新读取 `.env.local`。
+或重新读取 `.env`。
 
 ## 应用配置
 
-在本机 `.env.local` 中设置：
+在本机 `.env` 中设置：
 
 ```dotenv
 RAG_MVP_BGE_PROFILE_ENABLED=true

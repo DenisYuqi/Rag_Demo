@@ -164,6 +164,8 @@ async def test_bge_chat_is_blocked_until_required_models_are_ready() -> None:
     assert bge.submissions == []
     assert openai.submissions == []
     assert "1/2 (50%)" in blocked.status_markdown
+    assert "Each model is about 2.7 GB" in blocked.status_markdown
+    assert "单个模型约 2.7 GB，加载可能需要约 10 分钟" in blocked.status_markdown
     assert "Chat is disabled" in blocked.status_markdown
 
 

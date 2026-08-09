@@ -125,7 +125,9 @@ class WorkbenchCallbacks:
             message = (
                 f"**Model loading / 模型加载中:** {status.completed_steps}/{status.total_steps} "
                 f"({status.progress_percent}%) — `{step}`. "
-                "Chat is disabled until loading completes. / 加载完成前 Chat 不可用。"
+                "Each model is about 2.7 GB and may take around 10 minutes to load; "
+                "Chat is disabled until loading completes. / "
+                "单个模型约 2.7 GB，加载可能需要约 15 分钟；加载完成前 Chat 不可用。请不要离开。"
             )
             return ProfileLoadRender(message, ready=False, poll_active=True, visible=True)
         code = status.safe_error_code or "profile-model-load-failed"

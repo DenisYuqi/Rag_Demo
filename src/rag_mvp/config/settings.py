@@ -25,7 +25,7 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="RAG_MVP_",
-        env_file=(".env", ".env.local"),
+        env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",

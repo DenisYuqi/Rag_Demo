@@ -28,7 +28,7 @@ tesseract --list-langs
 Copy-Item .env.example .env
 ```
 
-启动前在 `.env.local` 中写入：
+启动前在 `.env` 中写入：
 
 ```dotenv
 RAG_MVP_OPENAI_API_KEY=replace-with-your-key
@@ -110,7 +110,7 @@ uv run pytest --cov=rag_mvp --cov-report=term-missing
 uv run pytest -m live tests/test_openai_live.py
 ```
 
-常规测试必须保持离线、确定性，并使用 fake 或受控 stub。不要让新测试因本机已有 `.env.local` 而意外访问网络；构造 `Settings` 时可使用 `_env_file=None` 并显式传入测试值。
+常规测试必须保持离线、确定性，并使用 fake 或受控 stub。不要让新测试因本机已有 `.env` 而意外访问网络；构造 `Settings` 时可使用 `_env_file=None` 并显式传入测试值。
 
 ## 静态质量检查
 
@@ -186,7 +186,7 @@ uv run python -m rag_mvp.safety.scan_artifacts --help
 
 ## 数据与索引注意事项
 
-- 本地 `data/`、`.env`、`.env.local`、缓存和虚拟环境已被 Git 忽略。
+- 本地 `data/`、`.env`、缓存和虚拟环境已被 Git 忽略。
 - 不要把真实业务文档、API 密钥或包含 PII 的日志复制到测试 fixture 或评测制品。
 - 修改分块、嵌入模型、维度或规范化逻辑后，用新修订完整重建索引。
 - 删除测试数据前确认目标是显式的临时目录；不要对未解析的数据根目录执行递归删除。
