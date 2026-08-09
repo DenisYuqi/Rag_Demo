@@ -16,6 +16,40 @@
 
 Python 3.12、FastAPI、Gradio、ChromaDB、SQLite、BM25、OpenAI-compatible API、FlagEmbedding/BGE、PyMuPDF、Tesseract、OpenTelemetry、Prometheus、pytest。
 
+## 界面预览
+
+### 证据引用式问答
+
+`openai-api` 检索配置：
+
+![OpenAI API 检索配置的引用式问答界面](docs/screenshots/openai-api-chat.png)
+
+`bge-local` 检索配置：
+
+![BGE 本地检索配置的引用式问答界面](docs/screenshots/bge-local-chat.png)
+
+### 文档摄取与索引管理
+
+![文档上传、摄取任务与活动索引管理界面](docs/screenshots/documents-upload.png)
+
+### 评测与运行证据
+
+评测数据集、执行计划与历史运行：
+
+![OpenAI API 评测运行界面](docs/screenshots/opeai-api-evaluations.png)
+
+OpenAI API 评测质量门禁与指标总览：
+
+![OpenAI API 评测结果总览](docs/screenshots/openai-api-evaluations-overview.png)
+
+OpenAI API 延迟、吞吐、Token 与成本分析：
+
+![OpenAI API 评测性能与成本分析](docs/screenshots/openai-api-evaluations-perf-cost.png)
+
+BGE 本地检索评测总览：
+
+![BGE 本地检索评测结果总览](docs/screenshots/bge-local-evaluations-overview.png)
+
 ## 快速开始
 
 ### 1. 准备环境
@@ -104,6 +138,39 @@ docker compose down
 
 不要在需要保留知识库数据时使用 `docker compose down --volumes`。详细生产化验证流程见[本地容器运行手册](docs/local-container-runbook.md)。
 
+## Azure Global 部署与费用
+
+> **发布状态：已完成测试，当前已停止。** 本项目已经在 Azure Global 的 Southeast Asia
+> 区域完成真实公网部署，并验证了 Docker Compose 启动、HTTPS、Basic Auth、工作台访问、
+> 健康检查和持久化数据卷。由于 Azure VM、Premium SSD 和静态公网 IP 会持续产生费用，
+> 测试完成后已停止服务并删除对应资源组及全部部署资源，因此此前的公网地址当前不可用。
+> 下列脚本和文档作为经过验证的可复现部署方案保留；再次部署会重新开始产生 Azure 费用。
+
+项目提供基于 Azure VM、Docker Compose 和 Caddy 的单机部署方案：
+
+- [Azure Global VM 完整部署文档](docs/deploy/azure-global-vm-deployment.zh-CN.md)
+- [部署脚本快速说明](deploy/azure-vm/README.md)
+
+该方案适合单实例 MVP，不是高可用架构。公网部署必须保留 HTTPS、身份认证、SSH 来源限制
+和密钥隔离；不要把 FastAPI/Gradio 端口直接暴露到 Internet。
+
+以下为 **2026-08-09** 查询 Azure Retail Prices API 得到的公开按量付费估算，口径为
+Azure Global、Southeast Asia、Linux、每月 730 小时、P10 Premium SSD 和一个 Standard
+静态 IPv4。价格为未折扣美元零售价，不包含税费、出站流量、快照/备份和
+OpenAI-compatible API 调用：
+
+| 方案 | VM 公开价 | VM/月 | 磁盘/月 | 公网 IP/月 | 基础设施合计/月 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| CPU：`Standard_D2as_v4`（2 vCPU / 8 GiB） | `$0.120/小时` | `$87.60` | `$19.71` | `$3.65` | **约 `$110.96`** |
+| GPU：`Standard_NC4as_T4_v3`（4 vCPU / 28 GiB / 1×T4 16 GB） | `$0.736/小时` | `$537.28` | `$19.71` | `$3.65` | **约 `$560.64`** |
+
+GPU 方案只是启用本地 BGE/CUDA 推理的代表性容量与费用参考，并非直接替换 VM 规格即可：
+还需要 NVIDIA 驱动、Container Toolkit、CUDA 镜像/依赖以及 `bge-local` 部署配置。GPU SKU
+还受区域供应和订阅配额限制。价格可通过
+[Azure Retail Prices API](https://learn.microsoft.com/en-us/rest/api/cost-management/retail-prices/azure-retail-prices)
+重新核对；`Standard_NC4as_T4_v3` 的硬件规格见
+[Azure NCasT4_v3 规格](https://learn.microsoft.com/en-us/azure/virtual-machines/sizes/gpu-accelerated/ncast4v3-series)。
+
 ## 常用开发命令
 
 ```powershell
@@ -121,7 +188,7 @@ uv run pytest tests/api tests/unit
 uv lock --check
 ```
 
-`tests/test_openai_live.py` 是显式选择的外部付费测试，常规测试不会自动调用它。更多说明见[开发指南](docs/development.md)。
+`tests/test_openai_live.py` 是显式选择的外部付费测试，常规测试不会自动调用它。更多说明见[开发指南](docs/deploy/development.md)。
 
 ## 项目结构
 
@@ -151,12 +218,15 @@ deploy/             部署脚本与平台配置
 | [系统架构](docs/architecture.md) | 组件边界、摄取与问答数据流、存储布局 |
 | [API 指南](docs/api.md) | 端点总览、上传、轮询和 NDJSON 问答示例 |
 | [配置指南](docs/configuration.md) | 配置加载、模型、检索、OCR、评测和可观测性 |
-| [开发指南](docs/development.md) | 本地环境、测试矩阵、质量检查和贡献约定 |
+| [开发指南](docs/deploy/development.md) | 本地环境、测试矩阵、质量检查和贡献约定 |
+| [改进路线（To Improve）](docs/to-improve.md) | Evidence Assessor 规则策略、RAG 正确性、召回与扩展能力的分级改进计划 |
 | [父子分块与重建索引（Parent/child chunking and reindexing）](docs/parent-child-chunking.md) | 分块层级、迁移与重建要求 |
 | [可选检索配置](docs/retrieval-profiles.md) | `openai-api` 与 `bge-local` 的隔离和使用方式 |
 | [BGE CUDA 加速](docs/bge-cuda-acceleration.md) | Windows CUDA 安装、验证、性能与排错 |
 | [本地容器运行手册](docs/local-container-runbook.md) | 可复现构建、备份恢复和证据留存 |
 | [容器安全评审](docs/container-security-review.md) | 镜像与容器风险评审说明 |
+| [Azure Global VM 部署](docs/deploy/azure-global-vm-deployment.zh-CN.md) | Azure VM、Docker Compose、Caddy、运维、费用和删除流程 |
+| [Azure 部署脚本](deploy/azure-vm/README.md) | 部署参数、凭据处理和常用操作速查 |
 
 ## 当前约束
 

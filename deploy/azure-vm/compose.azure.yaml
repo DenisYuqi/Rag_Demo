@@ -3,6 +3,14 @@ services:
     environment:
       RAG_MVP_BGE_PROFILE_ENABLED: "false"
       RAG_MVP_DEFAULT_RETRIEVAL_PROFILE: openai-api
+    healthcheck:
+      test:
+        - CMD
+        - /opt/venv/bin/python
+        - -c
+        - >-
+          import os,urllib.request;
+          urllib.request.urlopen(f'http://127.0.0.1:{os.environ.get("RAG_MVP_PORT", "8000")}/healthz', timeout=2).read()
 
   caddy:
     image: caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d

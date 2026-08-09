@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
-from pathlib import Path
 from typing import Any, cast
 
 import gradio as gr
@@ -47,16 +46,10 @@ _WORKBENCH_CSS = """
 .rag-kpi-unavailable { border-style: dashed; }
 """
 
-_README_PATH = Path(__file__).resolve().parents[3] / "README.md"
-
-
-def _readme_markdown() -> str:
-    """Load the project README for the read-only workbench tab."""
-
-    try:
-        return _README_PATH.read_text(encoding="utf-8")
-    except OSError:
-        return "# README\n\nREADME content is unavailable."
+_README_MARKDOWN = (
+    "[https://github.com/DenisYuqi/Rag_Demo/blob/main/README.md]"
+    "(https://github.com/DenisYuqi/Rag_Demo/blob/main/README.md)"
+)
 
 
 def _chat_outputs(
@@ -975,7 +968,7 @@ def create_workbench(
                         )
 
             with gr.Tab("README", id="readme-tab"):
-                gr.Markdown(_readme_markdown(), label="README")
+                gr.Markdown(_README_MARKDOWN, label="README")
 
         async def on_ask(
             raw_question: str,

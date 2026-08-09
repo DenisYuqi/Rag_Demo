@@ -18,6 +18,11 @@ evaluations/**/runs/**
 !src/**/*.py
 !src/**/*.json
 !src/**/*.j2
+!evaluations/
+!evaluations/privacy/
+!evaluations/privacy/supported-fixtures-v1.json
+!evaluations/pricing/
+!evaluations/pricing/openai-comparison-standard-2026-08-07-v1.json
 
 # Keep credential exclusions after allowlist negations: Docker applies the last
 # matching rule, including for files nested below the allowed src tree.

@@ -6,7 +6,8 @@ param(
     [string]$VmSize = "Standard_D2s_v5",
     [string]$AdminUser = "azureuser",
     [string]$DnsLabel,
-    [string]$ProviderEnvFile = ".env"
+    [string]$ProviderEnvFile = ".env",
+    [switch]$ResumeProvisioning
 )
 
 Set-StrictMode -Version Latest
@@ -27,6 +28,43 @@ function Invoke-NativeTwice {
 function Invoke-SshTwice {
     param([string]$Description, [string[]]$Arguments)
     Invoke-NativeTwice -Description $Description -File "ssh" -Arguments $Arguments
+}
+
+function Invoke-SshStdinTwice {
+    param([string]$Description, [string[]]$Arguments, [string]$StandardInput)
+    for ($attempt = 1; $attempt -le 2; $attempt++) {
+        $StandardInput | & ssh @Arguments
+        if ($LASTEXITCODE -eq 0) { return }
+        if ($attempt -eq 2) { throw "$Description failed twice; stopping." }
+        Write-Warning "$Description failed once; retrying."
+        Start-Sleep -Seconds 5
+    }
+}
+
+function New-DeploymentSshKeyTwice {
+    param([string]$Path, [string]$Comment)
+    for ($attempt = 1; $attempt -le 2; $attempt++) {
+        $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+        $startInfo.FileName = "ssh-keygen"
+        $startInfo.UseShellExecute = $false
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+        $escapedComment = $Comment.Replace('"', '\"')
+        $escapedPath = $Path.Replace('"', '\"')
+        $startInfo.Arguments = (
+            "-q -t ed25519 -N `"`" -C `"$escapedComment`" -f `"$escapedPath`""
+        )
+        $process = [System.Diagnostics.Process]::Start($startInfo)
+        $standardOutput = $process.StandardOutput.ReadToEnd()
+        $standardError = $process.StandardError.ReadToEnd()
+        $process.WaitForExit()
+        if ($process.ExitCode -eq 0) { return }
+        if ($attempt -eq 2) {
+            throw "SSH key generation failed twice; stopping. $standardError"
+        }
+        Write-Warning "SSH key generation failed once; retrying. $standardError"
+        Start-Sleep -Seconds 5
+    }
 }
 
 if (-not $ResourceGroup) {
@@ -55,8 +93,12 @@ if ($LASTEXITCODE -ne 0 -or $cloud.name -ne "AzureCloud") {
 
 $exists = az group exists --name $ResourceGroup --output tsv
 if ($LASTEXITCODE -ne 0) { throw "Unable to check resource-group availability." }
-if ($exists.Trim().ToLowerInvariant() -eq "true") {
+$isResume = $exists.Trim().ToLowerInvariant() -eq "true"
+if ($isResume -and -not $ResumeProvisioning) {
     throw "Resource group '$ResourceGroup' already exists; refusing to mutate it."
+}
+if (-not $isResume -and $ResumeProvisioning) {
+    throw "Resource group '$ResourceGroup' does not exist; provisioning cannot be resumed."
 }
 
 $sku = az vm list-sizes --location $Location --query "[?name=='$VmSize']" --output json |
@@ -80,9 +122,7 @@ $deploymentRoot = Join-Path $env:LOCALAPPDATA "rag-mvp\azure-vm\$ResourceGroup"
 New-Item -ItemType Directory -Force -Path $deploymentRoot | Out-Null
 $keyPath = Join-Path $deploymentRoot "id_ed25519"
 if (-not (Test-Path -LiteralPath $keyPath)) {
-    Invoke-NativeTwice -Description "SSH key generation" -File "ssh-keygen" -Arguments @(
-        "-q", "-t", "ed25519", "-N", "", "-C", $ResourceGroup, "-f", $keyPath
-    )
+    New-DeploymentSshKeyTwice -Path $keyPath -Comment $ResourceGroup
 }
 
 $clientIp = (Invoke-RestMethod -Uri "https://api.ipify.org").Trim()
@@ -106,42 +146,58 @@ foreach ($provider in @("Microsoft.Compute", "Microsoft.Network")) {
     }
 }
 
-Invoke-NativeTwice "resource group creation" "az" @(
-    "group", "create", "--name", $ResourceGroup, "--location", $Location, "--output", "none"
-)
-Invoke-NativeTwice "public IP creation" "az" @(
-    "network", "public-ip", "create", "--resource-group", $ResourceGroup,
-    "--name", $publicIpName, "--sku", "Standard", "--allocation-method", "Static",
-    "--dns-name", $DnsLabel, "--output", "none"
-)
-Invoke-NativeTwice "network security group creation" "az" @(
-    "network", "nsg", "create", "--resource-group", $ResourceGroup,
-    "--name", $nsgName, "--output", "none"
-)
-Invoke-NativeTwice "restricted SSH rule creation" "az" @(
-    "network", "nsg", "rule", "create", "--resource-group", $ResourceGroup,
-    "--nsg-name", $nsgName, "--name", "AllowSshFromOperator", "--priority", "100",
-    "--source-address-prefixes", "$clientIp/32", "--destination-port-ranges", "22",
-    "--access", "Allow", "--protocol", "Tcp", "--direction", "Inbound", "--output", "none"
-)
-foreach ($webRule in @(@("AllowHttp", "110", "80"), @("AllowHttps", "120", "443"))) {
-    Invoke-NativeTwice "$($webRule[0]) rule creation" "az" @(
+if (-not $isResume) {
+    Invoke-NativeTwice "resource group creation" "az" @(
+        "group", "create", "--name", $ResourceGroup, "--location", $Location, "--output", "none"
+    )
+    Invoke-NativeTwice "public IP creation" "az" @(
+        "network", "public-ip", "create", "--resource-group", $ResourceGroup,
+        "--name", $publicIpName, "--sku", "Standard", "--allocation-method", "Static",
+        "--dns-name", $DnsLabel, "--output", "none"
+    )
+    Invoke-NativeTwice "network security group creation" "az" @(
+        "network", "nsg", "create", "--resource-group", $ResourceGroup,
+        "--name", $nsgName, "--output", "none"
+    )
+    Invoke-NativeTwice "restricted SSH rule creation" "az" @(
         "network", "nsg", "rule", "create", "--resource-group", $ResourceGroup,
-        "--nsg-name", $nsgName, "--name", $webRule[0], "--priority", $webRule[1],
-        "--source-address-prefixes", "Internet", "--destination-port-ranges", $webRule[2],
+        "--nsg-name", $nsgName, "--name", "AllowSshFromOperator", "--priority", "100",
+        "--source-address-prefixes", "$clientIp/32", "--destination-port-ranges", "22",
         "--access", "Allow", "--protocol", "Tcp", "--direction", "Inbound", "--output", "none"
     )
+    foreach ($webRule in @(@("AllowHttp", "110", "80"), @("AllowHttps", "120", "443"))) {
+        Invoke-NativeTwice "$($webRule[0]) rule creation" "az" @(
+            "network", "nsg", "rule", "create", "--resource-group", $ResourceGroup,
+            "--nsg-name", $nsgName, "--name", $webRule[0], "--priority", $webRule[1],
+            "--source-address-prefixes", "Internet", "--destination-port-ranges", $webRule[2],
+            "--access", "Allow", "--protocol", "Tcp", "--direction", "Inbound", "--output", "none"
+        )
+    }
+    Invoke-NativeTwice "virtual network creation" "az" @(
+        "network", "vnet", "create", "--resource-group", $ResourceGroup, "--name", $vnetName,
+        "--address-prefixes", "10.42.0.0/16", "--subnet-name", $subnetName,
+        "--subnet-prefixes", "10.42.1.0/24", "--output", "none"
+    )
+    Invoke-NativeTwice "network interface creation" "az" @(
+        "network", "nic", "create", "--resource-group", $ResourceGroup, "--name", $nicName,
+        "--vnet-name", $vnetName, "--subnet", $subnetName, "--network-security-group", $nsgName,
+        "--public-ip-address", $publicIpName, "--output", "none"
+    )
+} else {
+    $expectedResources = @(
+        "Microsoft.Network/publicIPAddresses/pip-rag-mvp",
+        "Microsoft.Network/networkSecurityGroups/nsg-rag-mvp",
+        "Microsoft.Network/virtualNetworks/vnet-rag-mvp",
+        "Microsoft.Network/networkInterfaces/nic-rag-mvp"
+    )
+    $actualResources = @(az resource list --resource-group $ResourceGroup `
+        --query "[].join('/', [type, name])" --output tsv)
+    if ($LASTEXITCODE -ne 0 -or
+        @($expectedResources | Where-Object { $_ -notin $actualResources }).Count -gt 0 -or
+        @($actualResources | Where-Object { $_ -notin $expectedResources }).Count -gt 0) {
+        throw "Existing resource group does not match the resumable network-only deployment state."
+    }
 }
-Invoke-NativeTwice "virtual network creation" "az" @(
-    "network", "vnet", "create", "--resource-group", $ResourceGroup, "--name", $vnetName,
-    "--address-prefixes", "10.42.0.0/16", "--subnet-name", $subnetName,
-    "--subnet-prefixes", "10.42.1.0/24", "--output", "none"
-)
-Invoke-NativeTwice "network interface creation" "az" @(
-    "network", "nic", "create", "--resource-group", $ResourceGroup, "--name", $nicName,
-    "--vnet-name", $vnetName, "--subnet", $subnetName, "--network-security-group", $nsgName,
-    "--public-ip-address", $publicIpName, "--output", "none"
-)
 Invoke-NativeTwice "virtual machine creation" "az" @(
     "vm", "create", "--resource-group", $ResourceGroup, "--name", $VmName,
     "--nics", $nicName, "--image", "Ubuntu2204", "--size", $VmSize,
@@ -167,7 +223,9 @@ Push-Location $repoRoot
 try {
     Invoke-NativeTwice "source archive creation" "tar" @(
         "-czf", $archivePath, ".dockerignore", "Dockerfile", "compose.yaml",
-        "pyproject.toml", "uv.lock", "src", "deploy/azure-vm"
+        "pyproject.toml", "uv.lock", "src", "deploy/azure-vm",
+        "evaluations/privacy/supported-fixtures-v1.json",
+        "evaluations/pricing/openai-comparison-standard-2026-08-07-v1.json"
     )
 } finally {
     Pop-Location
@@ -186,20 +244,12 @@ Invoke-SshTwice "source extraction" ($sshBase + @(
     "sudo chown -R ${AdminUser}:${AdminUser} /opt/rag-mvp/app"
 ))
 
-$sshInfo = [System.Diagnostics.ProcessStartInfo]::new()
-$sshInfo.FileName = "ssh"
-$sshInfo.UseShellExecute = $false
-$sshInfo.RedirectStandardInput = $true
-foreach ($item in ($sshBase + @(
+$secretTransferArgs = $sshBase + @(
     "sudo tee /opt/rag-mvp/secrets/provider-key >/dev/null && " +
     "sudo chmod 0400 /opt/rag-mvp/secrets/provider-key"
-))) { [void]$sshInfo.ArgumentList.Add($item) }
-$sshProcess = [System.Diagnostics.Process]::Start($sshInfo)
-$sshProcess.StandardInput.WriteLine($providerKey)
-$sshProcess.StandardInput.Close()
-$sshProcess.WaitForExit()
+)
+Invoke-SshStdinTwice "provider-secret transfer" $secretTransferArgs $providerKey
 $providerKey = $null
-if ($sshProcess.ExitCode -ne 0) { throw "Provider-secret transfer failed." }
 
 Invoke-SshTwice "runtime configuration" ($sshBase + @(
     "sudo bash /tmp/configure.sh $publicHost $sourceRevision && " +

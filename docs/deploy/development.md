@@ -163,7 +163,7 @@ uv run pytest tests/ui -q
 uv run pytest tests/unit/providers/test_bge_adapters.py tests/ui/test_retrieval_profiles.py -q
 ```
 
-模型加载是惰性的且可能占用数 GB。单元测试不应下载真实模型；设备和 CUDA smoke test 按[BGE CUDA 加速](bge-cuda-acceleration.md)执行。
+模型加载是惰性的且可能占用数 GB。单元测试不应下载真实模型；设备和 CUDA smoke test 按[BGE CUDA 加速](../bge-cuda-acceleration.md)执行。
 
 ## 评测工具
 

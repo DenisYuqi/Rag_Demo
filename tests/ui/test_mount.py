@@ -126,5 +126,7 @@ def test_workbench_exposes_four_primary_tabs_and_bilingual_controls(tmp_path: Pa
         for component in components
         if component["type"] == "markdown" and component["props"].get("label") == "README"
     )
-    assert "# Rag_Demo" in readme["props"]["value"]
-    assert "Parent/child chunking and reindexing" in readme["props"]["value"]
+    assert readme["props"]["value"] == (
+        "[https://github.com/DenisYuqi/Rag_Demo/blob/main/README.md]"
+        "(https://github.com/DenisYuqi/Rag_Demo/blob/main/README.md)"
+    )

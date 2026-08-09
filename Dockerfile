@@ -64,6 +64,12 @@ RUN sed -i \
     && install --directory --owner=10001 --group=10001 --mode=0700 /var/lib/rag-mvp
 
 COPY --from=builder --chown=10001:10001 /opt/venv /opt/venv
+COPY --chown=10001:10001 \
+    evaluations/privacy/supported-fixtures-v1.json \
+    /opt/venv/lib/python3.12/evaluations/privacy/supported-fixtures-v1.json
+COPY --chown=10001:10001 \
+    evaluations/pricing/openai-comparison-standard-2026-08-07-v1.json \
+    /opt/venv/lib/python3.12/evaluations/pricing/openai-comparison-standard-2026-08-07-v1.json
 
 ENV PATH="/opt/venv/bin:${PATH}" \
     PYTHONDONTWRITEBYTECODE=1 \
