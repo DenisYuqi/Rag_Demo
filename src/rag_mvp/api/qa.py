@@ -7,7 +7,7 @@ import re
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Annotated, Any, Protocol, cast
+from typing import Annotated, Any, Literal, Protocol, cast
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, FastAPI, Request, status
@@ -75,6 +75,39 @@ class QAEventEmitter(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
+class ProfileLoadStatus:
+    """Content-free progress for a retrieval profile's required model assets."""
+
+    state: Literal["loading", "ready", "failed"]
+    completed_steps: int
+    total_steps: int
+    active_step: str | None = None
+    safe_error_code: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.total_steps <= 0:
+            raise ValueError("profile load total_steps must be positive")
+        if not 0 <= self.completed_steps <= self.total_steps:
+            raise ValueError("profile load completed_steps is out of range")
+        if self.state == "ready" and self.completed_steps != self.total_steps:
+            raise ValueError("ready profile load status must be complete")
+        if self.state == "failed" and not self.safe_error_code:
+            raise ValueError("failed profile load status requires a safe error code")
+
+    @classmethod
+    def ready(cls) -> ProfileLoadStatus:
+        return cls("ready", 1, 1)
+
+    @property
+    def is_ready(self) -> bool:
+        return self.state == "ready"
+
+    @property
+    def progress_percent(self) -> int:
+        return round((self.completed_steps / self.total_steps) * 100)
+
+
+@dataclass(frozen=True, slots=True)
 class QARuntimeServices:
     conversations: ConversationService
     orchestrator: QAOrchestratorGateway
@@ -84,6 +117,15 @@ class QARuntimeServices:
     admission: QAAdmissionController | None = None
     telemetry: PipelineTelemetry | None = None
     latency_budgets: QALatencyBudgets | None = None
+    profile_load_status_probe: Callable[[], ProfileLoadStatus] | None = None
+
+    def profile_load_status(self) -> ProfileLoadStatus:
+        if self.profile_load_status_probe is None:
+            return ProfileLoadStatus.ready()
+        try:
+            return self.profile_load_status_probe()
+        except Exception:
+            return ProfileLoadStatus("failed", 0, 1, safe_error_code="profile-load-status-error")
 
     def check_readiness(self) -> tuple[bool, str | None]:
         try:

@@ -136,7 +136,7 @@ def test_inactive_views_refresh_only_when_their_tabs_are_selected(tmp_path: Path
     }
 
 
-def test_chat_submission_hides_gradio_processing_indicator(tmp_path: Path) -> None:
+def test_chat_submission_shows_full_gradio_processing_indicator(tmp_path: Path) -> None:
     blocks = create_workbench(
         Settings(_env_file=None, data_root=tmp_path),
         WorkbenchServices(chat=IsolatingChatGateway()),
@@ -157,7 +157,7 @@ def test_chat_submission_hides_gradio_processing_indicator(tmp_path: Path) -> No
     ]
 
     assert len(chat_submissions) == 2
-    assert {dependency["show_progress"] for dependency in chat_submissions} == {"hidden"}
+    assert {dependency["show_progress"] for dependency in chat_submissions} == {"full"}
 
 
 @pytest.mark.asyncio

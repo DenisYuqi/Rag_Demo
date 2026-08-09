@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import pytest
 
+from rag_mvp.api.qa import ProfileLoadStatus
 from rag_mvp.config.settings import Settings
 from rag_mvp.domain.evaluation import EvaluationRun
 from rag_mvp.domain.qa import RefusalReason, StreamEventKind, ValidatedStreamEvent
@@ -119,7 +121,9 @@ class ProfileEvaluationGateway:
         return ()
 
 
-def profile_services() -> tuple[WorkbenchServices, ProfileChatGateway, ProfileChatGateway]:
+def profile_services(
+    bge_load_status: Callable[[], ProfileLoadStatus] | None = None,
+) -> tuple[WorkbenchServices, ProfileChatGateway, ProfileChatGateway]:
     openai = ProfileChatGateway("openai-api")
     bge = ProfileChatGateway("bge-local")
     services = WorkbenchServices(
@@ -131,6 +135,7 @@ def profile_services() -> tuple[WorkbenchServices, ProfileChatGateway, ProfileCh
             "bge-local": RetrievalProfileGateways(
                 chat=bge,
                 documents=ProfileDocumentGateway("bge-local"),  # type: ignore[arg-type]
+                load_status=bge_load_status,
             ),
         },
         evaluation_profiles={
@@ -140,6 +145,26 @@ def profile_services() -> tuple[WorkbenchServices, ProfileChatGateway, ProfileCh
         default_retrieval_profile="openai-api",
     )
     return services, openai, bge
+
+
+@pytest.mark.asyncio
+async def test_bge_chat_is_blocked_until_required_models_are_ready() -> None:
+    current = ProfileLoadStatus("loading", 1, 2, active_step="reranker-model")
+    services, openai, bge = profile_services(lambda: current)
+    callbacks = WorkbenchCallbacks(services)
+
+    blocked = await callbacks.submit_chat(
+        "Question",
+        "hybrid-rerank",
+        None,
+        BrowserSessionState.create(),
+        "bge-local",
+    )
+
+    assert bge.submissions == []
+    assert openai.submissions == []
+    assert "1/2 (50%)" in blocked.status_markdown
+    assert "Chat is disabled" in blocked.status_markdown
 
 
 @pytest.mark.asyncio
@@ -242,8 +267,43 @@ def test_workbench_profile_selector_is_wired_to_chat_and_documents() -> None:
     profile_outputs = by_api_name["retrieval_profile_select"]["outputs"]
     chat_outputs = by_api_name["chat_submit"]["outputs"]
     assert profile_outputs[: len(chat_outputs)] == chat_outputs
-    assert len(profile_outputs) == len(chat_outputs) + 1
+    assert len(profile_outputs) == len(chat_outputs) + 5
     assert by_api_name["retrieval_profile_select"]["show_progress"] == "hidden"
+    progress = next(
+        component
+        for component in config["components"]
+        if component.get("props", {}).get("label") == "Model loading progress / 模型加载进度"
+    )
+    assert progress["props"]["visible"] is False
+
+
+def test_profile_switch_disables_chat_controls_and_enables_loading_poll() -> None:
+    services, _, _ = profile_services(
+        lambda: ProfileLoadStatus("loading", 1, 2, active_step="reranker-model")
+    )
+    blocks = create_workbench(Settings(_env_file=None), services)
+    config = blocks.get_config_file()
+    dependency = next(
+        item
+        for item in config["dependencies"]
+        if item.get("api_name") == "retrieval_profile_select"
+    )
+    handler = blocks.fns[dependency["id"]].fn
+    assert callable(handler)
+
+    outputs = handler("bge-local", BrowserSessionState.create())
+
+    question_update = outputs[5]
+    progress_update = outputs[7]
+    mode_update = outputs[8]
+    ask_update = outputs[9]
+    timer_update = outputs[10]
+    assert question_update["interactive"] is False
+    assert progress_update["visible"] is True
+    assert "1/2 (50%)" in progress_update["value"]
+    assert mode_update["interactive"] is False
+    assert ask_update["interactive"] is False
+    assert timer_update["active"] is True
 
 
 def test_evaluation_tab_reuses_loaded_results_for_the_same_profile() -> None:

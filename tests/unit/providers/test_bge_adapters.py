@@ -66,6 +66,42 @@ def reranking_identity() -> ModelIdentity:
     )
 
 
+def test_explicit_warmup_loads_each_model_once_without_running_inference() -> None:
+    embedding_model = FakeEmbeddingModel([[1.0, 0.0, 0.0]])
+    reranker_model = FakeRerankerModel([1.0])
+    embedding_loads = 0
+    reranker_loads = 0
+
+    def load_embedding() -> object:
+        nonlocal embedding_loads
+        embedding_loads += 1
+        return embedding_model
+
+    def load_reranker() -> object:
+        nonlocal reranker_loads
+        reranker_loads += 1
+        return reranker_model
+
+    embedding = LocalBgeEmbeddingProvider(
+        embedding_identity(),
+        model_factory=load_embedding,
+    )
+    reranker = LocalBgeRerankingProvider(
+        reranking_identity(),
+        model_factory=load_reranker,
+    )
+
+    embedding.warmup()
+    embedding.warmup()
+    reranker.warmup()
+    reranker.warmup()
+
+    assert embedding_loads == 1
+    assert reranker_loads == 1
+    assert embedding_model.calls == []
+    assert reranker_model.calls == []
+
+
 async def test_embedding_is_lazy_ordered_normalized_and_off_event_loop(
     provider_context: ProviderCallContext,
 ) -> None:

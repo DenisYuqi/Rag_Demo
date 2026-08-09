@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
-from rag_mvp.api.qa import QARuntimeServices, stream_qa_events
+from rag_mvp.api.qa import ProfileLoadStatus, QARuntimeServices, stream_qa_events
 from rag_mvp.config.settings import Settings
 from rag_mvp.domain.evaluation import EvaluationRun
 from rag_mvp.domain.ingestion import Document, IngestionJob
@@ -207,6 +207,7 @@ class DiagnosticsGateway(Protocol):
 class RetrievalProfileGateways:
     chat: ChatGateway | None = None
     documents: DocumentGateway | None = None
+    load_status: Callable[[], ProfileLoadStatus] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -247,6 +248,37 @@ class WorkbenchServices:
             return self.chat if profile_id in {None, self.default_retrieval_profile} else None
         profile = self.retrieval_profiles.get(profile_id or self.default_retrieval_profile)
         return None if profile is None else profile.chat
+
+    def profile_load_status(self, profile_id: str | None) -> ProfileLoadStatus:
+        resolved = profile_id or self.default_retrieval_profile
+        if not self.retrieval_profiles:
+            if resolved != self.default_retrieval_profile:
+                return ProfileLoadStatus(
+                    "failed",
+                    0,
+                    1,
+                    safe_error_code="retrieval-profile-unavailable",
+                )
+            return ProfileLoadStatus.ready()
+        profile = self.retrieval_profiles.get(resolved)
+        if profile is None:
+            return ProfileLoadStatus(
+                "failed",
+                0,
+                1,
+                safe_error_code="retrieval-profile-unavailable",
+            )
+        if profile.load_status is None:
+            return ProfileLoadStatus.ready()
+        try:
+            return profile.load_status()
+        except Exception:
+            return ProfileLoadStatus(
+                "failed",
+                0,
+                1,
+                safe_error_code="retrieval-profile-status-error",
+            )
 
     def documents_for(self, profile_id: str | None) -> DocumentGateway | None:
         if not self.retrieval_profiles:
@@ -420,6 +452,7 @@ def configured_workbench_services(
                 if redactor
                 else None,
                 documents=SharedDocumentGateway(profile_ingestion),
+                load_status=_profile_load_probe(profile_qa),
             )
             for profile_id, (profile_qa, profile_ingestion) in profile_services.items()
         }
@@ -433,6 +466,13 @@ def configured_workbench_services(
         evaluation_profiles=dict(profile_evaluations or {}),
         default_retrieval_profile=settings.default_retrieval_profile,
     )
+
+
+def _profile_load_probe(
+    services: object,
+) -> Callable[[], ProfileLoadStatus] | None:
+    probe = getattr(services, "profile_load_status", None)
+    return probe if callable(probe) else None
 
 
 def _source_preview_lookup(

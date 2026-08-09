@@ -1,0 +1,38 @@
+services:
+  app:
+    environment:
+      RAG_MVP_BGE_PROFILE_ENABLED: "false"
+      RAG_MVP_DEFAULT_RETRIEVAL_PROFILE: openai-api
+
+  caddy:
+    image: caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - type: bind
+        source: ./deploy/azure-vm/Caddyfile.runtime
+        target: /etc/caddy/Caddyfile
+        read_only: true
+      - type: volume
+        source: caddy_data
+        target: /data
+      - type: volume
+        source: caddy_config
+        target: /config
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+
+volumes:
+  caddy_data:
+    name: rag-mvp-caddy-data
+  caddy_config:
+    name: rag-mvp-caddy-config

@@ -40,6 +40,7 @@ from .models import (
     DiagnosticsRender,
     DocumentsRender,
     EvaluationRender,
+    ProfileLoadRender,
     UploadPayload,
 )
 from .services import EvaluationCompatibilityError, WorkbenchServices
@@ -115,6 +116,26 @@ class WorkbenchCallbacks:
     def new_session(self) -> BrowserSessionState:
         return BrowserSessionState.create()
 
+    def profile_load_status(self, profile_id: str | None = None) -> ProfileLoadRender:
+        status = self.services.profile_load_status(profile_id)
+        if status.state == "ready":
+            return ProfileLoadRender("", ready=True, poll_active=False, visible=False)
+        step = status.active_step or "model-assets"
+        if status.state == "loading":
+            message = (
+                f"**Model loading / 模型加载中:** {status.completed_steps}/{status.total_steps} "
+                f"({status.progress_percent}%) — `{step}`. "
+                "Chat is disabled until loading completes. / 加载完成前 Chat 不可用。"
+            )
+            return ProfileLoadRender(message, ready=False, poll_active=True, visible=True)
+        code = status.safe_error_code or "profile-model-load-failed"
+        message = (
+            f"**Model loading failed / 模型加载失败:** `{code}` at `{step}`. "
+            "Chat remains disabled; restart after resolving the model cache or network. / "
+            "Chat 保持不可用, 修复模型缓存或网络后请重启服务。"
+        )
+        return ProfileLoadRender(message, ready=False, poll_active=False, visible=True)
+
     async def submit_chat(
         self,
         question: str,
@@ -128,6 +149,9 @@ class WorkbenchCallbacks:
         chat = self.services.chat_for(profile_id)
         if chat is None:
             return ChatRender(prior, current, "", "", SAFE_UNAVAILABLE)
+        load_status = self.profile_load_status(profile_id)
+        if not load_status.ready:
+            return ChatRender(prior, current, "", "", load_status.status_markdown)
         if not isinstance(question, str) or not question.strip():
             return ChatRender(prior, current, "", "", "Enter a question. / 请输入问题。")
         correlation = current.active_request_id or f"ui_{uuid4().hex}"

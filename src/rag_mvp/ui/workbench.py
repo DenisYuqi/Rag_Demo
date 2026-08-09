@@ -19,6 +19,7 @@ from .models import (
     ComparisonRender,
     DocumentsRender,
     EvaluationRender,
+    ProfileLoadRender,
 )
 from .services import WorkbenchServices
 
@@ -78,6 +79,16 @@ def _document_outputs(
         [list(row) for row in render.document_rows],
         [list(row) for row in render.job_rows],
         render.status_markdown,
+    )
+
+
+def _profile_load_outputs(render: ProfileLoadRender) -> tuple[Any, ...]:
+    return (
+        gr.update(value=render.status_markdown, visible=render.visible),
+        gr.update(interactive=render.ready),
+        gr.update(interactive=render.ready),
+        gr.update(interactive=render.ready),
+        gr.update(active=render.poll_active),
     )
 
 
@@ -236,6 +247,7 @@ def create_workbench(
         None,
         profile_id=services.default_retrieval_profile,
     )
+    initial_profile_load = controller.profile_load_status(services.default_retrieval_profile)
     with gr.Blocks(title="RAG Assistant Workbench") as demo:
         # Gradio deep-copies the state factory.  A controller-bound method would
         # recursively copy the production service graph, including non-copyable
@@ -249,19 +261,37 @@ def create_workbench(
             label="Retrieval profile / 检索模型",
             interactive=len(services.retrieval_profile_ids) > 1,
         )
+        profile_load_timer = gr.Timer(
+            value=1.0,
+            active=initial_profile_load.poll_active,
+        )
+        profile_load_progress = gr.Markdown(
+            value=initial_profile_load.status_markdown,
+            visible=initial_profile_load.visible,
+            label="Model loading progress / 模型加载进度",
+        )
         gr.Markdown("# RAG Assistant Workbench / RAG 助手工作台")
 
         with gr.Tabs(selected="chat-tab"):
             with gr.Tab("Chat", id="chat-tab"):
                 chatbot = gr.Chatbot(label="Conversation / 对话")
-                question = gr.Textbox(label="Question / 问题", lines=3)
+                question = gr.Textbox(
+                    label="Question / 问题",
+                    lines=3,
+                    interactive=initial_profile_load.ready,
+                )
                 mode = gr.Radio(
                     choices=["dense", "hybrid", "hybrid-rerank"],
                     value=settings.default_retrieval_mode,
                     label="Retrieval mode / 检索模式",
+                    interactive=initial_profile_load.ready,
                 )
                 with gr.Row():
-                    ask = gr.Button("Ask / 提问", variant="primary")
+                    ask = gr.Button(
+                        "Ask / 提问",
+                        variant="primary",
+                        interactive=initial_profile_load.ready,
+                    )
                     reset = gr.Button("Reset / 重置")
                     cancel = gr.Button("Cancel / 取消", variant="stop")
                 chat_status = gr.Markdown(label="Chat status / 对话状态")
@@ -1096,14 +1126,14 @@ def create_workbench(
             inputs=[question, mode, chatbot, session_state, retrieval_profile],
             outputs=chat_outputs,
             api_name="chat_submit",
-            show_progress="hidden",
+            show_progress="full",
         )
         question.submit(
             on_ask,
             inputs=[question, mode, chatbot, session_state, retrieval_profile],
             outputs=chat_outputs,
             api_name=None,
-            show_progress="hidden",
+            show_progress="full",
         )
         reset.click(
             on_reset,
@@ -1323,22 +1353,55 @@ def create_workbench(
             raw_state: BrowserSessionState | None,
         ) -> tuple[Any, ...]:
             chat_render = controller.switch_profile(selected, raw_state)
+            load_render = controller.profile_load_status(selected)
             reset_state = chat_render.state.with_evaluation(None).with_comparison(None)
-            return (
-                *_chat_outputs(
-                    replace(
-                        chat_render,
-                        state=reset_state,
-                    )
-                ),
-                None,
+            chat_values = _chat_outputs(
+                replace(
+                    chat_render,
+                    state=reset_state,
+                    status_markdown=(
+                        load_render.status_markdown
+                        if not load_render.ready
+                        else chat_render.status_markdown
+                    ),
+                )
             )
+            return (
+                *chat_values[:5],
+                gr.update(value="", interactive=load_render.ready),
+                None,
+                *_profile_load_outputs(load_render)[0:1],
+                *_profile_load_outputs(load_render)[2:],
+            )
+
+        def on_profile_load_status(selected: str | None) -> tuple[Any, ...]:
+            return _profile_load_outputs(controller.profile_load_status(selected))
 
         retrieval_profile.change(
             on_switch_profile,
             inputs=[retrieval_profile, session_state],
-            outputs=[*chat_outputs, loaded_evaluation_profile],
+            outputs=[
+                *chat_outputs,
+                loaded_evaluation_profile,
+                profile_load_progress,
+                mode,
+                ask,
+                profile_load_timer,
+            ],
             api_name="retrieval_profile_select",
+            show_progress="hidden",
+        )
+        profile_load_timer.tick(
+            on_profile_load_status,
+            inputs=[retrieval_profile],
+            outputs=[
+                profile_load_progress,
+                question,
+                mode,
+                ask,
+                profile_load_timer,
+            ],
+            api_name=None,
             show_progress="hidden",
         )
 

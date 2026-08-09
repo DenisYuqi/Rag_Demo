@@ -62,6 +62,14 @@ class ChatRender:
 
 
 @dataclass(frozen=True, slots=True)
+class ProfileLoadRender:
+    status_markdown: str
+    ready: bool
+    poll_active: bool
+    visible: bool
+
+
+@dataclass(frozen=True, slots=True)
 class UploadPayload:
     filename: str
     content: bytes

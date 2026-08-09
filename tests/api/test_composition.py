@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import threading
+import time
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from pydantic import SecretStr
 
 from rag_mvp.api.composition import (
+    _BgeModelLoader,
     _compose_bge_isolated_services,
     _compose_evaluation_service,
     _compose_retrieval_cache,
@@ -19,6 +23,56 @@ from rag_mvp.safety.redactor import DEFAULT_REDACTOR
 from rag_mvp.storage.database import Database
 from rag_mvp.storage.layout import DataLayout
 from rag_mvp.storage.repositories import RuntimeRepositories
+
+
+class _BlockingWarmup:
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.calls = 0
+
+    def warmup(self) -> None:
+        self.calls += 1
+        self.started.set()
+        if not self.release.wait(timeout=2):
+            raise RuntimeError("test warmup was not released")
+
+
+def _wait_for_status(loader: _BgeModelLoader, state: str) -> None:
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        if loader.status().state == state:
+            return
+        time.sleep(0.01)
+    raise AssertionError(f"loader did not reach {state}")
+
+
+def test_bge_model_loader_reports_two_background_stages() -> None:
+    embedding = _BlockingWarmup()
+    reranker = _BlockingWarmup()
+    loader = _BgeModelLoader(
+        cast(Any, embedding),
+        cast(Any, reranker),
+    )
+
+    initial = loader.status()
+    assert embedding.started.wait(timeout=1)
+    assert initial.state == "loading"
+    assert initial.completed_steps == 0
+    assert initial.active_step == "embedding-model"
+
+    embedding.release.set()
+    assert reranker.started.wait(timeout=1)
+    reranking = loader.status()
+    assert reranking.state == "loading"
+    assert reranking.completed_steps == 1
+    assert reranking.active_step == "reranker-model"
+
+    reranker.release.set()
+    _wait_for_status(loader, "ready")
+    ready = loader.status()
+    assert ready.completed_steps == ready.total_steps == 2
+    assert embedding.calls == reranker.calls == 1
 
 
 def test_provider_alias_binds_embedding_identity_to_the_endpoint() -> None:

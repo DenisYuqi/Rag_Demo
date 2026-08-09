@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import threading
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, replace
@@ -11,7 +12,7 @@ from typing import Literal
 
 from openai import AsyncOpenAI
 
-from rag_mvp.api.qa import QARuntimeServices
+from rag_mvp.api.qa import ProfileLoadStatus, QARuntimeServices
 from rag_mvp.config.settings import Settings
 from rag_mvp.evaluation.application import (
     EvaluationApplicationService,
@@ -96,6 +97,71 @@ class ExecutableComposition:
     diagnostics: SafeRequestDiagnosticStore
     retrieval_cache: RetrievalResultCache | None = None
     evaluation: EvaluationApplicationService | None = None
+
+
+class _BgeModelLoader:
+    """Warm required local models in the background with bounded safe progress."""
+
+    def __init__(
+        self,
+        embedding: LocalBgeEmbeddingProvider,
+        reranker: LocalBgeRerankingProvider,
+    ) -> None:
+        self._embedding = embedding
+        self._reranker = reranker
+        self._lock = threading.Lock()
+        self._status = ProfileLoadStatus("loading", 0, 2, active_step="embedding-model")
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        with self._lock:
+            if self._thread is not None:
+                return
+            self._thread = threading.Thread(
+                target=self._run,
+                name="bge-model-loader",
+                daemon=True,
+            )
+            self._thread.start()
+
+    def status(self) -> ProfileLoadStatus:
+        self.start()
+        with self._lock:
+            return self._status
+
+    def _set_status(self, status: ProfileLoadStatus) -> None:
+        with self._lock:
+            self._status = status
+
+    def _run(self) -> None:
+        try:
+            self._embedding.warmup()
+        except Exception:
+            self._set_status(
+                ProfileLoadStatus(
+                    "failed",
+                    0,
+                    2,
+                    active_step="embedding-model",
+                    safe_error_code="bge-embedding-load-failed",
+                )
+            )
+            return
+        self._set_status(ProfileLoadStatus("loading", 1, 2, active_step="reranker-model"))
+        try:
+            self._reranker.warmup()
+        except Exception:
+            self._set_status(
+                ProfileLoadStatus(
+                    "failed",
+                    1,
+                    2,
+                    active_step="reranker-model",
+                    safe_error_code="bge-reranker-load-failed",
+                )
+            )
+            return
+        self._set_status(ProfileLoadStatus("ready", 2, 2))
 
 
 @dataclass(frozen=True, slots=True)
@@ -388,6 +454,7 @@ def _compose_with_client(
         retry_policy,
     )
     provider_cleanup: Callable[[], None] | None = None
+    bge_model_loader: _BgeModelLoader | None = None
     if retrieval_backend == "openai":
         embedding_identity = EmbeddingSpaceIdentity(
             provider=provider_alias,
@@ -446,6 +513,7 @@ def _compose_with_client(
             max_candidates=settings.rerank_candidate_limit,
             cache_dir=settings.bge_model_cache_dir,
         )
+        bge_model_loader = _BgeModelLoader(bge_embedding, bge_reranker)
         embedding_route = ProviderRoute("bge-embedding", bge_embedding, retry_policy)
         reranking_routes = (ProviderRoute("bge-reranking", bge_reranker, retry_policy),)
 
@@ -475,7 +543,7 @@ def _compose_with_client(
         worker_pools=worker_pools,
     )
     try:
-        return _compose_qa(
+        composition = _compose_qa(
             settings,
             redactor,
             layout,
@@ -488,7 +556,9 @@ def _compose_with_client(
             diagnostics,
             worker_pools,
             provider_cleanup,
+            None if bge_model_loader is None else bge_model_loader.status,
         )
+        return composition
     except Exception:
         ingestion.close()
         raise
@@ -507,6 +577,7 @@ def _compose_qa(
     diagnostics: SafeRequestDiagnosticStore,
     worker_pools: RagWorkerPools,
     provider_cleanup: Callable[[], None] | None = None,
+    profile_load_status_probe: Callable[[], ProfileLoadStatus] | None = None,
 ) -> ExecutableComposition:
     conversations = ConversationService(runtime_repositories.sessions)
     snapshots = BoundRetrievalSnapshotFactory(layout, ingestion.repositories.index_revisions)
@@ -556,6 +627,10 @@ def _compose_qa(
     )
 
     def readiness_probe() -> tuple[bool, str | None]:
+        if profile_load_status_probe is not None:
+            load_status = profile_load_status_probe()
+            if not load_status.is_ready:
+                return False, load_status.safe_error_code or "profile-models-loading"
         if not router.qa_ready:
             return False, "provider_runtime_unavailable"
         try:
@@ -591,6 +666,7 @@ def _compose_qa(
         ),
         readiness_probe=readiness_probe,
         close_callback=close_runtime_resources,
+        profile_load_status_probe=profile_load_status_probe,
     )
     return ExecutableComposition(
         ingestion=ingestion,

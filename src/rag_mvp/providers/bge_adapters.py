@@ -146,6 +146,12 @@ class LocalBgeEmbeddingProvider:
             self._model = self._model_factory()
         return self._model
 
+    def warmup(self) -> None:
+        """Load model assets and weights before the profile accepts chat traffic."""
+
+        with self._inference_lock:
+            self._load_model()
+
     def close(self) -> None:
         with self._inference_lock:
             self._model = None
@@ -253,6 +259,12 @@ class LocalBgeRerankingProvider:
         if self._model is None:
             self._model = self._model_factory()
         return self._model
+
+    def warmup(self) -> None:
+        """Load model assets and weights before the profile accepts chat traffic."""
+
+        with self._inference_lock:
+            self._load_model()
 
     def close(self) -> None:
         with self._inference_lock:
