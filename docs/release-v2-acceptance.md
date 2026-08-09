@@ -35,7 +35,7 @@ rag-mvp-acceptance `
   --model-report <model-comparison.json> `
   --retrieval-report <retrieval-reranker-comparison.json> `
   --cache-report <cache-comparison.json> `
-  --issue-data evaluations/phase10-issues.json `
+  --issue-data evaluations/two-issue-diagnosis.json `
   --log-dictionary evaluations/logging/structured-log-field-dictionary-v1.json `
   --log-sample evaluations/logging/privacy-safe-sample-v1.jsonl `
   --performance-report <existing-performance-100.json> `
@@ -57,7 +57,7 @@ rag-mvp-acceptance `
   --model-report <model-comparison.json> `
   --retrieval-report <retrieval-reranker-comparison.json> `
   --cache-report <cache-comparison.json> `
-  --issue-data evaluations/phase10-issues.json `
+  --issue-data evaluations/two-issue-diagnosis.json `
   --log-dictionary evaluations/logging/structured-log-field-dictionary-v1.json `
   --log-sample evaluations/logging/privacy-safe-sample-v1.jsonl `
   --run-load `

@@ -1368,7 +1368,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--model-report", type=Path)
     parser.add_argument("--retrieval-report", type=Path)
     parser.add_argument("--cache-report", type=Path)
-    parser.add_argument("--issue-data", type=Path, default=Path("evaluations/phase10-issues.json"))
+    parser.add_argument(
+        "--issue-data",
+        type=Path,
+        default=Path("evaluations/two-issue-diagnosis.json"),
+    )
     parser.add_argument(
         "--log-dictionary",
         type=Path,

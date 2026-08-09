@@ -218,6 +218,7 @@ deploy/             部署脚本与平台配置
 | [系统架构](docs/architecture.md) | 组件边界、摄取与问答数据流、存储布局 |
 | [API 指南](docs/api.md) | 端点总览、上传、轮询和 NDJSON 问答示例 |
 | [配置指南](docs/configuration.md) | 配置加载、模型、检索、OCR、评测和可观测性 |
+| [评测资产说明](evaluations/README.md) | 评测数据集、配置、运行结果、命名约定和历史发布证据 |
 | [开发指南](docs/deploy/development.md) | 本地环境、测试矩阵、质量检查和贡献约定 |
 | [改进路线（To Improve）](docs/to-improve.md) | Evidence Assessor 规则策略、RAG 正确性、召回与扩展能力的分级改进计划 |
 | [父子分块与重建索引（Parent/child chunking and reindexing）](docs/parent-child-chunking.md) | 分块层级、迁移与重建要求 |
