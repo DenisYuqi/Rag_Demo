@@ -106,8 +106,7 @@ RAG_MVP_GENERATION_MODEL=gpt-4.1-mini
 
 #### 可选：为 BGE 启用 CUDA 加速
 
-使用 `bge-local` 时，本地嵌入或重排在 CPU 上单次处理可能需要约 10 秒，实际耗时取决于
-文档长度和硬件。配备兼容 NVIDIA GPU 的 Windows 电脑可以在 `.env` 中启用 CUDA，以明显
+使用 `bge-local` 时，本地嵌入或重排在 CPU 上单次处理可能需要较多时间，实际耗时取决于文档长度和硬件。配备兼容 NVIDIA GPU 的 Windows 电脑可以在 `.env` 中启用 CUDA，以明显
 缩短这部分处理时间：
 
 ```dotenv
